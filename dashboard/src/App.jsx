@@ -4,8 +4,10 @@ import {
   AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye,
   Gauge, History, Info, KeyRound, LayoutDashboard, ListFilter, LogOut,
   MessageSquarePlus, Moon, MoreVertical, Pencil, Play, Plus, RefreshCw, Save,
-  Search, Send, Server, Settings, Sun, Trash2, ThumbsDown, ThumbsUp, Users, X
+  Search, Send, Server, Settings, Square, Sun, Trash2, ThumbsDown, ThumbsUp, Users, X
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ApiClient from './utils/api';
 import './index.css';
 
@@ -337,6 +339,8 @@ function Chat({ api }) {
   const [conversationError, setConversationError] = useState('');
   const [truncationNotice, setTruncationNotice] = useState(null);
   const bottom = useRef(null);
+  const promptInput = useRef(null);
+  const generationAbort = useRef(null);
   const restoredConversation = useRef(false);
   const desiredSelection = useRef({ runnerId: '', model: '' });
 
@@ -377,6 +381,12 @@ function Chat({ api }) {
 
   useEffect(() => { loadRunners(); loadConversations(); }, [api]);
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => {
+    const area = promptInput.current;
+    if (!area) return;
+    area.style.height = 'auto';
+    area.style.height = `${area.scrollHeight}px`;
+  }, [prompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.systemPrompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.completionSettings', JSON.stringify(completionSettings)); }, [completionSettings]);
 
@@ -422,6 +432,8 @@ function Chat({ api }) {
 
   async function send() {
     if (!prompt.trim() || !model || busy) return;
+    const controller = new AbortController();
+    generationAbort.current = controller;
     const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, completionSettings) };
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
     setMessages(prev => [...prev, user]);
@@ -429,14 +441,14 @@ function Chat({ api }) {
     setBusy(true);
     try {
       if (!streaming) {
-        const result = await api.chat(body);
+        const result = await api.chat(body, { signal: controller.signal });
         desiredSelection.current = { runnerId: result.conversation.runnerId, model: result.conversation.model };
         setConversation(result.conversation);
         handleTruncationNotice(result.truncation);
         localStorage.setItem(lastConversationStorageKey, result.conversation.id);
         setMessages(prev => [...prev, result.assistantMessage]);
       } else {
-        const response = await api.raw('POST', '/v1.0/api/chat/stream', JSON.stringify(body));
+        const response = await api.raw('POST', '/v1.0/api/chat/stream', JSON.stringify(body), null, { signal: controller.signal });
         if (!response.ok) throw new Error(await response.text());
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -481,12 +493,18 @@ function Chat({ api }) {
       }
       setConversations(enumerationObjects(await api.conversations({ pageNumber: 1, pageSize: 500 })));
     } catch (err) {
+      if (controller.signal.aborted || err?.name === 'AbortError') return;
       const message = String(err.message || err);
       setModelError(message.includes('does not support') ? 'The selected model could not generate a chat response. Choose a chat or completion model instead of an embedding-only model.' : message);
       setMessages(prev => [...prev, { id: `error-${Date.now()}`, role: 'assistant', content: message, error: true }]);
     } finally {
+      if (generationAbort.current === controller) generationAbort.current = null;
       setBusy(false);
     }
+  }
+
+  function stopGeneration() {
+    generationAbort.current?.abort();
   }
 
   async function renameSelectedConversation(item, title) {
@@ -600,10 +618,10 @@ function Chat({ api }) {
         </div>
         <div className="composer">
           <div className="composer-input">
-            <textarea title="Type a message to send to Wilson" value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={text.prompt} />
+            <textarea ref={promptInput} rows={1} title="Type a message to send to Wilson" value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={text.prompt} />
             <div className="ai-disclaimer" title="Reminder to verify generated content">AI can make mistakes, verify all results.</div>
           </div>
-          <button className="send" onClick={send} disabled={busy || !prompt.trim() || !model} title="Send this message to Wilson"><Send size={20} /></button>
+          <button className={busy ? 'send stop' : 'send'} onClick={busy ? stopGeneration : send} disabled={!busy && (!prompt.trim() || !model)} title={busy ? 'Stop the current model response' : 'Send this message to Wilson'}>{busy ? <Square size={18} /> : <Send size={20} />}</button>
         </div>
       </section>
       {systemPromptOpen && <SystemPromptModal value={systemPrompt} onChange={setSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
@@ -624,7 +642,7 @@ function Message({ api, message, conversation }) {
   }
   return (
     <div className={`message ${message.role}`}>
-      <div className="bubble">{message.content || (message.role === 'assistant' ? <ThinkingIndicator /> : '')}</div>
+      <div className="bubble">{message.content ? <MarkdownMessage content={message.content} /> : (message.role === 'assistant' ? <ThinkingIndicator /> : '')}</div>
       {message.role === 'assistant' && <div className="rating">
         <button onClick={() => setFeedbackDraft({ rating: 1, comment: '' })} disabled={rated} title="Mark this assistant response as helpful and optionally explain why"><ThumbsUp size={15} /></button>
         <button onClick={() => setFeedbackDraft({ rating: -1, comment: '' })} disabled={rated} title="Mark this assistant response as not helpful and optionally explain why"><ThumbsDown size={15} /></button>
@@ -641,6 +659,10 @@ function Message({ api, message, conversation }) {
       )}
     </div>
   );
+}
+
+function MarkdownMessage({ content }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
 }
 
 function ThinkingIndicator() {

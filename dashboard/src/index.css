@@ -95,7 +95,18 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .messages { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 28px max(24px, 8vw); }
 .message { display: grid; margin: 0 0 18px; }
 .message.user { justify-items: end; }
-.bubble { max-width: min(760px, 100%); white-space: pre-wrap; line-height: 1.55; padding: 13px 16px; border-radius: 8px; background: var(--panel-2); }
+.bubble { max-width: min(760px, 100%); line-height: 1.55; padding: 13px 16px; border-radius: 8px; background: var(--panel-2); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.bubble > *:first-child { margin-top: 0; }
+.bubble > *:last-child { margin-bottom: 0; }
+.bubble p, .bubble ul, .bubble ol, .bubble blockquote, .bubble pre, .bubble table { margin: 0 0 12px; }
+.bubble ul, .bubble ol { padding-left: 22px; }
+.bubble li + li { margin-top: 4px; }
+.bubble code { font-family: inherit; font-size: .95em; background: color-mix(in srgb, var(--text) 8%, transparent); border: 1px solid var(--line); border-radius: 5px; padding: 1px 4px; }
+.bubble pre { min-height: 0; max-width: 100%; overflow: auto; background: #2f343a; color: #f6f8fa; border: 1px solid #4b5563; padding: 12px; }
+.bubble pre code { background: transparent; border: 0; padding: 0; color: inherit; }
+.bubble blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted); }
+.bubble table { width: 100%; min-width: 0; display: block; overflow: auto; border-collapse: collapse; }
+.bubble th, .bubble td { padding: 6px 8px; font-size: 12px; border: 1px solid var(--line); }
 .thinking-indicator { display: inline-flex; align-items: center; gap: 5px; min-width: 42px; min-height: 20px; }
 .thinking-indicator span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse-dot 1s ease-in-out infinite; }
 .thinking-indicator span:nth-child(2) { animation-delay: .15s; }
@@ -119,9 +130,10 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .settings-note { margin: 0; color: var(--muted); font-size: 13px; }
 .composer { border-top: 1px solid var(--line); padding: 12px max(20px, 8vw); display: grid; grid-template-columns: minmax(0, 1fr) 46px; align-items: start; gap: 10px; }
 .composer-input { display: grid; gap: 6px; }
-.composer textarea { min-height: 44px; height: 54px; max-height: 120px; border-radius: 8px; }
+.composer textarea { min-height: 44px; height: auto; max-height: min(220px, 28vh); overflow-y: auto; border-radius: 8px; }
 .ai-disclaimer { color: var(--muted); font-size: 12px; text-align: center; }
 .send { height: 46px; align-self: start; border-radius: 8px; color: white; background: var(--accent); }
+.send.stop { background: var(--danger); }
 
 .page { height: 100%; overflow: auto; padding: 24px; }
 .page h1 { font-size: 24px; margin: 0 0 18px; letter-spacing: 0; }

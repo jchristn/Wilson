@@ -11,7 +11,7 @@ class ApiClient {
     return headers;
   }
 
-  async request(method, path, body = null, query = null) {
+  async request(method, path, body = null, query = null, options = {}) {
     const url = new URL(this.baseUrl + path);
     if (query) {
       Object.entries(query).forEach(([key, value]) => {
@@ -21,20 +21,22 @@ class ApiClient {
     const response = await fetch(url.toString(), {
       method,
       headers: this.headers(),
-      body: body === null ? undefined : JSON.stringify(body)
+      body: body === null ? undefined : JSON.stringify(body),
+      signal: options.signal
     });
     if (!response.ok) throw new Error(await response.text());
     if (response.status === 204) return null;
     return response.json();
   }
 
-  async raw(method, path, body = null, query = null) {
+  async raw(method, path, body = null, query = null, options = {}) {
     const url = new URL(this.baseUrl + path);
     if (query) Object.entries(query).forEach(([key, value]) => value && url.searchParams.set(key, value));
     return fetch(url.toString(), {
       method,
       headers: this.headers(),
-      body: body === null || body === '' ? undefined : body
+      body: body === null || body === '' ? undefined : body,
+      signal: options.signal
     });
   }
 
@@ -47,7 +49,7 @@ class ApiClient {
   updateConversation(id, payload) { return this.request('PUT', `/v1.0/api/conversations/${id}`, payload); }
   deleteConversation(id) { return this.request('DELETE', `/v1.0/api/conversations/${id}`); }
   messages(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`, null, params); }
-  chat(payload) { return this.request('POST', '/v1.0/api/chat', payload); }
+  chat(payload, options = {}) { return this.request('POST', '/v1.0/api/chat', payload, null, options); }
   tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }
