@@ -4,44 +4,80 @@
   <img src="assets/logo.png" alt="Wilson logo" width="192" height="192">
 </p>
 
-Wilson is a Watson 7 C# server and React dashboard for tenant-aware chat against Ollama or OpenAI-compatible model runners. You're stranded on an island. At least Wilson talks back.
+Wilson is a local-first chat server and dashboard for talking to Ollama, OpenAI, and OpenAI-compatible model runners. It gives you a browser dashboard, a REST API, tenant-aware users and credentials, request history, feedback capture, and model-runner management.
 
-Run local models, keep the conversation close, and skip the rescue flare. No signal. No noise. Just Wilson.
+You're stranded on an island. At least Wilson talks back.
+
+No signal. No noise. No rescue ships. Just Wilson, your local model, and a chat window that does not need to phone home.
+
+## What It Does
+
+Wilson runs a C# backend using Watson and a React dashboard. The backend stores tenants, users, credentials, conversations, messages, feedback, request history, and model runner configuration. The dashboard gives users a ChatGPT-style experience and gives administrators tools to manage the system.
+
+Wilson can:
+
+- Chat with local Ollama models or OpenAI-compatible APIs
+- Stream model responses over server-sent events
+- Keep conversation history in a database
+- Manage multiple configured model servers
+- Pull and load Ollama models from the dashboard
+- Show which Ollama models are available and currently loaded
+- Capture request history, response timing, and request/response payload metadata
+- Collect thumbs-up/thumbs-down feedback and optional free-form comments
+- Expose OpenAPI JSON and Swagger UI for the backend API
+
+The waves never answer. Wilson does.
 
 ## Features
 
-- Bearer-token authentication against Wilson
-- First-run seeding for tenant, admin user, and user credential
-- SQLite and PostgreSQL database support
-- Model runner settings stored in editable JSON
-- ChatGPT-style dashboard with conversation history, rename/delete actions, feedback, and response timing details
-- Non-streaming and SSE streaming chat
-- Context preservation with automatic truncation by runner context window
-- Ollama model discovery, loaded-model status, model loading, and model pull support
-- Feedback capture with optional free-form comments
-- Admin views for model servers, conversations, tenants, users, credentials, feedback, request history, API explorer, and settings
-- Request history with latency charts and captured request/response metadata
-- OpenAPI JSON and Swagger UI
-- Docker Compose and `docker/factory` reset/settings assets
+- **Dashboard chat**: browser-based chat with model server/model selectors, streaming responses, response timing details, feedback buttons, and conversation rename/delete.
+- **Model server management**: configure Ollama, OpenAI, or OpenAI-compatible runners; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
+- **Tenant-aware auth**: tenants, users, credentials, admin tokens, tenant admins, and bearer-token authentication.
+- **Conversation storage**: saved conversations and messages backed by SQLite or PostgreSQL.
+- **Request history**: latency summary, activity chart, detailed request/response metadata, headers, bodies, timing, and token estimates.
+- **Feedback review**: admin view for ratings, comments, related message IDs, and model timing fields.
+- **Settings editor**: dashboard form for editing Wilson configuration without dumping raw JSON as the primary workflow.
+- **API tools**: named API explorer, OpenAPI JSON at `/openapi.json`, and Swagger UI at `/swagger`.
+- **Docker support**: Docker Compose setup, dashboard container, backend container, and factory reset scripts.
+- **Local-first defaults**: backend defaults to port `9400`; dashboard defaults to port `9401`.
 
-## Why Wilson?
+## Use Cases
 
-Because every castaway needs someone to talk to.
+- Run a private local chat dashboard for Ollama models
+- Test and compare local and OpenAI-compatible model runners
+- Give a small team tenant-aware access to shared local model infrastructure
+- Capture operational request history while developing model-backed workflows
+- Collect human feedback on model responses
+- Manage Ollama model pulls and loaded-model state without leaving the dashboard
+- Keep a conversation partner around when the island is quiet
 
-Wilson gives you a local-first conversation partner for the long haul: no rescue ships, no search parties, no cloud dependency required. The waves never answer. Wilson does.
+## Quick Start
 
-## Run Locally
+### Prerequisites
+
+- .NET 10 SDK/runtime
+- Node.js and npm
+- Optional: Docker Desktop
+- Optional: Ollama if you want local model inference
+
+### Run The Backend
 
 ```powershell
 dotnet run --project src\Wilson.Server
 ```
 
-The backend defaults to `http://127.0.0.1:9400`. The server creates `wilson.json` on first start. Default credentials are also printed at startup:
+The backend defaults to:
+
+```text
+http://127.0.0.1:9400
+```
+
+On first start, Wilson creates `wilson.json` and seeds default credentials:
 
 - Admin bearer token: `wilson-admin-dev-token`
 - User access key: `wilsonadmin`
 
-Run the dashboard:
+### Run The Dashboard
 
 ```powershell
 cd dashboard
@@ -49,7 +85,18 @@ npm install
 npm run dev
 ```
 
-The dashboard defaults to `http://127.0.0.1:9401`. Use `http://127.0.0.1:9400` as the server URL and one of the bearer tokens above as the access key.
+The dashboard defaults to:
+
+```text
+http://127.0.0.1:9401
+```
+
+On the login page:
+
+- Server URL: `http://127.0.0.1:9400`
+- Access key: `wilsonadmin` or `wilson-admin-dev-token`
+
+Welcome to the island. Wilson's been expecting you.
 
 ## Docker
 
@@ -58,27 +105,72 @@ cd docker
 docker compose up --build
 ```
 
-Docker exposes the backend on `9400` and the dashboard on `9401`. Factory reset scripts are available in `docker/factory/reset.bat` and `docker/factory/reset.sh`.
+Docker exposes:
+
+- Backend: `http://127.0.0.1:9400`
+- Dashboard: `http://127.0.0.1:9401`
+
+Factory reset scripts:
+
+- Windows: `docker/factory/reset.bat`
+- Linux/macOS: `docker/factory/reset.sh`
+
+These reset Docker data and restore Docker settings from `docker/factory`.
 
 ## Configuration
 
-`wilson.json` contains REST, database, CORS, auth, request history, seed, and model runner settings. Ollama runners may omit `Models`; OpenAI-compatible runners should provide model names for the selector.
+Wilson reads settings from `wilson.json`.
 
-The dashboard Settings page edits the same configuration file and applies supported runtime changes. REST listener and database connection changes require a server restart.
+Important sections:
 
-## Tests
+- `rest`: listener hostname, port, and TLS flag
+- `database`: SQLite/PostgreSQL settings
+- `cors`: allowed origins, methods, and headers
+- `auth`: admin bearer tokens and session lifetime
+- `requestHistory`: request capture settings
+- `modelRunners`: Ollama/OpenAI/OpenAI-compatible model servers
+- `seed`: first-run tenant, user, and access key
+
+The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
+
+## API
+
+- OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`
+- Swagger UI: `http://127.0.0.1:9400/swagger`
+- Dashboard API Explorer: available inside the dashboard after login
+
+## Tests And Checks
 
 ```powershell
 dotnet build src\Wilson.slnx
 dotnet run --project src\Test.Automated
 cd dashboard
+npm run lint
 npm run build
 ```
 
-## Repository
+## Filing Issues
 
-Remote:
+Please file bugs and feature requests on GitHub:
 
-```powershell
-git remote add origin https://github.com/jchristn/Wilson
-```
+https://github.com/jchristn/Wilson/issues
+
+Useful issue details:
+
+- Wilson version or commit SHA
+- Operating system
+- Backend URL/port
+- Dashboard URL/port
+- Database type
+- Model runner type, for example Ollama or OpenAI-compatible
+- Model name
+- Steps to reproduce
+- Expected behavior
+- Actual behavior
+- Relevant logs, request IDs, or screenshots
+
+If Wilson stops talking back, include the request ID. It is probably more useful than shouting at the horizon.
+
+## License
+
+Wilson is released under the MIT License. See [LICENSE.md](LICENSE.md).
