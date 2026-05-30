@@ -72,9 +72,9 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .topbar-connection strong { min-width: 0; max-width: min(360px, 32vw); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 
-.chat-layout { height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+.chat-layout { height: 100%; max-height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
 .conversation-list { height: 100%; max-height: 100%; min-height: 0; border-right: 1px solid var(--line); background: var(--panel-2); padding: 12px; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: stretch; gap: 7px; }
-.conversation-scroll { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 7px; padding-right: 2px; }
+.conversation-scroll { min-height: 0; overflow: hidden; display: grid; align-content: start; gap: 7px; padding-right: 2px; }
 .new-chat { width: 100%; text-align: left; background: transparent; color: var(--text); border-radius: 7px; padding: 8px 4px; display: flex; gap: 8px; align-items: center; min-height: 36px; }
 .new-chat:hover { background: var(--panel); }
 .conversation { width: 100%; text-align: left; background: transparent; color: var(--text); padding: 8px 4px; min-height: 32px; }
@@ -83,7 +83,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .conversation-row.active, .conversation-row:hover { background: var(--panel); }
 .conversation-row .icon-button, .new-chat .icon-button { background: transparent; border-color: transparent; }
 .conversation-error { border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); border-radius: 7px; padding: 8px; font-size: 12px; overflow-wrap: anywhere; }
-.chat-main { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; background: var(--panel); }
+.chat-main { min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow: hidden; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; background: var(--panel); }
 .chat-toolbar { min-height: 64px; border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: end; gap: 12px; }
 .chat-toolbar label { width: 220px; }
 .chat-toolbar .toolbar-button { height: 34px; min-height: 34px; padding-top: 0; padding-bottom: 0; }
