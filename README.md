@@ -167,9 +167,9 @@ Useful issue details:
 - Steps to reproduce
 - Expected behavior
 - Actual behavior
-- Relevant logs, request IDs, or screenshots
+- Relevant logs or screenshots
 
-If Wilson stops talking back, include the request ID. It is probably more useful than shouting at the horizon.
+If Wilson stops talking back, include the logs. They are probably more useful than shouting at the horizon.
 
 ## License
 

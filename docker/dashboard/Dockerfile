@@ -9,4 +9,4 @@ FROM nginx:alpine
 COPY --from=build /src/dashboard/dist /usr/share/nginx/html
 COPY docker/dashboard/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/bin/sh", "-c", "printf 'window.__WILSON_CONFIG__ = { serverUrl: \"%s\" };\\n' \"${WILSON_SERVER_URL:-http://127.0.0.1:9400}\" > /usr/share/nginx/html/env.js && nginx -g 'daemon off;'"]

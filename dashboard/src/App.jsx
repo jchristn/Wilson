@@ -244,7 +244,8 @@ function Topbar({ session, theme, onToggleTheme, onLogout }) {
 }
 
 function Login({ onLogin, theme, onToggleTheme }) {
-  const [serverUrl, setServerUrl] = useState(localStorage.getItem('wilson.serverUrl') || 'http://127.0.0.1:9400');
+  const defaultServerUrl = window.__WILSON_CONFIG__?.serverUrl || 'http://127.0.0.1:9400';
+  const [serverUrl, setServerUrl] = useState(localStorage.getItem('wilson.serverUrl') || defaultServerUrl);
   const [accessKey, setAccessKey] = useState('');
   const [error, setError] = useState('');
   const [tagline] = useState(() => loginTaglines[Math.floor(Math.random() * loginTaglines.length)]);

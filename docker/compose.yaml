@@ -13,6 +13,8 @@ services:
     build:
       context: ..
       dockerfile: docker/dashboard/Dockerfile
+    environment:
+      WILSON_SERVER_URL: http://127.0.0.1:9400
     ports:
       - "9401:80"
     depends_on:
