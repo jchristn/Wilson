@@ -5,6 +5,38 @@ namespace Wilson.Core.Models
     using Wilson.Core.Helpers;
 
     /// <summary>
+    /// Pagination query for enumerating records.
+    /// </summary>
+    public class EnumerationQuery
+    {
+        /// <summary>One-based page number.</summary>
+        public int PageNumber { get; set; } = 1;
+        /// <summary>Page size.</summary>
+        public int PageSize { get; set; } = 25;
+        /// <summary>Optional search term.</summary>
+        public string? Search { get; set; } = null;
+        /// <summary>Optional tenant scope.</summary>
+        public string? TenantId { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Paginated enumeration result.
+    /// </summary>
+    public class EnumerationResult<T>
+    {
+        /// <summary>Objects in the requested page.</summary>
+        public List<T> Objects { get; set; } = new List<T>();
+        /// <summary>One-based page number.</summary>
+        public int PageNumber { get; set; } = 1;
+        /// <summary>Page size.</summary>
+        public int PageSize { get; set; } = 25;
+        /// <summary>Total matching records.</summary>
+        public int TotalRecords { get; set; } = 0;
+        /// <summary>Total pages.</summary>
+        public int TotalPages { get; set; } = 1;
+    }
+
+    /// <summary>
     /// Tenant record.
     /// </summary>
     public class Tenant
@@ -159,6 +191,27 @@ namespace Wilson.Core.Models
     }
 
     /// <summary>
+    /// Chat context truncation notice.
+    /// </summary>
+    public class ChatTruncationNotice
+    {
+        /// <summary>Conversation identifier.</summary>
+        public string ConversationId { get; set; } = String.Empty;
+        /// <summary>Whether prior history was omitted from the model prompt.</summary>
+        public bool Truncated { get; set; } = false;
+        /// <summary>Number of previous messages included in the model prompt.</summary>
+        public int IncludedMessageCount { get; set; } = 0;
+        /// <summary>Number of previous messages omitted from the model prompt.</summary>
+        public int OmittedMessageCount { get; set; } = 0;
+        /// <summary>Estimated prompt tokens sent to the model.</summary>
+        public int PromptTokenEstimate { get; set; } = 0;
+        /// <summary>Token budget used for history selection.</summary>
+        public int PromptBudgetTokens { get; set; } = 0;
+        /// <summary>Configured context window tokens.</summary>
+        public int ContextWindowTokens { get; set; } = 0;
+    }
+
+    /// <summary>
     /// Feedback record.
     /// </summary>
     public class Feedback
@@ -302,5 +355,32 @@ namespace Wilson.Core.Models
         public string Model { get; set; } = String.Empty;
         /// <summary>Model server status message.</summary>
         public string Status { get; set; } = String.Empty;
+    }
+
+    /// <summary>
+    /// Chat completion request settings.
+    /// </summary>
+    public class CompletionRequestSettings
+    {
+        /// <summary>Default system prompt.</summary>
+        public const string DefaultSystemPrompt = "Use prior turns only as context. Respond only to the latest user message, and do not replay or quote earlier assistant responses unless the user explicitly asks for them.";
+        /// <summary>System prompt.</summary>
+        public string SystemPrompt { get; set; } = DefaultSystemPrompt;
+        /// <summary>Sampling temperature.</summary>
+        public double? Temperature { get; set; } = 0.7;
+        /// <summary>Nucleus sampling threshold.</summary>
+        public double? TopP { get; set; } = 0.9;
+        /// <summary>Maximum response tokens.</summary>
+        public int? MaxTokens { get; set; } = 2048;
+        /// <summary>Ollama top-K sampling.</summary>
+        public int? TopK { get; set; } = 40;
+        /// <summary>Ollama minimum probability threshold.</summary>
+        public double? MinP { get; set; } = 0.0;
+        /// <summary>Ollama repeat penalty.</summary>
+        public double? RepeatPenalty { get; set; } = 1.1;
+        /// <summary>Ollama repeat lookback.</summary>
+        public int? RepeatLastN { get; set; } = 64;
+        /// <summary>Optional random seed.</summary>
+        public int? Seed { get; set; } = null;
     }
 }

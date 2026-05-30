@@ -86,6 +86,21 @@ const loginTaglines = [
   'Local conversations for remote moments.'
 ];
 
+const defaultSystemPrompt = 'Use prior turns only as context. Respond only to the latest user message, and do not replay or quote earlier assistant responses unless the user explicitly asks for them.';
+
+const defaultCompletionSettings = {
+  temperature: 0.7,
+  topP: 0.9,
+  maxTokens: 2048,
+  topK: 40,
+  minP: 0,
+  repeatPenalty: 1.1,
+  repeatLastN: 64,
+  seed: ''
+};
+
+const lastConversationStorageKey = 'wilson.chat.lastConversationId';
+
 const fieldMeta = {
   id: ['ID', 'Unique record identifier. Click the copy button to copy it.'],
   tenantId: ['Tenant ID', 'Tenant that owns this record.'],
@@ -271,6 +286,10 @@ function modelKey(runnerId, model) {
   return `${runnerId || ''}::${String(model || '').toLowerCase()}`;
 }
 
+function enumerationObjects(result) {
+  return Array.isArray(result) ? result : result?.objects || [];
+}
+
 function sameModelName(left, right) {
   return String(left || '').toLowerCase() === String(right || '').toLowerCase();
 }
@@ -292,8 +311,16 @@ function Chat({ api }) {
   const [messages, setMessages] = useState([]);
   const [runnerId, setRunnerId] = useState('');
   const [model, setModel] = useState('');
+  const [conversationModel, setConversationModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [streaming, setStreaming] = useState(true);
+  const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.systemPrompt') || defaultSystemPrompt);
+  const [completionSettings, setCompletionSettings] = useState(() => {
+    try { return { ...defaultCompletionSettings, ...JSON.parse(localStorage.getItem('wilson.chat.completionSettings') || '{}') }; }
+    catch { return defaultCompletionSettings; }
+  });
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false);
+  const [completionSettingsOpen, setCompletionSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [modelError, setModelError] = useState('');
   const [loadingModels, setLoadingModels] = useState(false);
@@ -302,40 +329,56 @@ function Chat({ api }) {
   const [renameConversation, setRenameConversation] = useState(null);
   const [deleteConversation, setDeleteConversation] = useState(null);
   const [conversationError, setConversationError] = useState('');
+  const [truncationNotice, setTruncationNotice] = useState(null);
   const bottom = useRef(null);
+  const restoredConversation = useRef(false);
+  const desiredSelection = useRef({ runnerId: '', model: '' });
 
   const loadConversations = useCallback(async () => {
-    setConversations(await api.conversations());
+    const items = enumerationObjects(await api.conversations({ pageNumber: 1, pageSize: 500 }));
+    setConversations(items);
+    if (!restoredConversation.current) {
+      restoredConversation.current = true;
+      const lastConversationId = localStorage.getItem(lastConversationStorageKey);
+      const lastConversation = items.find(item => item.id === lastConversationId);
+      if (lastConversation) await loadConversation(lastConversation, { remember: false });
+    }
   }, [api]);
 
-  const loadRunners = useCallback(async () => {
+  const loadRunners = useCallback(async (selection = {}) => {
     setLoadingModels(true);
     setModelError('');
     try {
-      const items = await api.runners();
+      const items = enumerationObjects(await api.runners({ pageNumber: 1, pageSize: 500 }));
+      const latestDesired = desiredSelection.current;
+      const preferredRunnerId = selection.runnerId ?? latestDesired.runnerId ?? runnerId;
+      const preferredModel = selection.model ?? latestDesired.model ?? model;
       setRunners(items);
       setLoadedKeys(new Set(items.flatMap(item => (item.loadedModels || []).map(loaded => modelKey(item.id, loaded)))));
-      const selected = items.find(item => item.id === runnerId) || items[0];
+      const selected = items.find(item => item.id === preferredRunnerId) || items[0];
       if (selected) {
+        const models = selected.models || [];
         setRunnerId(selected.id);
-        setModel(selected.models?.[0] || '');
-        setModelError(selected.models?.length ? '' : 'No models were returned. For Ollama servers, Wilson queries the Ollama model list when no models are configured.');
+        setModel(models.includes(preferredModel) ? preferredModel : models[0] || '');
+        setModelError(models.length ? '' : 'No models were returned. For Ollama servers, Wilson queries the Ollama model list when no models are configured.');
       }
     } catch (err) {
       setModelError(String(err.message || err));
     } finally {
       setLoadingModels(false);
     }
-  }, [api, runnerId]);
+  }, [api, runnerId, model]);
 
   useEffect(() => { loadRunners(); loadConversations(); }, [api]);
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { localStorage.setItem('wilson.chat.systemPrompt', systemPrompt); }, [systemPrompt]);
+  useEffect(() => { localStorage.setItem('wilson.chat.completionSettings', JSON.stringify(completionSettings)); }, [completionSettings]);
 
   useEffect(() => {
     const selected = runners.find(item => item.id === runnerId);
     if (!selected) return;
     if (selected.models?.length) {
-      if (!selected.models.includes(model)) setModel(selected.models[0]);
+      if (!selected.models.includes(model) && model !== conversationModel) setModel(selected.models[0]);
       setModelError('');
     } else {
       setModel('');
@@ -343,21 +386,26 @@ function Chat({ api }) {
     }
   }, [runnerId, runners, model]);
 
-  async function loadConversation(item) {
+  async function loadConversation(item, options = {}) {
+    desiredSelection.current = { runnerId: item.runnerId, model: item.model };
     setConversation(item);
     setRunnerId(item.runnerId);
     setModel(item.model);
-    setMessages(await api.messages(item.id));
+    setConversationModel(item.model);
+    setTruncationNotice(null);
+    if (options.remember !== false) localStorage.setItem(lastConversationStorageKey, item.id);
+    setMessages(enumerationObjects(await api.messages(item.id, { pageNumber: 1, pageSize: 500 })));
   }
 
   async function loadSelectedModel() {
     if (!runnerId || !model || loadingModelKey) return;
     const key = modelKey(runnerId, model);
+    desiredSelection.current = { runnerId, model };
     setLoadingModelKey(key);
     setModelError('');
     try {
       await api.loadModel(runnerId, model);
-      await loadRunners();
+      await loadRunners({ runnerId, model });
       setLoadedKeys(prev => new Set([...prev, key]));
     } catch (err) {
       setModelError(String(err.message || err));
@@ -368,7 +416,7 @@ function Chat({ api }) {
 
   async function send() {
     if (!prompt.trim() || !model || busy) return;
-    const body = { conversationId: conversation?.id, runnerId, model, prompt };
+    const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, completionSettings) };
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
     setMessages(prev => [...prev, user]);
     setPrompt('');
@@ -376,7 +424,11 @@ function Chat({ api }) {
     try {
       if (!streaming) {
         const result = await api.chat(body);
+        desiredSelection.current = { runnerId: result.conversation.runnerId, model: result.conversation.model };
         setConversation(result.conversation);
+        setConversationModel(result.conversation.model);
+        handleTruncationNotice(result.truncation);
+        localStorage.setItem(lastConversationStorageKey, result.conversation.id);
         setMessages(prev => [...prev, result.assistantMessage]);
       } else {
         const response = await api.raw('POST', '/v1.0/api/chat/stream', JSON.stringify(body));
@@ -397,7 +449,15 @@ function Chat({ api }) {
             const { event, data } = parseSseFrame(frame);
             if (!event || !data) return;
             const parsed = JSON.parse(data);
-            if (event === 'conversation') setConversation(parsed);
+            if (event === 'conversation') {
+              desiredSelection.current = { runnerId: parsed.runnerId, model: parsed.model };
+              setConversation(parsed);
+              setConversationModel(parsed.model);
+              localStorage.setItem(lastConversationStorageKey, parsed.id);
+            }
+            if (event === 'truncation') {
+              handleTruncationNotice(parsed);
+            }
             if (event === 'chunk') {
               assistant = { ...assistant, content: assistant.content + (parsed.text || '') };
               setMessages(prev => prev.map(item => item.id === assistant.id ? assistant : item));
@@ -415,7 +475,7 @@ function Chat({ api }) {
           });
         }
       }
-      setConversations(await api.conversations());
+      setConversations(enumerationObjects(await api.conversations({ pageNumber: 1, pageSize: 500 })));
     } catch (err) {
       const message = String(err.message || err);
       setModelError(message.includes('does not support') ? 'The selected model could not generate a chat response. Choose a chat or completion model instead of an embedding-only model.' : message);
@@ -428,6 +488,7 @@ function Chat({ api }) {
   async function renameSelectedConversation(item, title) {
     const updated = await api.updateConversation(item.id, { ...item, title });
     setConversation(current => current?.id === updated.id ? updated : current);
+    if (conversation?.id === updated.id) localStorage.setItem(lastConversationStorageKey, updated.id);
     await loadConversations();
     setRenameConversation(null);
   }
@@ -435,15 +496,33 @@ function Chat({ api }) {
   async function deleteSelectedConversation(item) {
     await api.deleteConversation(item.id);
     if (conversation?.id === item.id) {
+      desiredSelection.current = { runnerId: '', model: '' };
       setConversation(null);
+      setConversationModel('');
+      setTruncationNotice(null);
       setMessages([]);
     }
+    if (localStorage.getItem(lastConversationStorageKey) === item.id) localStorage.removeItem(lastConversationStorageKey);
     await loadConversations();
     setDeleteConversation(null);
   }
 
+  function handleTruncationNotice(notice) {
+    if (!notice?.truncated) {
+      setTruncationNotice(null);
+      return;
+    }
+    setTruncationNotice(notice);
+    const retainCount = Math.max(2, Number(notice.includedMessageCount || 0) + 3);
+    setMessages(prev => prev.length > retainCount ? prev.slice(prev.length - retainCount) : prev);
+  }
+
   const selectedRunner = runners.find(item => item.id === runnerId);
-  const modelOptions = selectedRunner?.models || [];
+  const modelOptions = useMemo(() => {
+    const options = [...(selectedRunner?.models || [])];
+    if (model && !options.includes(model)) options.unshift(model);
+    return options;
+  }, [selectedRunner, model]);
   const selectedModelKey = modelKey(runnerId, model);
   const modelLoaded = loadedKeys.has(selectedModelKey) || (selectedRunner?.loadedModels || []).some(item => sameModelName(item, model));
   const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
@@ -451,7 +530,7 @@ function Chat({ api }) {
   return (
     <div className="chat-layout">
       <aside className="conversation-list">
-        <button className="new-chat" title="Start a new conversation" onClick={() => { setConversation(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
+        <button className="new-chat" title="Start a new conversation" onClick={() => { desiredSelection.current = { runnerId: '', model: '' }; localStorage.removeItem(lastConversationStorageKey); setConversation(null); setConversationModel(''); setTruncationNotice(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
         {conversationError && <div className="conversation-error" title="Conversation action error">{conversationError}</div>}
         {conversations.map(item => (
           <div key={item.id} className={conversation?.id === item.id ? 'conversation-row active' : 'conversation-row'} title={`Conversation: ${item.title}`}>
@@ -500,12 +579,19 @@ function Chat({ api }) {
           <label title="Select the model server used for chat requests">{text.runner}<select title="Select the model server used for chat requests" value={runnerId} onChange={e => setRunnerId(e.target.value)}>{runners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label title="Select any model returned by the configured server">{text.model}<select title="Select the model to use for chat requests" value={model} onChange={e => setModel(e.target.value)} disabled={modelOptions.length < 1}>{modelOptions.length < 1 ? <option value="">{loadingModels ? 'Loading models' : text.noModels}</option> : modelOptions.map(item => <option key={item}>{item}</option>)}</select></label>
           <button className="icon-button" title="Refresh model servers and query Ollama model lists" onClick={loadRunners}><RefreshCw size={16} /></button>
-          {canLoadModel && <button className="secondary" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}Load Model</button>}
+          {canLoadModel && <button className="secondary toolbar-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}Load Model</button>}
           {modelLoading && <span className="model-loading-note" title="Model loading may take several minutes depending on model size">Model loading may take several minutes depending on model size</span>}
+          <button className="secondary toolbar-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} />System Prompt</button>
+          <button className="secondary toolbar-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} />Settings</button>
           <label className="toggle" title="Enable streaming responses"><input title="Toggle streaming responses" type="checkbox" checked={streaming} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
         </div>
         {modelError && <div className="model-error" title="Model loading status">{modelError}</div>}
         <div className="messages">
+          {truncationNotice && (
+            <div className="context-truncation-notice" title="Older conversation messages were omitted from the model prompt to stay within the configured context window">
+              Older context was omitted for this request. {truncationNotice.omittedMessageCount} prior message{truncationNotice.omittedMessageCount === 1 ? '' : 's'} were excluded; {truncationNotice.includedMessageCount} were kept.
+            </div>
+          )}
           {messages.map(item => <Message key={item.id} api={api} message={item} conversation={conversation} />)}
           <div ref={bottom} />
         </div>
@@ -517,6 +603,8 @@ function Chat({ api }) {
           <button className="send" onClick={send} disabled={busy || !prompt.trim() || !model} title="Send this message to Wilson"><Send size={20} /></button>
         </div>
       </section>
+      {systemPromptOpen && <SystemPromptModal value={systemPrompt} onChange={setSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
+      {completionSettingsOpen && <CompletionSettingsModal settings={completionSettings} runner={selectedRunner} onChange={setCompletionSettings} onClose={() => setCompletionSettingsOpen(false)} />}
     </div>
   );
 }
@@ -559,12 +647,12 @@ function ThinkingIndicator() {
 function MessageInfoModal({ message, onClose }) {
   return (
     <Modal title="Response Details" onClose={onClose}>
-      <div className="record-grid">
-        <DetailField name="timeToFirstTokenMs" value={message.timeToFirstTokenMs || 0} />
-        <DetailField name="streamingTimeMs" value={message.streamingTimeMs || 0} />
-        <DetailField name="totalTimeMs" value={message.totalTimeMs || 0} />
-        <DetailField name="tokensUsed" value={message.tokensUsed || message.tokenEstimate || 0} />
-      </div>
+      <KeyValueTable rows={[
+        ['timeToFirstTokenMs', message.timeToFirstTokenMs || 0],
+        ['streamingTimeMs', message.streamingTimeMs || 0],
+        ['totalTimeMs', message.totalTimeMs || 0],
+        ['tokensUsed', message.tokensUsed || message.tokenEstimate || 0]
+      ]} />
     </Modal>
   );
 }
@@ -576,8 +664,72 @@ function PageIntro({ title, description, actions = null }) {
         <h1 title={title}>{title}</h1>
         <p title={description}>{description}</p>
       </div>
-      {actions}
+      {actions && <div className="page-header-actions">{actions}</div>}
     </div>
+  );
+}
+
+function normalizeCompletionSettings(systemPrompt, settings) {
+  const numberOrNull = (value) => value === '' || value === null || value === undefined ? null : Number(value);
+  return {
+    systemPrompt: systemPrompt || defaultSystemPrompt,
+    temperature: numberOrNull(settings.temperature),
+    topP: numberOrNull(settings.topP),
+    maxTokens: numberOrNull(settings.maxTokens),
+    topK: numberOrNull(settings.topK),
+    minP: numberOrNull(settings.minP),
+    repeatPenalty: numberOrNull(settings.repeatPenalty),
+    repeatLastN: numberOrNull(settings.repeatLastN),
+    seed: numberOrNull(settings.seed)
+  };
+}
+
+function SystemPromptModal({ value, onChange, onClose }) {
+  const [draft, setDraft] = useState(value || defaultSystemPrompt);
+  return (
+    <Modal title="System Prompt" onClose={onClose} wide>
+      <div className="chat-settings-form">
+        <label title="System prompt sent with each chat completion request">
+          System prompt
+          <textarea className="system-prompt-textarea" title="Instructions that define how the selected model should behave" value={draft} onChange={e => setDraft(e.target.value)} />
+        </label>
+      </div>
+      <div className="modal-actions">
+        <button className="secondary" title="Restore the default Wilson system prompt" onClick={() => setDraft(defaultSystemPrompt)}>Reset Default</button>
+        <button className="secondary" title="Close without saving system prompt changes" onClick={onClose}>Cancel</button>
+        <button className="primary" title="Save this system prompt for future chat requests" onClick={() => { onChange(draft.trim() || defaultSystemPrompt); onClose(); }}><Save size={16} />Save</button>
+      </div>
+    </Modal>
+  );
+}
+
+function CompletionSettingsModal({ settings, runner, onChange, onClose }) {
+  const [draft, setDraft] = useState({ ...defaultCompletionSettings, ...settings });
+  const set = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
+  const isOllama = runner?.apiType === 'Ollama';
+  return (
+    <Modal title="Completion Settings" onClose={onClose} wide>
+      <div className="chat-settings-form">
+        <div className="form-grid">
+          <FormInput label="Temperature" tooltip="Sampling temperature. Lower values are more deterministic; higher values are more creative." type="number" value={draft.temperature} onChange={v => set('temperature', v)} />
+          <FormInput label="Top P" tooltip="Nucleus sampling threshold from 0 to 1. Lower values narrow token selection." type="number" value={draft.topP} onChange={v => set('topP', v)} />
+          <FormInput label="Max tokens" tooltip="Maximum number of tokens the model should generate." type="number" value={draft.maxTokens} onChange={v => set('maxTokens', v)} />
+          <FormInput label="Seed" tooltip="Optional random seed for reproducible completions where supported. Leave blank for random." type="number" value={draft.seed} onChange={v => set('seed', v)} />
+        </div>
+        <div className={isOllama ? 'form-grid' : 'form-grid muted-settings'} title={isOllama ? 'Ollama-specific completion settings' : 'These settings apply only to Ollama model servers'}>
+          <FormInput label="Top K" tooltip="Ollama top-K sampling. Lower values restrict candidate tokens." type="number" value={draft.topK} onChange={v => set('topK', v)} />
+          <FormInput label="Min P" tooltip="Ollama minimum probability threshold." type="number" value={draft.minP} onChange={v => set('minP', v)} />
+          <FormInput label="Repeat penalty" tooltip="Ollama repeat penalty. Higher values discourage repetition." type="number" value={draft.repeatPenalty} onChange={v => set('repeatPenalty', v)} />
+          <FormInput label="Repeat last N" tooltip="Ollama token lookback window used for repeat penalty." type="number" value={draft.repeatLastN} onChange={v => set('repeatLastN', v)} />
+        </div>
+        {!isOllama && <p className="settings-note" title="Ollama-specific settings are ignored for this runner type">Top K, Min P, repeat penalty, and repeat lookback are only sent to Ollama runners.</p>}
+      </div>
+      <div className="modal-actions">
+        <button className="secondary" title="Restore sensible default completion settings" onClick={() => setDraft(defaultCompletionSettings)}>Reset Defaults</button>
+        <button className="secondary" title="Close without saving completion setting changes" onClick={onClose}>Cancel</button>
+        <button className="primary" title="Save these completion settings for future chat requests" onClick={() => { onChange(draft); onClose(); }}><Save size={16} />Save</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -620,8 +772,8 @@ function ModelServersView({ api }) {
     setLoading(true);
     try {
       setError('');
-      const [runnerItems, settingItems] = await Promise.all([api.runners(), api.settings()]);
-      setServers(runnerItems);
+      const [runnerItems, settingItems] = await Promise.all([api.runners({ pageNumber: 1, pageSize: 500 }), api.settings()]);
+      setServers(enumerationObjects(runnerItems));
       setSettings(settingItems);
     } catch (err) {
       setError(String(err.message || err));
@@ -644,7 +796,9 @@ function ModelServersView({ api }) {
     if (index >= 0) runners[index] = server;
     else runners.push(server);
     next.modelRunners = runners;
-    await api.settings(next);
+    const updated = await api.settings(next);
+    setSettings(updated);
+    setServers(current => mergeRunnerSettings(current, updated.modelRunners || []));
     setEditServer(null);
     await load();
   }
@@ -672,13 +826,30 @@ function ModelServersView({ api }) {
         <MetricCard icon={Play} label="Loaded models" value={totals.loaded} tone={totals.loaded > 0 ? 'success' : ''} />
       </div>
       <div className="model-server-grid">
-        {servers.map(server => <ModelServerCard key={server.id} server={server} api={api} onPulled={load} onEdit={() => setEditServer(toRunnerSettings(server, settings))} onDelete={() => setDeleteServer(server)} />)}
+        {servers.map(server => <ModelServerCard key={server.id} server={withRunnerSettings(server, settings)} api={api} onPulled={load} onEdit={() => setEditServer(toRunnerSettings(server, settings))} onDelete={() => setDeleteServer(server)} />)}
         {servers.length < 1 && !loading && <div className="empty-card" title="No configured model servers">No model servers are configured.</div>}
       </div>
       {editServer && <ModelServerEditModal server={editServer} onClose={() => setEditServer(null)} onSave={saveServer} />}
       {deleteServer && <ConfirmModal title="Delete Model Server" message={`Delete ${deleteServer.name || deleteServer.id} from Wilson settings?`} onCancel={() => setDeleteServer(null)} onConfirm={() => removeServer(deleteServer)} />}
     </div>
   );
+}
+
+function mergeRunnerSettings(servers, runners) {
+  return servers.map(server => withRunnerSettings(server, { modelRunners: runners }));
+}
+
+function withRunnerSettings(server, settings) {
+  const configured = settings?.modelRunners?.find(item => item.id === server.id);
+  if (!configured) return server;
+  return {
+    ...server,
+    name: configured.name || server.name,
+    apiType: configured.apiType || server.apiType,
+    endpoint: configured.endpoint || server.endpoint,
+    configuredModels: configured.models || server.configuredModels || [],
+    contextWindowTokens: configured.contextWindowTokens ?? server.contextWindowTokens
+  };
 }
 
 function toRunnerSettings(server, settings) {
@@ -787,7 +958,12 @@ function ModelServerEditModal({ server, onClose, onSave }) {
       setError('ID, name, and endpoint are required.');
       return;
     }
-    await onSave({ ...draft, contextWindowTokens: Number(draft.contextWindowTokens || 8192), apiKey: draft.apiKey || null });
+    try {
+      setError('');
+      await onSave({ ...draft, contextWindowTokens: Number(draft.contextWindowTokens || 8192), apiKey: draft.apiKey || null });
+    } catch (err) {
+      setError(String(err.message || err));
+    }
   }
   return (
     <Modal title="Model Server" onClose={onClose} wide>
@@ -851,13 +1027,16 @@ function FeedbackCommentModal({ draft, onChange, onClose, onSave }) {
 
 function HistoryView({ api }) {
   const [items, setItems] = useState([]);
+  const [enumeration, setEnumeration] = useState(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
   const [modal, setModal] = useState(null);
-  const load = useCallback(() => api.conversations().then(setItems), [api]);
+  const load = useCallback(async () => { const result = await api.conversations({ pageNumber: page + 1, pageSize }); setEnumeration(result); setItems(enumerationObjects(result)); }, [api, page, pageSize]);
   useEffect(() => { load(); }, [load]);
   return (
     <div className="page">
       <PageIntro title={text.history} description="Review saved chat conversations, inspect conversation metadata, rename conversations, and remove old message history." />
-      <DataTable rows={items} columns={['id', 'title', 'runnerId', 'model', 'lastUpdateUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'view', row })} actions={(row) => [
+      <DataTable rows={items} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['id', 'title', 'runnerId', 'model', 'lastUpdateUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'view', row })} actions={(row) => [
         { label: text.view, tooltip: 'View structured conversation details', icon: Eye, onClick: () => setModal({ type: 'view', row }) },
         { label: text.viewJson, tooltip: 'View raw conversation JSON', icon: Code, onClick: () => setModal({ type: 'json', row }) },
         { label: text.edit, tooltip: 'Rename this conversation', icon: Pencil, onClick: () => setModal({ type: 'edit', row }) },
@@ -873,18 +1052,21 @@ function HistoryView({ api }) {
 
 function RequestHistory({ api }) {
   const [rows, setRows] = useState([]);
+  const [enumeration, setEnumeration] = useState(null);
   const [summary, setSummary] = useState(null);
   const [range, setRange] = useState('day');
   const [method, setMethod] = useState('all');
   const [outcome, setOutcome] = useState('all');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState(null);
   const ranges = {
-    hour: { label: 'Last Hour', ms: 60 * 60 * 1000, bucketMinutes: 1 },
-    day: { label: 'Last Day', ms: 24 * 60 * 60 * 1000, bucketMinutes: 15 },
-    week: { label: 'Last Week', ms: 7 * 24 * 60 * 60 * 1000, bucketMinutes: 120 },
-    month: { label: 'Last Month', ms: 30 * 24 * 60 * 60 * 1000, bucketMinutes: 720 }
+    hour: { label: 'Last Hour', ms: 60 * 60 * 1000, bucketMinutes: 1, samples: 60 },
+    day: { label: 'Last Day', ms: 24 * 60 * 60 * 1000, bucketMinutes: 15, samples: 96 },
+    week: { label: 'Last Week', ms: 7 * 24 * 60 * 60 * 1000, bucketMinutes: 120, samples: 84 },
+    month: { label: 'Last Month', ms: 30 * 24 * 60 * 60 * 1000, bucketMinutes: 480, samples: 90 }
   };
   const load = useCallback(async () => {
     setLoading(true);
@@ -892,12 +1074,15 @@ function RequestHistory({ api }) {
     const selected = ranges[range];
     const from = new Date(now.getTime() - selected.ms);
     try {
-      setRows(await api.requestHistory());
-      setSummary(await api.requestSummary({ fromUtc: from.toISOString(), toUtc: now.toISOString(), bucketMinutes: selected.bucketMinutes }));
+      const result = await api.requestHistory({ pageNumber: page + 1, pageSize });
+      setEnumeration(result);
+      setRows(enumerationObjects(result));
+      const nextSummary = await api.requestSummary({ fromUtc: from.toISOString(), toUtc: now.toISOString(), bucketMinutes: selected.bucketMinutes });
+      setSummary({ ...nextSummary, rangeStartUtc: from.toISOString(), rangeEndUtc: now.toISOString(), expectedSamples: selected.samples });
     } finally {
       setLoading(false);
     }
-  }, [api, range]);
+  }, [api, range, page, pageSize]);
   useEffect(() => { load(); }, [load]);
 
   const filteredRows = useMemo(() => {
@@ -937,9 +1122,9 @@ function RequestHistory({ api }) {
           <label className="toolbar-field" title="Filter request history by status outcome">Status<select title="Filter by success or error status" value={outcome} onChange={e => setOutcome(e.target.value)}><option value="all">All statuses</option><option value="success">Success</option><option value="error">Errors</option></select></label>
           <label className="toolbar-search" title="Search request history by path, status, or ID"><Search size={16} /><input title="Search request history by path, status, or ID" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search path, status, or ID" /></label>
         </div>
-        {summary && <ActivityChart summary={summary} />}
+        {summary && <ActivityChart summary={summary} range={range} />}
       </div>
-      <RequestHistoryTable rows={filteredRows} onView={(row) => setModal({ type: 'view', row })} onJson={(row) => setModal({ type: 'json', row })} onDelete={(row) => setModal({ type: 'delete', row })} />
+      <RequestHistoryTable rows={filteredRows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onView={(row) => setModal({ type: 'view', row })} onJson={(row) => setModal({ type: 'json', row })} onDelete={(row) => setModal({ type: 'delete', row })} />
       {modal?.type === 'view' && <RequestHistoryDetailModal row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'json' && <JsonModal title="Request History Entry JSON" row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'delete' && <ConfirmModal title="Delete request history entry" message="Delete this request history entry?" onCancel={() => setModal(null)} onConfirm={async () => { await api.deleteRequestHistory(modal.row.id); setModal(null); load(); }} />}
@@ -947,43 +1132,121 @@ function RequestHistory({ api }) {
   );
 }
 
-function ActivityChart({ summary }) {
-  const buckets = summary.buckets || [];
+function ActivityChart({ summary, range }) {
+  const buckets = normalizeChartBuckets(summary);
+  const [tooltip, setTooltip] = useState(null);
   const max = Math.max(1, ...buckets.map(b => b.successCount + b.failureCount));
   const yTicks = [3, 2, 1, 0].map(index => Math.round((max / 3) * index));
-  const xStep = Math.max(1, Math.ceil(buckets.length / 8));
+  const xTicks = chartTicks(buckets, range);
+  const bucketTooltip = (bucket) => ({
+    timestamp: formatDate(bucket.bucketStartUtc),
+    successes: bucket.successCount || 0,
+    failures: bucket.failureCount || 0
+  });
+  function showTooltip(event, bucket) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTooltip({ ...bucketTooltip(bucket), left: rect.left + rect.width / 2, top: rect.top });
+  }
   return (
     <div className="chart-shell" title="Time-bucketed request volume. Green is success; red is failure.">
       <div className="chart-y-axis">
         {yTicks.map((tick, index) => <span key={`${tick}-${index}`}>{tick}</span>)}
       </div>
       <div className="chart-area">
-        <div className="chart">
-          {buckets.map((b, i) => <div key={i} className="bar" title={`${formatDate(b.bucketStartUtc)} - ${b.successCount + b.failureCount} requests, ${formatDuration(b.averageDurationMs)} average latency`}><span className="ok" style={{ height: `${(b.successCount / max) * 100}%` }} /><span className="fail" style={{ height: `${(b.failureCount / max) * 100}%` }} /></div>)}
+        <div className="chart" onMouseLeave={() => setTooltip(null)}>
+          {buckets.map((b, i) => {
+            const tip = bucketTooltip(b);
+            const label = `Timestamp: ${tip.timestamp}. Successful requests: ${tip.successes}. Failed requests: ${tip.failures}.`;
+            return (
+              <div
+                key={i}
+                className="bar"
+                title={label}
+                aria-label={label}
+                tabIndex="0"
+                onMouseEnter={event => showTooltip(event, b)}
+                onMouseMove={event => showTooltip(event, b)}
+                onFocus={event => showTooltip(event, b)}
+                onBlur={() => setTooltip(null)}
+              >
+                <span className="ok" style={{ height: `${(b.successCount / max) * 100}%` }} />
+                <span className="fail" style={{ height: `${(b.failureCount / max) * 100}%` }} />
+              </div>
+            );
+          })}
           {buckets.length < 1 && <div className="empty-chart">No activity in this range</div>}
         </div>
+        {tooltip && (
+          <div className="chart-tooltip" style={{ left: tooltip.left, top: tooltip.top }} role="tooltip">
+            <div><strong>Timestamp</strong><span>{tooltip.timestamp}</span></div>
+            <div><strong>Successful requests</strong><span>{tooltip.successes}</span></div>
+            <div><strong>Failed requests</strong><span>{tooltip.failures}</span></div>
+          </div>
+        )}
         <div className="chart-x-axis">
-          {buckets.map((b, i) => i % xStep === 0 ? <span key={i}>{shortTime(b.bucketStartUtc)}</span> : null)}
+          {xTicks.map((tick, i) => <span key={`${tick.value}-${i}`}>{tick.label}</span>)}
         </div>
       </div>
     </div>
   );
 }
 
+function normalizeChartBuckets(summary) {
+  const buckets = summary?.buckets || [];
+  const expectedSamples = Number(summary?.expectedSamples || 0);
+  const start = new Date(summary?.rangeStartUtc || buckets[0]?.bucketStartUtc || '');
+  const end = new Date(summary?.rangeEndUtc || buckets[buckets.length - 1]?.bucketEndUtc || '');
+  if (!expectedSamples || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return buckets;
+
+  const stepMs = (end.getTime() - start.getTime()) / expectedSamples;
+  return Array.from({ length: expectedSamples }, (_, index) => {
+    const bucketStart = new Date(start.getTime() + stepMs * index);
+    const bucketEnd = new Date(start.getTime() + stepMs * (index + 1));
+    const source = buckets.find(item => {
+      const sourceStart = new Date(item.bucketStartUtc);
+      return !Number.isNaN(sourceStart.getTime()) && sourceStart >= bucketStart && sourceStart < bucketEnd;
+    });
+    return source || {
+      bucketStartUtc: bucketStart.toISOString(),
+      bucketEndUtc: bucketEnd.toISOString(),
+      successCount: 0,
+      failureCount: 0,
+      averageDurationMs: 0
+    };
+  });
+}
+
+function chartTicks(buckets, range) {
+  if (!buckets.length) return [];
+  const start = new Date(buckets[0].bucketStartUtc);
+  const end = new Date(buckets[buckets.length - 1].bucketEndUtc || buckets[buckets.length - 1].bucketStartUtc);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return [];
+  const count = Math.min(8, buckets.length + 1);
+  return Array.from({ length: count }, (_, index) => {
+    const time = new Date(start.getTime() + ((end.getTime() - start.getTime()) * index) / (count - 1));
+    return { value: time.toISOString(), label: formatChartTick(time, range) };
+  });
+}
+
+function formatChartTick(date, range) {
+  if (range === 'week') return date.toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric' });
+  if (range === 'month') return date.toLocaleDateString([], { month: 'numeric', day: 'numeric' });
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 function MetricCard({ icon: Icon, label, value, tone = '' }) {
   return <div className={`metric-card ${tone}`} title={`${label}: ${value}`}><Icon size={18} /><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function RequestHistoryTable({ rows, onView, onJson, onDelete }) {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+function RequestHistoryTable({ rows, enumeration, page, pageSize, setPage, setPageSize, onView, onJson, onDelete }) {
+  const total = enumeration?.totalRecords ?? rows.length;
+  const totalPages = Math.max(1, enumeration?.totalPages || Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);
-  const pageRows = rows.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const pageRows = rows;
   useEffect(() => { if (page !== safePage) setPage(safePage); }, [page, safePage]);
   return (
     <div className="operator-table request-table">
-      <Pagination total={rows.length} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
+      <Pagination total={total} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
       <div className="table-wrap">
         <table>
           <thead><tr>{['method', 'path', 'statusCode', 'durationMs', 'createdUtc'].map(c => <HeaderCell key={c} column={c} />)}<th className="actions-col" title="Available row actions">Actions</th></tr></thead>
@@ -1048,10 +1311,10 @@ function RequestHistoryDetailModal({ row, onClose }) {
 
         <div className="detail-section">
           <h3>Principal</h3>
-          <div className="detail-grid">
-            <ConductorDetailItem label="Tenant ID" tooltip="Tenant associated with this request" value={formatCell(row.tenantId, 'tenantId') || '-'} />
-            <ConductorDetailItem label="User ID" tooltip="User associated with this request" value={formatCell(row.userId, 'userId') || '-'} />
-          </div>
+          <KeyValueTable rows={[
+            ['tenantId', row.tenantId],
+            ['userId', row.userId]
+          ]} />
         </div>
 
         <CollapsiblePayload title="Request Headers" value={row.requestHeaders} />
@@ -1087,15 +1350,6 @@ function CollapsiblePayload({ title, value }) {
           <pre className="code-block" title={title}>{formatted || 'No data captured'}</pre>
         </div>
       )}
-    </div>
-  );
-}
-
-function ConductorDetailItem({ label, tooltip, value }) {
-  return (
-    <div className="detail-item" title={tooltip}>
-      <label>{label}:</label>
-      <span>{value ?? '-'}</span>
     </div>
   );
 }
@@ -1207,54 +1461,56 @@ function sampleRequestBody(operation) {
 }
 
 function TenantAdmin({ api }) {
-  const [rows, setRows] = useState([]); const [name, setName] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState('');
-  const load = useCallback(async () => { try { setError(''); setRows(await api.tenants()); } catch (err) { setError(String(err.message || err)); } }, [api]);
+  const [rows, setRows] = useState([]); const [name, setName] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState(''); const [enumeration, setEnumeration] = useState(null); const [page, setPage] = useState(0); const [pageSize, setPageSize] = useState(25);
+  const load = useCallback(async () => { try { setError(''); const result = await api.tenants({ pageNumber: page + 1, pageSize }); setEnumeration(result); setRows(enumerationObjects(result)); } catch (err) { setError(String(err.message || err)); } }, [api, page, pageSize]);
   useEffect(() => { load(); }, [load]);
   async function create() { await api.createTenant({ name, active: true }); setName(''); load(); }
-  return <div className="page"><PageIntro title={text.tenants} description="Create and manage tenant records, review tenant status, and update tenant metadata." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Tenant name for the new tenant" value={name} onChange={e => setName(e.target.value)} placeholder="Tenant name" /><button className="primary" title="Create a new tenant" onClick={create} disabled={!name.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} columns={['id', 'name', 'active', 'createdUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateTenant, api.deleteTenant, load, 'Tenant')}</div>;
+  return <div className="page"><PageIntro title={text.tenants} description="Create and manage tenant records, review tenant status, and update tenant metadata." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Tenant name for the new tenant" value={name} onChange={e => setName(e.target.value)} placeholder="Tenant name" /><button className="primary" title="Create a new tenant" onClick={create} disabled={!name.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['id', 'name', 'active', 'createdUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateTenant, api.deleteTenant, load, 'Tenant')}</div>;
 }
 
 function UserAdmin({ api }) {
-  const [rows, setRows] = useState([]); const [email, setEmail] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState('');
-  const load = useCallback(async () => { try { setError(''); setRows(await api.users()); } catch (err) { setError(String(err.message || err)); } }, [api]);
+  const [rows, setRows] = useState([]); const [email, setEmail] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState(''); const [enumeration, setEnumeration] = useState(null); const [page, setPage] = useState(0); const [pageSize, setPageSize] = useState(25);
+  const load = useCallback(async () => { try { setError(''); const result = await api.users('', { pageNumber: page + 1, pageSize }); setEnumeration(result); setRows(enumerationObjects(result)); } catch (err) { setError(String(err.message || err)); } }, [api, page, pageSize]);
   useEffect(() => { load(); }, [load]);
   async function create() { await api.createUser({ email, firstName: 'New', lastName: 'User', isTenantAdmin: false, isAdmin: false, active: true }); setEmail(''); load(); }
-  return <div className="page"><PageIntro title={text.users} description="Manage dashboard and API users, including tenant assignment, email identity, administrator access, and active status." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Email address for the new user" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" /><button className="primary" title="Create a new user" onClick={create} disabled={!email.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} columns={['tenantId', 'id', 'email', 'firstName', 'lastName', 'isAdmin', 'isTenantAdmin', 'active']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateUser, (id, row) => api.deleteUser(id, row.tenantId), load, 'User')}</div>;
+  return <div className="page"><PageIntro title={text.users} description="Manage dashboard and API users, including tenant assignment, email identity, administrator access, and active status." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Email address for the new user" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" /><button className="primary" title="Create a new user" onClick={create} disabled={!email.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['tenantId', 'id', 'email', 'firstName', 'lastName', 'isAdmin', 'isTenantAdmin', 'active']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateUser, (id, row) => api.deleteUser(id, row.tenantId), load, 'User')}</div>;
 }
 
 function CredentialAdmin({ api }) {
-  const [rows, setRows] = useState([]); const [name, setName] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState('');
-  const load = useCallback(async () => { try { setError(''); setRows(await api.credentials()); } catch (err) { setError(String(err.message || err)); } }, [api]);
+  const [rows, setRows] = useState([]); const [name, setName] = useState(''); const [modal, setModal] = useState(null); const [error, setError] = useState(''); const [enumeration, setEnumeration] = useState(null); const [page, setPage] = useState(0); const [pageSize, setPageSize] = useState(25);
+  const load = useCallback(async () => { try { setError(''); const result = await api.credentials('', { pageNumber: page + 1, pageSize }); setEnumeration(result); setRows(enumerationObjects(result)); } catch (err) { setError(String(err.message || err)); } }, [api, page, pageSize]);
   useEffect(() => { load(); }, [load]);
-  async function create() { const users = await api.users(); await api.createCredential({ tenantId: users[0]?.tenantId, userId: users[0]?.id, name }); setName(''); load(); }
-  return <div className="page"><PageIntro title={text.credentials} description="Manage bearer credentials used to authenticate users against Wilson, including active state and last-use metadata." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Name for the new credential" value={name} onChange={e => setName(e.target.value)} placeholder="Credential name" /><button className="primary" title="Create a credential for the first visible user" onClick={create} disabled={!name.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} columns={['tenantId', 'userId', 'id', 'name', 'accessKey', 'active', 'lastUsedUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateCredential, (id, row) => api.deleteCredential(id, row.tenantId), load, 'Credential')}</div>;
+  async function create() { const users = enumerationObjects(await api.users('', { pageNumber: 1, pageSize: 1 })); await api.createCredential({ tenantId: users[0]?.tenantId, userId: users[0]?.id, name }); setName(''); load(); }
+  return <div className="page"><PageIntro title={text.credentials} description="Manage bearer credentials used to authenticate users against Wilson, including active state and last-use metadata." />{error && <PermissionPanel message={error} />}<div className="create-row"><input title="Name for the new credential" value={name} onChange={e => setName(e.target.value)} placeholder="Credential name" /><button className="primary" title="Create a credential for the first visible user" onClick={create} disabled={!name.trim()}><Check size={16} />Create</button></div><DataTable rows={rows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['tenantId', 'userId', 'id', 'name', 'accessKey', 'active', 'lastUsedUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={(row) => entityActions(row, setModal)} />{renderEntityModal(modal, setModal, api.updateCredential, (id, row) => api.deleteCredential(id, row.tenantId), load, 'Credential')}</div>;
 }
 
 function FeedbackAdmin({ api }) {
-  const [rows, setRows] = useState([]); const [modal, setModal] = useState(null); const [error, setError] = useState('');
-  const load = useCallback(async () => { try { setError(''); setRows(await api.feedback()); } catch (err) { setError(String(err.message || err)); } }, [api]);
+  const [rows, setRows] = useState([]); const [modal, setModal] = useState(null); const [error, setError] = useState(''); const [enumeration, setEnumeration] = useState(null); const [page, setPage] = useState(0); const [pageSize, setPageSize] = useState(25);
+  const load = useCallback(async () => { try { setError(''); const result = await api.feedback(null, { pageNumber: page + 1, pageSize }); setEnumeration(result); setRows(enumerationObjects(result)); } catch (err) { setError(String(err.message || err)); } }, [api, page, pageSize]);
   useEffect(() => { load(); }, [load]);
-  return <div className="page feedback-page"><PageIntro title={text.feedback} description="Review user ratings and comments on assistant responses, including message timing and token metadata when available." />{error && <PermissionPanel message={error} />}<DataTable rows={rows} columns={['id', 'conversationId', 'messageId', 'rating', 'comment', 'createdUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'view', row })} actions={(row) => [{ label: text.view, tooltip: 'View feedback details', icon: Eye, onClick: () => setModal({ type: 'view', row }) }, { label: text.viewJson, tooltip: 'View feedback JSON', icon: Code, onClick: () => setModal({ type: 'json', row }) }]} />{modal?.type === 'view' && <FeedbackDetailModal row={modal.row} onClose={() => setModal(null)} />}{modal?.type === 'json' && <JsonModal title="Feedback JSON" row={modal.row} onClose={() => setModal(null)} />}</div>;
+  return <div className="page feedback-page"><PageIntro title={text.feedback} description="Review user ratings and comments on assistant responses, including message timing and token metadata when available." />{error && <PermissionPanel message={error} />}<DataTable rows={rows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['id', 'conversationId', 'messageId', 'rating', 'comment', 'createdUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'view', row })} actions={(row) => [{ label: text.view, tooltip: 'View feedback details', icon: Eye, onClick: () => setModal({ type: 'view', row }) }, { label: text.viewJson, tooltip: 'View feedback JSON', icon: Code, onClick: () => setModal({ type: 'json', row }) }]} />{modal?.type === 'view' && <FeedbackDetailModal row={modal.row} onClose={() => setModal(null)} />}{modal?.type === 'json' && <JsonModal title="Feedback JSON" row={modal.row} onClose={() => setModal(null)} />}</div>;
 }
 
 function FeedbackDetailModal({ row, onClose }) {
   return (
     <Modal title="Feedback Detail" onClose={onClose} wide>
       <div className="detail-content">
-        <div className={row.rating > 0 ? 'feedback-tone positive' : 'feedback-tone negative'} title="Submitted user rating">
-          {row.rating > 0 ? <ThumbsUp size={18} /> : <ThumbsDown size={18} />}
-          <span>{row.rating > 0 ? 'Helpful' : 'Not helpful'}</span>
+        <div className="feedback-detail-header">
+          <div className={row.rating > 0 ? 'feedback-tone positive' : 'feedback-tone negative'} title="Submitted user rating">
+            {row.rating > 0 ? <ThumbsUp size={18} /> : <ThumbsDown size={18} />}
+            <span>{row.rating > 0 ? 'Helpful' : 'Not helpful'}</span>
+          </div>
         </div>
-        <div className="detail-grid">
-          <ConductorDetailItem label="Conversation ID" tooltip="Conversation that received this feedback" value={formatCell(row.conversationId, 'conversationId')} />
-          <ConductorDetailItem label="Message ID" tooltip="Assistant message that received this feedback" value={formatCell(row.messageId, 'messageId')} />
-          <ConductorDetailItem label="User ID" tooltip="User who submitted this feedback" value={formatCell(row.userId, 'userId') || '-'} />
-          <ConductorDetailItem label="Created" tooltip="When feedback was submitted" value={formatDate(row.createdUtc)} />
-          <ConductorDetailItem label="Time to first token (ms)" tooltip="Timing is populated when feedback records include message performance fields" value={formatNumber(row.timeToFirstTokenMs)} />
-          <ConductorDetailItem label="Streaming time (ms)" tooltip="Timing is populated when feedback records include message performance fields" value={formatNumber(row.streamingTimeMs)} />
-          <ConductorDetailItem label="Total time (ms)" tooltip="Timing is populated when feedback records include message performance fields" value={formatNumber(row.totalTimeMs)} />
-          <ConductorDetailItem label="Tokens used" tooltip="Token usage is populated when feedback records include message performance fields" value={row.tokensUsed || 0} />
-        </div>
+        <KeyValueTable rows={[
+          ['conversationId', row.conversationId],
+          ['messageId', row.messageId],
+          ['userId', row.userId || '-'],
+          ['createdUtc', row.createdUtc],
+          ['timeToFirstTokenMs', formatNumber(row.timeToFirstTokenMs)],
+          ['streamingTimeMs', formatNumber(row.streamingTimeMs)],
+          ['totalTimeMs', formatNumber(row.totalTimeMs)],
+          ['tokensUsed', row.tokensUsed || 0]
+        ]} />
         <div className="detail-section">
           <h3>Opinion</h3>
           <pre className="feedback-comment-display" title="Free-form user feedback">{row.comment || 'No written comment was provided.'}</pre>
@@ -1315,14 +1571,20 @@ function SettingsAdmin({ api }) {
           <FormInput label="PostgreSQL connection string" tooltip="PostgreSQL connection string. Requires restart." value={draft.database?.connectionString || ''} onChange={v => set(['database', 'connectionString'], v)} />
         </SettingsSection>
         <SettingsSection title="CORS">
-          <FormCheck label="CORS enabled" tooltip="Enable cross-origin request handling." checked={!!draft.cors?.enabled} onChange={v => set(['cors', 'enabled'], v)} />
-          <FormList label="Allowed origins" tooltip="Allowed CORS origins, one per line." value={draft.cors?.allowedOrigins || []} onChange={v => set(['cors', 'allowedOrigins'], v)} />
-          <FormList label="Allowed methods" tooltip="Allowed CORS methods, one per line." value={draft.cors?.allowedMethods || []} onChange={v => set(['cors', 'allowedMethods'], v)} />
-          <FormList label="Allowed headers" tooltip="Allowed CORS headers, one per line." value={draft.cors?.allowedHeaders || []} onChange={v => set(['cors', 'allowedHeaders'], v)} />
+          <CorsSettingsEditor
+            cors={draft.cors || {}}
+            onEnabledChange={v => set(['cors', 'enabled'], v)}
+            onOriginsChange={v => set(['cors', 'allowedOrigins'], v)}
+            onMethodsChange={v => set(['cors', 'allowedMethods'], v)}
+            onHeadersChange={v => set(['cors', 'allowedHeaders'], v)}
+          />
         </SettingsSection>
         <SettingsSection title="Authentication">
-          <FormList label="Admin bearer tokens" tooltip="Global administrator bearer tokens, one per line." value={draft.auth?.adminBearerTokens || []} onChange={v => set(['auth', 'adminBearerTokens'], v)} />
-          <FormInput label="Session hours" tooltip="Session lifetime in hours." type="number" value={draft.auth?.sessionHours ?? 24} onChange={v => set(['auth', 'sessionHours'], Number(v))} />
+          <AuthenticationSettingsEditor
+            auth={draft.auth || {}}
+            onTokensChange={v => set(['auth', 'adminBearerTokens'], v)}
+            onSessionHoursChange={v => set(['auth', 'sessionHours'], Number(v))}
+          />
         </SettingsSection>
         <SettingsSection title="Request History">
           <FormCheck label="Capture enabled" tooltip="Enable request history capture for API requests." checked={!!draft.requestHistory?.enabled} onChange={v => set(['requestHistory', 'enabled'], v)} />
@@ -1361,6 +1623,94 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
   );
 }
 
+function CorsSettingsEditor({ cors, onEnabledChange, onOriginsChange, onMethodsChange, onHeadersChange }) {
+  return (
+    <div className="cors-editor">
+      <div className="cors-enabled">
+        <FormCheck label="CORS enabled" tooltip="Enable cross-origin request handling." checked={!!cors.enabled} onChange={onEnabledChange} />
+      </div>
+      <CorsListRows label="Allowed origins" tooltip="Origins that may call the API from a browser." value={cors.allowedOrigins || []} onChange={onOriginsChange} wide placeholder="https://example.com" />
+      <CorsListRows label="Allowed methods" tooltip="HTTP methods accepted by CORS preflight requests." value={cors.allowedMethods || []} onChange={onMethodsChange} compact placeholder="GET" />
+      <CorsListRows label="Allowed headers" tooltip="Request headers accepted by CORS preflight requests." value={cors.allowedHeaders || []} onChange={onHeadersChange} placeholder="authorization" />
+    </div>
+  );
+}
+
+function CorsListRows({ label, tooltip, value, onChange, wide = false, compact = false, placeholder = '' }) {
+  const rows = [...(value || []), ''];
+  function update(index, nextValue) {
+    const next = [...(value || [])];
+    if (index >= next.length) next.push(nextValue);
+    else next[index] = nextValue;
+    onChange(next.map(item => item.trim()).filter(Boolean));
+  }
+  function remove(index) {
+    onChange((value || []).filter((_, itemIndex) => itemIndex !== index));
+  }
+  return (
+    <div className={wide ? 'cors-list-panel wide' : 'cors-list-panel'} title={tooltip}>
+      <div className="cors-list-header">
+        <label>{label}</label>
+        <span title={`Configured ${label.toLowerCase()} count`}>{(value || []).length}</span>
+      </div>
+      <div className={compact ? 'cors-list-rows compact' : 'cors-list-rows'}>
+        {rows.map((item, index) => {
+          const isNew = index >= (value || []).length;
+          return (
+            <div key={index} className="cors-list-row">
+              <input title={tooltip} value={item} onChange={e => update(index, e.target.value)} placeholder={isNew ? placeholder || `Add ${label.toLowerCase()}` : label} />
+              {isNew ? <button className="icon-button" title={`Add ${label.toLowerCase()} row`} onClick={() => update(index, item)}><Plus size={15} /></button> : <button className="icon-button" title={`Remove ${item}`} onClick={() => remove(index)}><Trash2 size={15} /></button>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AuthenticationSettingsEditor({ auth, onTokensChange, onSessionHoursChange }) {
+  return (
+    <div className="auth-editor">
+      <div className="auth-session-panel">
+        <FormInput label="Session hours" tooltip="Session lifetime in hours." type="number" value={auth.sessionHours ?? 24} onChange={onSessionHoursChange} />
+      </div>
+      <TokenListRows label="Admin bearer tokens" tooltip="Global administrator bearer tokens used for full dashboard/API administration." value={auth.adminBearerTokens || []} onChange={onTokensChange} />
+    </div>
+  );
+}
+
+function TokenListRows({ label, tooltip, value, onChange }) {
+  const rows = [...(value || []), ''];
+  function update(index, nextValue) {
+    const next = [...(value || [])];
+    if (index >= next.length) next.push(nextValue);
+    else next[index] = nextValue;
+    onChange(next.map(item => item.trim()).filter(Boolean));
+  }
+  function remove(index) {
+    onChange((value || []).filter((_, itemIndex) => itemIndex !== index));
+  }
+  return (
+    <div className="token-list-panel" title={tooltip}>
+      <div className="cors-list-header">
+        <label>{label}</label>
+        <span title="Configured administrator bearer token count">{(value || []).length}</span>
+      </div>
+      <div className="token-list-rows">
+        {rows.map((item, index) => {
+          const isNew = index >= (value || []).length;
+          return (
+            <div key={index} className="token-list-row">
+              <input title={tooltip} value={item} onChange={e => update(index, e.target.value)} placeholder={isNew ? 'Add admin bearer token' : label} />
+              {isNew ? <button className="icon-button" title="Add admin bearer token row" onClick={() => update(index, item)}><Plus size={15} /></button> : <button className="icon-button" title="Remove this admin bearer token" onClick={() => remove(index)}><Trash2 size={15} /></button>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function entityActions(row, setModal) {
   return [
     { label: text.view, tooltip: 'View this record', icon: Eye, onClick: () => setModal({ type: 'view', row }) },
@@ -1383,23 +1733,29 @@ function Segmented({ value, options, onChange }) {
   return <div className="segmented">{Object.entries(options).map(([key, option]) => <button key={key} title={`Show ${option.label.toLowerCase()} request history`} className={value === key ? 'active' : ''} onClick={() => onChange(key)}>{option.label}</button>)}</div>;
 }
 
-function DataTable({ rows, columns, onRefresh, onRowClick, actions }) {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+function DataTable({ rows, columns, onRefresh, onRowClick, actions, enumeration = null, page: controlledPage, pageSize: controlledPageSize, setPage: controlledSetPage, setPageSize: controlledSetPageSize }) {
+  const [localPage, setLocalPage] = useState(0);
+  const [localPageSize, setLocalPageSize] = useState(10);
   const [filter, setFilter] = useState('');
+  const page = controlledPage ?? localPage;
+  const pageSize = controlledPageSize ?? localPageSize;
+  const setPage = controlledSetPage ?? setLocalPage;
+  const setPageSize = controlledSetPageSize ?? setLocalPageSize;
   const filtered = rows.filter(row => !filter.trim() || JSON.stringify(row).toLowerCase().includes(filter.toLowerCase()));
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const serverPaged = Boolean(enumeration);
+  const totalRecords = serverPaged ? enumeration.totalRecords || 0 : filtered.length;
+  const totalPages = serverPaged ? Math.max(1, enumeration.totalPages || 1) : Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);
-  const pageRows = filtered.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const pageRows = serverPaged ? filtered : filtered.slice(safePage * pageSize, safePage * pageSize + pageSize);
   useEffect(() => { if (page !== safePage) setPage(safePage); }, [page, safePage]);
   return (
     <div className="operator-table">
       <div className="table-controls">
-        <div className="table-stats" title="Number of table records after filtering"><strong>{filtered.length}</strong> records<span>{rows.length !== filtered.length ? ` filtered from ${rows.length}` : ''}</span></div>
+        <div className="table-stats" title="Number of matching records and total pages"><strong>{totalRecords}</strong> records<span>{` across ${totalPages} pages`}</span></div>
         <input className="table-filter" title="Filter records by any visible or hidden value" value={filter} onChange={e => { setFilter(e.target.value); setPage(0); }} placeholder="Filter records" />
         {onRefresh && <button className="secondary" title="Reload this table" onClick={onRefresh}><RefreshCw size={16} />{text.refresh}</button>}
       </div>
-      <Pagination total={filtered.length} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
+      <Pagination total={totalRecords} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
       <div className="table-wrap">
         <table>
           <thead><tr>{columns.map(c => <HeaderCell key={c} column={c} />)}{actions && <th className="actions-col" title="Available row actions">Actions</th>}</tr></thead>
@@ -1423,8 +1779,8 @@ function HeaderCell({ column }) {
   return <th title={tooltip}>{label}</th>;
 }
 
-function Pagination({ total, page, pageSize, setPage, setPageSize }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+function Pagination({ total, page, pageSize, setPage, setPageSize, totalPagesOverride = null }) {
+  const totalPages = totalPagesOverride ?? Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : page * pageSize + 1;
   const end = Math.min(total, (page + 1) * pageSize);
   return (
@@ -1433,6 +1789,7 @@ function Pagination({ total, page, pageSize, setPage, setPageSize }) {
       <label title="Rows shown per page">Rows<select title="Select rows per page" value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(0); }}><option>10</option><option>25</option><option>50</option><option>100</option></select></label>
       <button className="icon-button" title="Go to previous page" onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}><ChevronLeft size={16} /></button>
       <span title="Current page number">Page {page + 1} of {totalPages}</span>
+      <label title="Jump to a specific page">Jump<input className="page-jump" type="number" min="1" max={totalPages} value={page + 1} onChange={e => setPage(Math.min(totalPages - 1, Math.max(0, Number(e.target.value || 1) - 1)))} /></label>
       <button className="icon-button" title="Go to next page" onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}><ChevronRight size={16} /></button>
     </div>
   );
@@ -1459,6 +1816,8 @@ function ActionMenu({ items, title = 'Open row actions menu' }) {
 }
 
 function RecordModal({ title, row, onClose }) {
+  const primaryRows = Object.entries(row).filter(([key]) => !['createdUtc', 'lastUpdateUtc', 'lastUsedUtc', 'accessKey'].includes(key));
+  const auditRows = ['createdUtc', 'lastUpdateUtc', 'lastUsedUtc', 'accessKey'].filter(key => key in row).map(key => [key, row[key]]);
   return (
     <Modal title={title} onClose={onClose} wide>
       <div className="entity-modal">
@@ -1471,14 +1830,27 @@ function RecordModal({ title, row, onClose }) {
         </div>
         <div className="entity-section">
           <h3>Primary</h3>
-          <div className="record-grid">{Object.entries(row).filter(([key]) => !['createdUtc', 'lastUpdateUtc', 'lastUsedUtc', 'accessKey'].includes(key)).map(([key, value]) => <DetailField key={key} name={key} value={value} />)}</div>
+          <KeyValueTable rows={primaryRows} />
         </div>
         <div className="entity-section">
           <h3>Audit</h3>
-          <div className="record-grid">{['createdUtc', 'lastUpdateUtc', 'lastUsedUtc', 'accessKey'].filter(key => key in row).map(key => <DetailField key={key} name={key} value={row[key]} />)}</div>
+          <KeyValueTable rows={auditRows} />
         </div>
       </div>
     </Modal>
+  );
+}
+
+function KeyValueTable({ rows }) {
+  return (
+    <table className="key-value-table">
+      <tbody>
+        {rows.map(([key, value]) => {
+          const [label, tooltip] = getFieldMeta(key);
+          return <tr key={key}><th title={tooltip}>{label}</th><td title={tooltip}>{formatCell(value, key) || '-'}</td></tr>;
+        })}
+      </tbody>
+    </table>
   );
 }
 
@@ -1632,13 +2004,6 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
-}
-
-function shortTime(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatDuration(value) {

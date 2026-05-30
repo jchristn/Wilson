@@ -1,9 +1,61 @@
 {
-  "rest": { "hostname": "0.0.0.0", "port": 9400, "ssl": false },
-  "database": { "type": "Sqlite", "filename": "data/wilson.db", "connectionString": "Host=postgres;Port=5432;Database=wilson;Username=wilson;Password=wilson" },
-  "cors": { "enabled": true, "allowedOrigins": [ "*" ], "allowedMethods": [ "GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD" ], "allowedHeaders": [ "Content-Type", "Authorization", "X-Api-Key", "X-Tenant-Guid" ] },
-  "auth": { "adminBearerTokens": [ "wilson-admin-dev-token" ], "sessionHours": 24 },
-  "requestHistory": { "enabled": true, "retentionDays": 30 },
-  "modelRunners": [ { "id": "local-ollama", "name": "Local Ollama", "apiType": "Ollama", "endpoint": "http://192.168.86.250:11434", "apiKey": null, "models": [], "contextWindowTokens": 8192 } ],
-  "seed": { "tenantName": "Default Tenant", "userEmail": "admin@wilson.local", "firstName": "Admin", "lastName": "User", "accessKey": "wilsonadmin" }
+  "createdUtc": "2026-05-30T15:51:01.1612734Z",
+  "rest": {
+    "hostname": "0.0.0.0",
+    "port": 9400,
+    "ssl": false
+  },
+  "database": {
+    "type": "Sqlite",
+    "filename": "data/wilson.db",
+    "connectionString": "Host=postgres;Port=5432;Database=wilson;Username=wilson;Password=wilson"
+  },
+  "cors": {
+    "enabled": true,
+    "allowedOrigins": [
+      "*"
+    ],
+    "allowedMethods": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "OPTIONS",
+      "HEAD"
+    ],
+    "allowedHeaders": [
+      "Content-Type",
+      "Authorization",
+      "X-Api-Key",
+      "X-Tenant-Guid"
+    ]
+  },
+  "auth": {
+    "adminBearerTokens": [
+      "wilson-admin-dev-token"
+    ],
+    "sessionHours": 24
+  },
+  "requestHistory": {
+    "enabled": true,
+    "retentionDays": 30
+  },
+  "modelRunners": [
+    {
+      "id": "local-ollama",
+      "name": "Local Ollama",
+      "apiType": "Ollama",
+      "endpoint": "http://192.168.86.250:11434",
+      "apiKey": null,
+      "models": [],
+      "contextWindowTokens": 63556
+    }
+  ],
+  "seed": {
+    "tenantName": "Default Tenant",
+    "userEmail": "admin@wilson.local",
+    "firstName": "Admin",
+    "lastName": "User",
+    "accessKey": "wilsonadmin"
+  }
 }

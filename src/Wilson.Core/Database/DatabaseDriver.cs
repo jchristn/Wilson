@@ -365,8 +365,8 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task<List<RequestHistoryEntry>> GetRequestHistoryAsync(string? tenantId, CancellationToken token = default)
         {
-            if (String.IsNullOrWhiteSpace(tenantId)) return await QueryAsync("SELECT * FROM requesthistory ORDER BY createdutc DESC LIMIT 250", ReadRequestHistory, null, token).ConfigureAwait(false);
-            return await QueryAsync("SELECT * FROM requesthistory WHERE tenantid=@tenantid ORDER BY createdutc DESC LIMIT 250", ReadRequestHistory, command => Add(command, "@tenantid", tenantId), token).ConfigureAwait(false);
+            if (String.IsNullOrWhiteSpace(tenantId)) return await QueryAsync("SELECT * FROM requesthistory ORDER BY createdutc DESC", ReadRequestHistory, null, token).ConfigureAwait(false);
+            return await QueryAsync("SELECT * FROM requesthistory WHERE tenantid=@tenantid ORDER BY createdutc DESC", ReadRequestHistory, command => Add(command, "@tenantid", tenantId), token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -383,8 +383,7 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task<RequestHistorySummary> SummarizeRequestHistoryAsync(string? tenantId, DateTime fromUtc, DateTime toUtc, int bucketMinutes, CancellationToken token = default)
         {
-            List<RequestHistoryEntry> entries = await GetRequestHistoryAsync(tenantId, token).ConfigureAwait(false);
-            entries = entries.Where(item => item.CreatedUtc >= fromUtc && item.CreatedUtc <= toUtc).ToList();
+            List<RequestHistoryEntry> entries = await GetRequestHistoryRangeAsync(tenantId, fromUtc, toUtc, token).ConfigureAwait(false);
             RequestHistorySummary summary = new RequestHistorySummary();
             summary.TotalCount = entries.Count;
             summary.TotalSuccess = entries.Count(item => item.StatusCode < 400);
@@ -406,6 +405,16 @@ namespace Wilson.Core.Database
                 cursor = end;
             }
             return summary;
+        }
+
+        private async Task<List<RequestHistoryEntry>> GetRequestHistoryRangeAsync(string? tenantId, DateTime fromUtc, DateTime toUtc, CancellationToken token)
+        {
+            if (String.IsNullOrWhiteSpace(tenantId))
+            {
+                return await QueryAsync("SELECT * FROM requesthistory WHERE createdutc>=@fromutc AND createdutc<=@toutc ORDER BY createdutc ASC", ReadRequestHistory, command => { Add(command, "@fromutc", Iso(fromUtc)); Add(command, "@toutc", Iso(toUtc)); }, token).ConfigureAwait(false);
+            }
+
+            return await QueryAsync("SELECT * FROM requesthistory WHERE tenantid=@tenantid AND createdutc>=@fromutc AND createdutc<=@toutc ORDER BY createdutc ASC", ReadRequestHistory, command => { Add(command, "@tenantid", tenantId); Add(command, "@fromutc", Iso(fromUtc)); Add(command, "@toutc", Iso(toUtc)); }, token).ConfigureAwait(false);
         }
 
         private IDbConnection CreateConnection()

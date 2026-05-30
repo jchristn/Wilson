@@ -40,28 +40,28 @@ class ApiClient {
 
   login(accessKey) { return this.request('POST', '/v1.0/auth/token', { accessKey }); }
   me() { return this.request('GET', '/v1.0/api/me'); }
-  runners() { return this.request('GET', '/v1.0/api/model-runners'); }
+  runners(params = {}) { return this.request('GET', '/v1.0/api/model-runners', null, params); }
   pullModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/pull`, { model }); }
   loadModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/load`, { model }); }
-  conversations() { return this.request('GET', '/v1.0/api/conversations'); }
+  conversations(params = {}) { return this.request('GET', '/v1.0/api/conversations', null, params); }
   updateConversation(id, payload) { return this.request('PUT', `/v1.0/api/conversations/${id}`, payload); }
   deleteConversation(id) { return this.request('DELETE', `/v1.0/api/conversations/${id}`); }
-  messages(id) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`); }
+  messages(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`, null, params); }
   chat(payload) { return this.request('POST', '/v1.0/api/chat', payload); }
-  tenants() { return this.request('GET', '/v1.0/api/tenants'); }
+  tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }
   deleteTenant(id) { return this.request('DELETE', `/v1.0/api/tenants/${id}`); }
-  users(tenantId = '') { return this.request('GET', '/v1.0/api/users', null, { tenantId }); }
+  users(tenantId = '', params = {}) { return this.request('GET', '/v1.0/api/users', null, { ...params, tenantId }); }
   createUser(payload) { return this.request('POST', '/v1.0/api/users', payload); }
   updateUser(id, payload) { return this.request('PUT', `/v1.0/api/users/${id}`, payload, { tenantId: payload.tenantId }); }
   deleteUser(id, tenantId) { return this.request('DELETE', `/v1.0/api/users/${id}`, null, { tenantId }); }
-  credentials(tenantId = '') { return this.request('GET', '/v1.0/api/credentials', null, { tenantId }); }
+  credentials(tenantId = '', params = {}) { return this.request('GET', '/v1.0/api/credentials', null, { ...params, tenantId }); }
   createCredential(payload) { return this.request('POST', '/v1.0/api/credentials', payload); }
   updateCredential(id, payload) { return this.request('PUT', `/v1.0/api/credentials/${id}`, payload, { tenantId: payload.tenantId }); }
   deleteCredential(id, tenantId) { return this.request('DELETE', `/v1.0/api/credentials/${id}`, null, { tenantId }); }
-  feedback(payload = null) { return payload ? this.request('POST', '/v1.0/api/feedback', payload) : this.request('GET', '/v1.0/api/feedback'); }
-  requestHistory() { return this.request('GET', '/v1.0/api/request-history'); }
+  feedback(payload = null, params = {}) { return payload ? this.request('POST', '/v1.0/api/feedback', payload) : this.request('GET', '/v1.0/api/feedback', null, params); }
+  requestHistory(params = {}) { return this.request('GET', '/v1.0/api/request-history', null, params); }
   requestSummary(params = {}) { return this.request('GET', '/v1.0/api/request-history/summary', null, params); }
   deleteRequestHistory(id) { return this.request('DELETE', `/v1.0/api/request-history/${id}`); }
   settings(payload = null) { return payload ? this.request('PUT', '/v1.0/api/settings', payload) : this.request('GET', '/v1.0/api/settings'); }

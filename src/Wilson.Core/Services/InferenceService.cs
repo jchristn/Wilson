@@ -10,6 +10,7 @@ namespace Wilson.Core.Services
     using System.Threading.Tasks;
     using PolyPrompt.Clients;
     using PolyPrompt.Models;
+    using PolyPrompt.Options;
     using Wilson.Core.Models;
     using Wilson.Core.Settings;
 
@@ -189,8 +190,17 @@ namespace Wilson.Core.Services
         /// </summary>
         public string BuildPrompt(List<ChatMessage> messages, string prompt, int contextWindowTokens)
         {
+            return BuildPromptWithMetadata(messages, prompt, contextWindowTokens).Prompt;
+        }
+
+        /// <summary>
+        /// Build a context prompt with truncation metadata.
+        /// </summary>
+        public PromptBuildResult BuildPromptWithMetadata(List<ChatMessage> messages, string prompt, int contextWindowTokens)
+        {
             int budget = Math.Max(256, contextWindowTokens - 1024);
             List<string> selected = new List<string>();
+            int included = 0;
             int total = EstimateTokens(prompt);
             for (int i = messages.Count - 1; i >= 0; i--)
             {
@@ -199,20 +209,29 @@ namespace Wilson.Core.Services
                 if (total + tokens > budget) break;
                 selected.Insert(0, message.Role + ": " + message.Content);
                 total += tokens;
+                included++;
             }
             selected.Add("user: " + prompt);
-            selected.Insert(0, "system: Use prior turns only as context. Respond only to the latest user message, and do not replay or quote earlier assistant responses unless the user explicitly asks for them.");
-            return String.Join(Environment.NewLine + Environment.NewLine, selected);
+            string builtPrompt = String.Join(Environment.NewLine + Environment.NewLine, selected);
+            return new PromptBuildResult
+            {
+                Prompt = builtPrompt,
+                IncludedMessageCount = included,
+                OmittedMessageCount = Math.Max(0, messages.Count - included),
+                PromptBudgetTokens = budget,
+                PromptTokenEstimate = EstimateTokens(builtPrompt),
+                ContextWindowTokens = contextWindowTokens
+            };
         }
 
         /// <summary>
         /// Execute a non-streaming chat request.
         /// </summary>
-        public async Task<string> ChatAsync(ModelRunnerSettings runner, string model, string prompt, CancellationToken token = default)
+        public async Task<string> ChatAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, CancellationToken token = default)
         {
             using (CompletionClientBase client = CreateClient(runner, model))
             {
-                ChatResponse response = await client.ChatAsync(prompt, null, token).ConfigureAwait(false);
+                ChatResponse response = await client.ChatAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
                 if (!response.Success) throw new InvalidOperationException(response.Error ?? "Inference request failed.");
                 return response.Text ?? String.Empty;
             }
@@ -221,11 +240,11 @@ namespace Wilson.Core.Services
         /// <summary>
         /// Execute a streaming chat request.
         /// </summary>
-        public async IAsyncEnumerable<string> ChatStreamingAsync(ModelRunnerSettings runner, string model, string prompt, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
+        public async IAsyncEnumerable<string> ChatStreamingAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
         {
             using (CompletionClientBase client = CreateClient(runner, model))
             {
-                ChatStreamingResponse response = await client.ChatStreamingAsync(prompt, null, token).ConfigureAwait(false);
+                ChatStreamingResponse response = await client.ChatStreamingAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
                 if (!response.Success) throw new InvalidOperationException(response.Error ?? "Streaming inference request failed.");
                 if (response.Chunks == null) yield break;
                 await foreach (ChatStreamingChunk chunk in response.Chunks.WithCancellation(token).ConfigureAwait(false))
@@ -313,6 +332,28 @@ namespace Wilson.Core.Services
             return "Pull request completed.";
         }
 
+        private static ChatCompletionOptions CreateChatOptions(ModelRunnerSettings runner, CompletionRequestSettings? settings)
+        {
+            settings ??= new CompletionRequestSettings();
+            ChatCompletionOptions options = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
+                ? new OllamaChatCompletionOptions
+                {
+                    ContextLength = runner.ContextWindowTokens,
+                    TopK = settings.TopK,
+                    MinP = settings.MinP,
+                    RepeatPenalty = settings.RepeatPenalty,
+                    RepeatLastN = settings.RepeatLastN,
+                    Seed = settings.Seed
+                }
+                : new ChatCompletionOptions();
+
+            options.SystemPrompt = String.IsNullOrWhiteSpace(settings.SystemPrompt) ? CompletionRequestSettings.DefaultSystemPrompt : settings.SystemPrompt;
+            options.Temperature = settings.Temperature;
+            options.TopP = settings.TopP;
+            options.MaxTokens = settings.MaxTokens;
+            return options;
+        }
+
         private static ModelRunnerSettings CopyRunner(ModelRunnerSettings runner)
         {
             return new ModelRunnerSettings
@@ -341,5 +382,24 @@ namespace Wilson.Core.Services
             if (!String.IsNullOrWhiteSpace(model)) client.Model = model;
             return client;
         }
+    }
+
+    /// <summary>
+    /// Prompt build result.
+    /// </summary>
+    public sealed class PromptBuildResult
+    {
+        /// <summary>Prompt text.</summary>
+        public string Prompt { get; set; } = String.Empty;
+        /// <summary>Included history message count.</summary>
+        public int IncludedMessageCount { get; set; }
+        /// <summary>Omitted history message count.</summary>
+        public int OmittedMessageCount { get; set; }
+        /// <summary>Prompt budget tokens.</summary>
+        public int PromptBudgetTokens { get; set; }
+        /// <summary>Estimated prompt tokens.</summary>
+        public int PromptTokenEstimate { get; set; }
+        /// <summary>Context window tokens.</summary>
+        public int ContextWindowTokens { get; set; }
     }
 }

@@ -92,6 +92,19 @@ namespace Wilson.Server
         /// </summary>
         public async Task RunAsync()
         {
+            Console.WriteLine(
+"""
+                  o8o  oooo                                 
+                  `"'  `888                                 
+oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.   
+ `88. `88.  .8'  `888   888  d88(  "8 d88' `88b `888P"Y88b  
+  `88..]88..8'    888   888  `"Y88b.  888   888  888   888  
+   `888'`888'     888   888  o.  )88b 888   888  888   888  
+    `8'  `8'     o888o o888o 8""888P' `Y8bod8P' o888o o888o 
+
+
+""");
+
             Console.WriteLine("Wilson server listening on " + Settings.Rest.Hostname + ":" + Settings.Rest.Port);
             Console.WriteLine("Default admin bearer token: " + String.Join(", ", Settings.Auth.AdminBearerTokens));
             Console.WriteLine("Default user access key: " + Settings.Seed.AccessKey);
@@ -240,7 +253,7 @@ namespace Wilson.Server
 
             if (path == "/v1.0/api/model-runners" && method == "GET")
             {
-                await SendJsonAsync(ctx, await Inference.GetRunnerStatusesAsync(ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, Enumerate(await Inference.GetRunnerStatusesAsync(ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -280,7 +293,7 @@ namespace Wilson.Server
             if (path == "/v1.0/api/tenants")
             {
                 RequireAdmin(requestContext);
-                if (method == "GET") { await SendJsonAsync(ctx, await Database.GetTenantsAsync(ctx.Token).ConfigureAwait(false)).ConfigureAwait(false); return; }
+                if (method == "GET") { await SendJsonAsync(ctx, Enumerate(await Database.GetTenantsAsync(ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false); return; }
                 if (method == "POST") { Tenant item = Body<Tenant>(ctx); if (String.IsNullOrWhiteSpace(item.Id)) item.Id = IdGenerator.Tenant(); await Database.CreateTenantAsync(item, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 201; await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
             }
 
@@ -299,7 +312,7 @@ namespace Wilson.Server
             {
                 RequireTenantAdmin(requestContext);
                 string? tenantId = requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId;
-                if (method == "GET") { await SendJsonAsync(ctx, await Database.GetUsersAsync(tenantId, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false); return; }
+                if (method == "GET") { await SendJsonAsync(ctx, Enumerate(await Database.GetUsersAsync(tenantId, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false); return; }
                 if (method == "POST") { User item = Body<User>(ctx); if (!requestContext.IsAdmin) item.TenantId = requestContext.TenantId!; await Database.CreateUserAsync(item, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 201; await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
             }
 
@@ -319,7 +332,7 @@ namespace Wilson.Server
             {
                 RequireTenantAdmin(requestContext);
                 string? tenantId = requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId;
-                if (method == "GET") { await SendJsonAsync(ctx, await Database.GetCredentialsAsync(tenantId, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false); return; }
+                if (method == "GET") { await SendJsonAsync(ctx, Enumerate(await Database.GetCredentialsAsync(tenantId, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false); return; }
                 if (method == "POST") { Credential item = Body<Credential>(ctx); if (!requestContext.IsAdmin) item.TenantId = requestContext.TenantId!; await Database.CreateCredentialAsync(item, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 201; await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
             }
 
@@ -337,7 +350,7 @@ namespace Wilson.Server
 
             if (path == "/v1.0/api/conversations" && method == "GET")
             {
-                await SendJsonAsync(ctx, await Database.GetConversationsAsync(requestContext!.TenantId!, requestContext.UserId, requestContext.IsAdmin || requestContext.IsTenantAdmin, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, Enumerate(await Database.GetConversationsAsync(requestContext!.TenantId!, requestContext.UserId, requestContext.IsAdmin || requestContext.IsTenantAdmin, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -355,7 +368,7 @@ namespace Wilson.Server
             if (path.StartsWith("/v1.0/api/conversations/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) && method == "GET")
             {
                 string id = Segment(path, 3);
-                await SendJsonAsync(ctx, await Database.GetMessagesAsync(requestContext!.TenantId!, id, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, Enumerate(await Database.GetMessagesAsync(requestContext!.TenantId!, id, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -405,7 +418,7 @@ namespace Wilson.Server
             if (path == "/v1.0/api/feedback" && method == "GET")
             {
                 RequireTenantAdmin(requestContext);
-                await SendJsonAsync(ctx, await Database.GetFeedbackAsync(requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, Enumerate(await Database.GetFeedbackAsync(requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -423,7 +436,7 @@ namespace Wilson.Server
             if (path == "/v1.0/api/request-history" && method == "GET")
             {
                 RequireTenantAdmin(requestContext);
-                await SendJsonAsync(ctx, await Database.GetRequestHistoryAsync(requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, Enumerate(await Database.GetRequestHistoryAsync(requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -465,19 +478,30 @@ namespace Wilson.Server
             List<ChatMessage> messages = await Database.GetMessagesAsync(requestContext.TenantId!, conversation.Id, ctx.Token).ConfigureAwait(false);
             ChatMessage userMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "user", Content = body.Prompt, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = InferenceService.EstimateTokens(body.Prompt) };
             await Database.CreateMessageAsync(userMessage, ctx.Token).ConfigureAwait(false);
-            string prompt = Inference.BuildPrompt(messages, body.Prompt, runner.ContextWindowTokens);
+            PromptBuildResult promptBuild = Inference.BuildPromptWithMetadata(messages, body.Prompt, runner.ContextWindowTokens);
+            string prompt = promptBuild.Prompt;
+            ChatTruncationNotice truncation = new ChatTruncationNotice
+            {
+                ConversationId = conversation.Id,
+                Truncated = promptBuild.OmittedMessageCount > 0,
+                IncludedMessageCount = promptBuild.IncludedMessageCount,
+                OmittedMessageCount = promptBuild.OmittedMessageCount,
+                PromptTokenEstimate = promptBuild.PromptTokenEstimate,
+                PromptBudgetTokens = promptBuild.PromptBudgetTokens,
+                ContextWindowTokens = promptBuild.ContextWindowTokens
+            };
 
             if (!streaming)
             {
                 Stopwatch inference = Stopwatch.StartNew();
-                string answer = await Inference.ChatAsync(runner, body.Model, prompt, ctx.Token).ConfigureAwait(false);
+                string answer = await Inference.ChatAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false);
                 inference.Stop();
                 int outputTokens = InferenceService.EstimateTokens(answer);
                 int inputTokens = InferenceService.EstimateTokens(prompt);
                 ChatMessage assistantMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = answer, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = outputTokens, TimeToFirstTokenMs = inference.Elapsed.TotalMilliseconds, StreamingTimeMs = 0, TotalTimeMs = inference.Elapsed.TotalMilliseconds, TokensUsed = inputTokens + outputTokens };
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(assistantMessage, answer);
-                await SendJsonAsync(ctx, new { conversation, userMessage, assistantMessage }).ConfigureAwait(false);
+                await SendJsonAsync(ctx, new { conversation, userMessage, assistantMessage, truncation }).ConfigureAwait(false);
                 return;
             }
 
@@ -490,9 +514,10 @@ namespace Wilson.Server
             double firstTokenMs = 0;
             Stopwatch streamingTimer = new Stopwatch();
             await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
+            await SendSseAsync(ctx, "truncation", truncation, false).ConfigureAwait(false);
             try
             {
-                await foreach (string chunk in Inference.ChatStreamingAsync(runner, body.Model, prompt, ctx.Token).ConfigureAwait(false))
+                await foreach (string chunk in Inference.ChatStreamingAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false))
                 {
                     if (firstTokenMs <= 0)
                     {
@@ -628,6 +653,35 @@ namespace Wilson.Server
             return ctx.Request.Query.Elements.Get(key);
         }
 
+        private static EnumerationQuery Enumeration(HttpContextBase ctx)
+        {
+            Int32.TryParse(Query(ctx, "pageNumber"), out int pageNumber);
+            Int32.TryParse(Query(ctx, "pageSize"), out int pageSize);
+            return new EnumerationQuery
+            {
+                PageNumber = pageNumber < 1 ? 1 : pageNumber,
+                PageSize = pageSize < 1 ? 25 : Math.Min(pageSize, 500),
+                Search = Query(ctx, "search"),
+                TenantId = Query(ctx, "tenantId")
+            };
+        }
+
+        private static EnumerationResult<T> Enumerate<T>(IEnumerable<T> source, EnumerationQuery query)
+        {
+            List<T> items = source.ToList();
+            int total = items.Count;
+            int totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)query.PageSize));
+            int pageNumber = Math.Min(Math.Max(1, query.PageNumber), totalPages);
+            return new EnumerationResult<T>
+            {
+                Objects = items.Skip((pageNumber - 1) * query.PageSize).Take(query.PageSize).ToList(),
+                PageNumber = pageNumber,
+                PageSize = query.PageSize,
+                TotalRecords = total,
+                TotalPages = totalPages
+            };
+        }
+
         private static string Segment(string path, int index)
         {
             string[] parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -718,6 +772,8 @@ namespace Wilson.Server
         public string Model { get; set; } = String.Empty;
         /// <summary>User prompt.</summary>
         public string Prompt { get; set; } = String.Empty;
+        /// <summary>Completion settings.</summary>
+        public CompletionRequestSettings Settings { get; set; } = new CompletionRequestSettings();
     }
 
     /// <summary>
