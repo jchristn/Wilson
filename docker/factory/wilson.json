@@ -1,0 +1,8 @@
+{
+  "type": "container",
+  "name": "wilson",
+  "description": "Wilson chat dashboard and Watson 7 backend",
+  "compose": "../compose.yaml",
+  "settings": "../wilson.json",
+  "ports": [ 9400, 9401 ]
+}

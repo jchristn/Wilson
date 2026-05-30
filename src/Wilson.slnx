@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Test.Automated/Test.Automated.csproj" />
+  <Project Path="Test.Shared/Test.Shared.csproj" />
+  <Project Path="Wilson.Core/Wilson.Core.csproj" />
+  <Project Path="Wilson.Server/Wilson.Server.csproj" />
+</Solution>

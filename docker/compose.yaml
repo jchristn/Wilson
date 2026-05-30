@@ -1,0 +1,35 @@
+services:
+  wilson-server:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    ports:
+      - "9400:9400"
+    volumes:
+      - wilson-data:/app/data
+      - ./wilson.json:/app/wilson.json:ro
+
+  wilson-dashboard:
+    build:
+      context: ..
+      dockerfile: docker/dashboard/Dockerfile
+    ports:
+      - "9401:80"
+    depends_on:
+      - wilson-server
+
+  postgres:
+    image: postgres:18-alpine
+    profiles: [ "postgres" ]
+    environment:
+      POSTGRES_DB: wilson
+      POSTGRES_USER: wilson
+      POSTGRES_PASSWORD: wilson
+    ports:
+      - "5432:5432"
+    volumes:
+      - wilson-postgres:/var/lib/postgresql/data
+
+volumes:
+  wilson-data:
+  wilson-postgres:
