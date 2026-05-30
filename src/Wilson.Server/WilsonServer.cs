@@ -25,6 +25,8 @@ namespace Wilson.Server
     {
         private static readonly AsyncLocal<RequestCapture?> _RequestCapture = new AsyncLocal<RequestCapture?>();
         private static readonly JsonSerializerOptions _SseJson = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        private const string _NewConversationTitle = "New Conversation";
+        private const int _TitleGenerationCharacterThreshold = 300;
         private readonly JsonSerializerOptions _Json;
         private readonly string _SettingsFile;
         private readonly CancellationTokenSource _TokenSource = new CancellationTokenSource();
@@ -469,10 +471,17 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         {
             ChatRequest body = Body<ChatRequest>(ctx);
             ModelRunnerSettings runner = Inference.GetRunner(body.RunnerId);
+            if (!await Inference.IsChatCapableModelAsync(runner, body.Model, ctx.Token).ConfigureAwait(false))
+            {
+                ctx.Response.StatusCode = 400;
+                await SendJsonAsync(ctx, new { error = "The selected model cannot generate chat responses. Choose a chat or completion model instead of an embedding-only model." }).ConfigureAwait(false);
+                return;
+            }
+
             Conversation? conversation = String.IsNullOrWhiteSpace(body.ConversationId) ? null : await Database.GetConversationAsync(requestContext.TenantId!, body.ConversationId, ctx.Token).ConfigureAwait(false);
             if (conversation == null)
             {
-                conversation = new Conversation { TenantId = requestContext.TenantId!, UserId = requestContext.UserId ?? String.Empty, RunnerId = body.RunnerId, Model = body.Model, Title = MakeTitle(body.Prompt) };
+                conversation = new Conversation { TenantId = requestContext.TenantId!, UserId = requestContext.UserId ?? String.Empty, RunnerId = body.RunnerId, Model = body.Model, Title = _NewConversationTitle };
                 await Database.CreateConversationAsync(conversation, ctx.Token).ConfigureAwait(false);
             }
             List<ChatMessage> messages = await Database.GetMessagesAsync(requestContext.TenantId!, conversation.Id, ctx.Token).ConfigureAwait(false);
@@ -500,6 +509,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 int inputTokens = InferenceService.EstimateTokens(prompt);
                 ChatMessage assistantMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = answer, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = outputTokens, TimeToFirstTokenMs = inference.Elapsed.TotalMilliseconds, StreamingTimeMs = 0, TotalTimeMs = inference.Elapsed.TotalMilliseconds, TokensUsed = inputTokens + outputTokens };
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
+                conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(assistantMessage, answer);
                 await SendJsonAsync(ctx, new { conversation, userMessage, assistantMessage, truncation }).ConfigureAwait(false);
                 return;
@@ -533,7 +543,9 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 int totalTokens = InferenceService.EstimateTokens(prompt) + storedTokens;
                 ChatMessage stored = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = full.ToString(), RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = storedTokens, TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = totalTokens };
                 await Database.CreateMessageAsync(stored, ctx.Token).ConfigureAwait(false);
+                conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, stored, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(stored, full.ToString());
+                await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
                 await SendSseAsync(ctx, "done", stored, true).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -688,11 +700,51 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             return parts.Length > index ? parts[index] : String.Empty;
         }
 
-        private static string MakeTitle(string prompt)
+        private async Task<Conversation> MaybeGenerateConversationTitleAsync(Conversation conversation, ModelRunnerSettings runner, string model, List<ChatMessage> previousMessages, ChatMessage userMessage, ChatMessage assistantMessage, CancellationToken token)
         {
-            string clean = prompt.Replace("\r", " ").Replace("\n", " ").Trim();
-            if (clean.Length <= 48) return clean;
-            return clean.Substring(0, 48);
+            if (!String.Equals(conversation.Title, _NewConversationTitle, StringComparison.Ordinal)) return conversation;
+
+            List<ChatMessage> titleMessages = new List<ChatMessage>(previousMessages) { userMessage, assistantMessage };
+            int exchangedCharacters = titleMessages.Sum(message => message.Content?.Length ?? 0);
+            if (exchangedCharacters < _TitleGenerationCharacterThreshold) return conversation;
+
+            string transcript = String.Join(Environment.NewLine, titleMessages
+                .Select(message => message.Role + ": " + (message.Content ?? String.Empty).Replace("\r", " ").Replace("\n", " ").Trim())
+                .Where(line => line.Length > 0));
+            if (transcript.Length > 4000) transcript = transcript.Substring(transcript.Length - 4000);
+
+            try
+            {
+                string title = await Inference.ChatAsync(
+                    runner,
+                    model,
+                    "Generate a concise title of 6 words or fewer for this conversation. Return only the title, with no quotes, punctuation flourish, preamble, or explanation." + Environment.NewLine + Environment.NewLine + transcript,
+                    new CompletionRequestSettings
+                    {
+                        SystemPrompt = "You write short, clear conversation titles. Return only the title.",
+                        Temperature = 0.2,
+                        TopP = 0.9,
+                        MaxTokens = 24
+                    },
+                    token).ConfigureAwait(false);
+
+                title = CleanGeneratedTitle(title);
+                if (String.IsNullOrWhiteSpace(title)) return conversation;
+                conversation.Title = title;
+                await Database.UpdateConversationAsync(conversation, token).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            return conversation;
+        }
+
+        private static string CleanGeneratedTitle(string title)
+        {
+            string clean = title.Replace("\r", " ").Replace("\n", " ").Trim().Trim('"', '\'', '`', '.', ':', '-', ' ');
+            if (clean.Length > 64) clean = clean.Substring(0, 64).Trim();
+            return String.IsNullOrWhiteSpace(clean) ? String.Empty : clean;
         }
 
         private static DateTime ParseUtc(string? value, DateTime defaultValue)

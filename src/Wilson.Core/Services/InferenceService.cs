@@ -106,13 +106,19 @@ namespace Wilson.Core.Services
                         status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, token).ConfigureAwait(false);
                     }
 
-                    status.Models = new List<string>(status.AvailableModels);
+                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, token).ConfigureAwait(false);
+                    status.ChatModels = classification.ChatModels;
+                    status.EmbeddingModels = classification.EmbeddingModels;
+                    status.Models = new List<string>(status.ChatModels);
                     status.Online = true;
                     status.StatusMessage = "Connected";
                 }
                 catch (Exception ex)
                 {
-                    status.Models = new List<string>(status.AvailableModels);
+                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, token).ConfigureAwait(false);
+                    status.ChatModels = classification.ChatModels;
+                    status.EmbeddingModels = classification.EmbeddingModels;
+                    status.Models = new List<string>(status.ChatModels);
                     status.Online = false;
                     status.StatusMessage = ex.Message;
                 }
@@ -121,6 +127,16 @@ namespace Wilson.Core.Services
             }
 
             return statuses;
+        }
+
+        /// <summary>
+        /// Determine whether a model is suitable for chat or completion requests.
+        /// </summary>
+        public async Task<bool> IsChatCapableModelAsync(ModelRunnerSettings runner, string model, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(model)) return false;
+            ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, new List<string> { model }, token).ConfigureAwait(false);
+            return classification.ChatModels.Any(item => String.Equals(item, model, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -304,6 +320,93 @@ namespace Wilson.Core.Services
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        private static async Task<ModelCapabilityClassification> ClassifyModelsAsync(ModelRunnerSettings runner, List<string> models, CancellationToken token)
+        {
+            ModelCapabilityClassification classification = new ModelCapabilityClassification();
+            foreach (string model in models.Where(item => !String.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                token.ThrowIfCancellationRequested();
+                ModelCapability capability = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
+                    ? await GetOllamaModelCapabilityAsync(runner, model, token).ConfigureAwait(false)
+                    : GetModelCapabilityFromName(model);
+
+                if (capability == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
+                else classification.ChatModels.Add(model);
+            }
+
+            classification.ChatModels = classification.ChatModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            classification.EmbeddingModels = classification.EmbeddingModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            return classification;
+        }
+
+        private static async Task<ModelCapability> GetOllamaModelCapabilityAsync(ModelRunnerSettings runner, string model, CancellationToken token)
+        {
+            try
+            {
+                using HttpClient client = new HttpClient();
+                if (!String.IsNullOrWhiteSpace(runner.ApiKey)) client.DefaultRequestHeaders.Add("Authorization", "Bearer " + runner.ApiKey);
+                string body = JsonSerializer.Serialize(new { model });
+                using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
+                using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/show"), content, token).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                using JsonDocument document = JsonDocument.Parse(json);
+                if (HasOllamaCapability(document.RootElement, "completion") || HasOllamaCapability(document.RootElement, "chat") || HasOllamaCapability(document.RootElement, "generate")) return ModelCapability.Chat;
+                if (HasOllamaCapability(document.RootElement, "embedding") || HasOllamaCapability(document.RootElement, "embeddings")) return ModelCapability.Embedding;
+            }
+            catch
+            {
+                return GetModelCapabilityFromName(model);
+            }
+
+            return GetModelCapabilityFromName(model);
+        }
+
+        private static bool HasOllamaCapability(JsonElement root, string capability)
+        {
+            if (!root.TryGetProperty("capabilities", out JsonElement capabilities) || capabilities.ValueKind != JsonValueKind.Array) return false;
+            foreach (JsonElement item in capabilities.EnumerateArray())
+            {
+                string? value = item.GetString();
+                if (String.Equals(value, capability, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+
+            return false;
+        }
+
+        private static ModelCapability GetModelCapabilityFromName(string model)
+        {
+            return LooksLikeEmbeddingModel(model) ? ModelCapability.Embedding : ModelCapability.Chat;
+        }
+
+        private static bool LooksLikeEmbeddingModel(string model)
+        {
+            if (String.IsNullOrWhiteSpace(model)) return false;
+            string normalized = model.ToLowerInvariant();
+            return normalized.Contains("embed", StringComparison.Ordinal)
+                || normalized.Contains("embedding", StringComparison.Ordinal)
+                || normalized.Contains("all-minilm", StringComparison.Ordinal)
+                || normalized.Contains("minilm", StringComparison.Ordinal)
+                || normalized.Contains("bge-", StringComparison.Ordinal)
+                || normalized.StartsWith("bge", StringComparison.Ordinal)
+                || normalized.Contains("e5-", StringComparison.Ordinal)
+                || normalized.StartsWith("e5", StringComparison.Ordinal)
+                || normalized.Contains("gte-", StringComparison.Ordinal)
+                || normalized.StartsWith("gte", StringComparison.Ordinal);
+        }
+
+        private sealed class ModelCapabilityClassification
+        {
+            public List<string> ChatModels { get; set; } = new List<string>();
+            public List<string> EmbeddingModels { get; set; } = new List<string>();
+        }
+
+        private enum ModelCapability
+        {
+            Chat,
+            Embedding
         }
 
         private static string EndpointUrl(string endpoint, string path)

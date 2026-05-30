@@ -144,7 +144,7 @@ namespace Wilson.Core.Models
         /// <summary>User identifier.</summary>
         public string UserId { get; set; } = String.Empty;
         /// <summary>Title.</summary>
-        public string Title { get; set; } = "New conversation";
+        public string Title { get; set; } = "New Conversation";
         /// <summary>Runner identifier.</summary>
         public string RunnerId { get; set; } = String.Empty;
         /// <summary>Model.</summary>
@@ -332,6 +332,10 @@ namespace Wilson.Core.Models
         public List<string> ConfiguredModels { get; set; } = new List<string>();
         /// <summary>Available model list resolved from configuration or server API.</summary>
         public List<string> AvailableModels { get; set; } = new List<string>();
+        /// <summary>Models suitable for chat and completion requests.</summary>
+        public List<string> ChatModels { get; set; } = new List<string>();
+        /// <summary>Models suitable only for embedding requests.</summary>
+        public List<string> EmbeddingModels { get; set; } = new List<string>();
         /// <summary>Currently loaded or running model list reported by the model server.</summary>
         public List<string> LoadedModels { get; set; } = new List<string>();
         /// <summary>Model list used by legacy dashboard chat selector.</summary>

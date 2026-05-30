@@ -295,6 +295,12 @@ function sameModelName(left, right) {
   return String(left || '').toLowerCase() === String(right || '').toLowerCase();
 }
 
+function chatModelsForRunner(runner) {
+  if (!runner) return [];
+  if (Array.isArray(runner.chatModels)) return runner.chatModels;
+  return runner.models || [];
+}
+
 function parseSseFrame(frame) {
   let event = '';
   const data = [];
@@ -312,7 +318,6 @@ function Chat({ api }) {
   const [messages, setMessages] = useState([]);
   const [runnerId, setRunnerId] = useState('');
   const [model, setModel] = useState('');
-  const [conversationModel, setConversationModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [streaming, setStreaming] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.systemPrompt') || defaultSystemPrompt);
@@ -358,10 +363,10 @@ function Chat({ api }) {
       setLoadedKeys(new Set(items.flatMap(item => (item.loadedModels || []).map(loaded => modelKey(item.id, loaded)))));
       const selected = items.find(item => item.id === preferredRunnerId) || items[0];
       if (selected) {
-        const models = selected.models || [];
+        const models = chatModelsForRunner(selected);
         setRunnerId(selected.id);
         setModel(models.includes(preferredModel) ? preferredModel : models[0] || '');
-        setModelError(models.length ? '' : 'No models were returned. For Ollama servers, Wilson queries the Ollama model list when no models are configured.');
+        setModelError(models.length ? '' : 'No chat-capable models were returned. Embedding-only models are hidden from Chat. Use Model Servers to review all available models.');
       }
     } catch (err) {
       setModelError(String(err.message || err));
@@ -378,12 +383,13 @@ function Chat({ api }) {
   useEffect(() => {
     const selected = runners.find(item => item.id === runnerId);
     if (!selected) return;
-    if (selected.models?.length) {
-      if (!selected.models.includes(model) && model !== conversationModel) setModel(selected.models[0]);
+    const models = chatModelsForRunner(selected);
+    if (models.length) {
+      if (!models.includes(model)) setModel(models[0]);
       setModelError('');
     } else {
       setModel('');
-      setModelError('No models available. Use the refresh button to query the server again.');
+      setModelError('No chat-capable models available. Use Model Servers to verify this runner has a completion model.');
     }
   }, [runnerId, runners, model]);
 
@@ -392,7 +398,6 @@ function Chat({ api }) {
     setConversation(item);
     setRunnerId(item.runnerId);
     setModel(item.model);
-    setConversationModel(item.model);
     setTruncationNotice(null);
     if (options.remember !== false) localStorage.setItem(lastConversationStorageKey, item.id);
     setMessages(enumerationObjects(await api.messages(item.id, { pageNumber: 1, pageSize: 500 })));
@@ -427,7 +432,6 @@ function Chat({ api }) {
         const result = await api.chat(body);
         desiredSelection.current = { runnerId: result.conversation.runnerId, model: result.conversation.model };
         setConversation(result.conversation);
-        setConversationModel(result.conversation.model);
         handleTruncationNotice(result.truncation);
         localStorage.setItem(lastConversationStorageKey, result.conversation.id);
         setMessages(prev => [...prev, result.assistantMessage]);
@@ -453,7 +457,6 @@ function Chat({ api }) {
             if (event === 'conversation') {
               desiredSelection.current = { runnerId: parsed.runnerId, model: parsed.model };
               setConversation(parsed);
-              setConversationModel(parsed.model);
               localStorage.setItem(lastConversationStorageKey, parsed.id);
             }
             if (event === 'truncation') {
@@ -499,7 +502,6 @@ function Chat({ api }) {
     if (conversation?.id === item.id) {
       desiredSelection.current = { runnerId: '', model: '' };
       setConversation(null);
-      setConversationModel('');
       setTruncationNotice(null);
       setMessages([]);
     }
@@ -520,10 +522,8 @@ function Chat({ api }) {
 
   const selectedRunner = runners.find(item => item.id === runnerId);
   const modelOptions = useMemo(() => {
-    const options = [...(selectedRunner?.models || [])];
-    if (model && !options.includes(model)) options.unshift(model);
-    return options;
-  }, [selectedRunner, model]);
+    return [...chatModelsForRunner(selectedRunner)];
+  }, [selectedRunner]);
   const selectedModelKey = modelKey(runnerId, model);
   const modelLoaded = loadedKeys.has(selectedModelKey) || (selectedRunner?.loadedModels || []).some(item => sameModelName(item, model));
   const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
@@ -531,7 +531,7 @@ function Chat({ api }) {
   return (
     <div className="chat-layout">
       <aside className="conversation-list">
-        <button className="new-chat" title="Start a new conversation" onClick={() => { desiredSelection.current = { runnerId: '', model: '' }; localStorage.removeItem(lastConversationStorageKey); setConversation(null); setConversationModel(''); setTruncationNotice(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
+        <button className="new-chat" title="Start a new conversation" onClick={() => { desiredSelection.current = { runnerId: '', model: '' }; localStorage.removeItem(lastConversationStorageKey); setConversation(null); setTruncationNotice(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
         {conversationError && <div className="conversation-error" title="Conversation action error">{conversationError}</div>}
         {conversations.map(item => (
           <div key={item.id} className={conversation?.id === item.id ? 'conversation-row active' : 'conversation-row'} title={`Conversation: ${item.title}`}>
@@ -817,7 +817,7 @@ function ModelServersView({ api }) {
       <PageIntro title="Model Servers" description="Review configured model runners, see available and loaded models, pull Ollama models, and manage model server settings." actions={
         <div className="page-actions">
           <button className="primary" title="Add a configured model server to Wilson settings" onClick={() => setEditServer({ id: `runner-${Date.now()}`, name: '', apiType: 'Ollama', endpoint: 'http://localhost:11434', apiKey: '', models: [], contextWindowTokens: 8192 })}><Plus size={16} />Add</button>
-          <button className="secondary" title="Reload model server status and query Ollama for available and loaded models" onClick={load} disabled={loading}><RefreshCw size={16} />{loading ? 'Loading' : text.refresh}</button>
+          <button className="icon-button" title={loading ? 'Reloading model server status and Ollama model lists' : 'Reload model server status and query Ollama for available and loaded models'} onClick={load} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
         </div>
       } />
       {error && <PermissionPanel message={error} />}
@@ -860,6 +860,8 @@ function toRunnerSettings(server, settings) {
 
 function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
   const available = server.availableModels || server.models || [];
+  const chatModels = Array.isArray(server.chatModels) ? server.chatModels : server.models || [];
+  const embeddingModels = server.embeddingModels || [];
   const configured = server.configuredModels || [];
   const loaded = server.loadedModels || [];
   const [pullOpen, setPullOpen] = useState(false);
@@ -892,6 +894,8 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       </div>
       <ModelList title="Configured models" tooltip="Model names explicitly configured in Wilson JSON for this server. Empty means Wilson resolves available models from Ollama when possible." models={configured} empty="No models configured" />
       <ModelList title="Available models" tooltip="Models available from this server. For Ollama, Wilson queries the Ollama API when no models are configured." models={available} empty="No available models reported" />
+      <ModelList title="Chat-capable models" tooltip="Models Wilson will show in the Chat model dropdown because they can handle chat or completion requests." models={chatModels} empty="No chat-capable models reported" />
+      <ModelList title="Embedding-only models" tooltip="Models hidden from Chat because they appear to support embedding requests only." models={embeddingModels} empty="No embedding-only models detected" />
       <ModelList title="Loaded / running models" tooltip="Models currently loaded or running according to the model server. Ollama reports this from /api/ps." models={loaded} empty={server.apiType === 'Ollama' ? 'No models currently loaded' : 'Loaded model status is not supported for this API type'} loaded />
       {server.statusMessage && server.online === false && <div className="model-server-error" title="Model server status error">{server.statusMessage}</div>}
       {pullOpen && <ModelPullModal server={server} api={api} suggestions={[...available, ...configured]} onClose={() => setPullOpen(false)} onPulled={onPulled} />}
@@ -1108,7 +1112,7 @@ function RequestHistory({ api }) {
 
   return (
     <div className="page request-history-page">
-      <PageIntro title={text.requests} description="Inspect recent API activity, latency, status trends, request and response payloads, and captured model timing metadata." actions={<button className="secondary" title="Reload request history and chart data" onClick={load} disabled={loading}><RefreshCw size={16} />{loading ? 'Loading' : text.refresh}</button>} />
+      <PageIntro title={text.requests} description="Inspect recent API activity, latency, status trends, request and response payloads, and captured model timing metadata." />
       <div className="request-summary-grid">
         <MetricCard icon={ListFilter} label="Requests" value={stats.total} />
         <MetricCard icon={Check} label="Success" value={stats.successes} tone="success" />
@@ -1125,7 +1129,7 @@ function RequestHistory({ api }) {
         </div>
         {summary && <ActivityChart summary={summary} range={range} />}
       </div>
-      <RequestHistoryTable rows={filteredRows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onView={(row) => setModal({ type: 'view', row })} onJson={(row) => setModal({ type: 'json', row })} onDelete={(row) => setModal({ type: 'delete', row })} />
+      <RequestHistoryTable rows={filteredRows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onRefresh={load} loading={loading} onView={(row) => setModal({ type: 'view', row })} onJson={(row) => setModal({ type: 'json', row })} onDelete={(row) => setModal({ type: 'delete', row })} />
       {modal?.type === 'view' && <RequestHistoryDetailModal row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'json' && <JsonModal title="Request History Entry JSON" row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'delete' && <ConfirmModal title="Delete request history entry" message="Delete this request history entry?" onCancel={() => setModal(null)} onConfirm={async () => { await api.deleteRequestHistory(modal.row.id); setModal(null); load(); }} />}
@@ -1239,7 +1243,7 @@ function MetricCard({ icon: Icon, label, value, tone = '' }) {
   return <div className={`metric-card ${tone}`} title={`${label}: ${value}`}><Icon size={18} /><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function RequestHistoryTable({ rows, enumeration, page, pageSize, setPage, setPageSize, onView, onJson, onDelete }) {
+function RequestHistoryTable({ rows, enumeration, page, pageSize, setPage, setPageSize, onRefresh, loading, onView, onJson, onDelete }) {
   const total = enumeration?.totalRecords ?? rows.length;
   const totalPages = Math.max(1, enumeration?.totalPages || Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);
@@ -1247,7 +1251,7 @@ function RequestHistoryTable({ rows, enumeration, page, pageSize, setPage, setPa
   useEffect(() => { if (page !== safePage) setPage(safePage); }, [page, safePage]);
   return (
     <div className="operator-table request-table">
-      <Pagination total={total} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
+      <Pagination total={total} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onRefresh={onRefresh} refreshing={loading} refreshTitle={loading ? 'Reloading request history and chart data' : 'Reload request history and chart data'} />
       <div className="table-wrap">
         <table>
           <thead><tr>{['method', 'path', 'statusCode', 'durationMs', 'createdUtc'].map(c => <HeaderCell key={c} column={c} />)}<th className="actions-col" title="Available row actions">Actions</th></tr></thead>
@@ -1553,7 +1557,7 @@ function SettingsAdmin({ api }) {
     <div className="page settings-page">
       <PageIntro title={text.settings} description="Edit the running Wilson configuration. REST listener and database connection changes require a server restart." actions={
         <div className="table-controls">
-          <button className="secondary" title="Reload settings from the server" onClick={load}><RefreshCw size={16} />{text.refresh}</button>
+          <button className="icon-button" title="Reload settings from the server" onClick={load}><RefreshCw size={16} /></button>
           <button className="secondary" title="View the current settings as JSON" onClick={() => setJsonOpen(true)}><Code size={16} />{text.viewJson}</button>
           <button className="primary" title="Save settings to disk and apply supported running-server changes" onClick={save}><Save size={16} />Save Settings</button>
         </div>
@@ -1754,9 +1758,8 @@ function DataTable({ rows, columns, onRefresh, onRowClick, actions, enumeration 
       <div className="table-controls">
         <div className="table-stats" title="Number of matching records and total pages"><strong>{totalRecords}</strong> records<span>{` across ${totalPages} pages`}</span></div>
         <input className="table-filter" title="Filter records by any visible or hidden value" value={filter} onChange={e => { setFilter(e.target.value); setPage(0); }} placeholder="Filter records" />
-        {onRefresh && <button className="secondary" title="Reload this table" onClick={onRefresh}><RefreshCw size={16} />{text.refresh}</button>}
       </div>
-      <Pagination total={totalRecords} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
+      <Pagination total={totalRecords} totalPagesOverride={totalPages} page={safePage} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onRefresh={onRefresh} refreshTitle="Reload this table" />
       <div className="table-wrap">
         <table>
           <thead><tr>{columns.map(c => <HeaderCell key={c} column={c} />)}{actions && <th className="actions-col" title="Available row actions">Actions</th>}</tr></thead>
@@ -1780,7 +1783,7 @@ function HeaderCell({ column }) {
   return <th title={tooltip}>{label}</th>;
 }
 
-function Pagination({ total, page, pageSize, setPage, setPageSize, totalPagesOverride = null }) {
+function Pagination({ total, page, pageSize, setPage, setPageSize, totalPagesOverride = null, onRefresh = null, refreshing = false, refreshTitle = 'Reload this table' }) {
   const totalPages = totalPagesOverride ?? Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : page * pageSize + 1;
   const end = Math.min(total, (page + 1) * pageSize);
@@ -1792,6 +1795,7 @@ function Pagination({ total, page, pageSize, setPage, setPageSize, totalPagesOve
       <span title="Current page number">Page {page + 1} of {totalPages}</span>
       <label title="Jump to a specific page">Jump<input className="page-jump" type="number" min="1" max={totalPages} value={page + 1} onChange={e => setPage(Math.min(totalPages - 1, Math.max(0, Number(e.target.value || 1) - 1)))} /></label>
       <button className="icon-button" title="Go to next page" onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}><ChevronRight size={16} /></button>
+      {onRefresh && <button className="icon-button" title={refreshTitle} onClick={onRefresh} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>}
     </div>
   );
 }
