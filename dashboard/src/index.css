@@ -72,8 +72,8 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .topbar-connection strong { min-width: 0; max-width: min(360px, 32vw); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 
-.chat-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
-.conversation-list { min-height: 0; border-right: 1px solid var(--line); background: var(--panel-2); padding: 12px; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: stretch; gap: 7px; }
+.chat-layout { height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+.conversation-list { height: 100%; max-height: 100%; min-height: 0; border-right: 1px solid var(--line); background: var(--panel-2); padding: 12px; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: stretch; gap: 7px; }
 .conversation-scroll { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 7px; padding-right: 2px; }
 .new-chat { width: 100%; text-align: left; background: transparent; color: var(--text); border-radius: 7px; padding: 8px 4px; display: flex; gap: 8px; align-items: center; min-height: 36px; }
 .new-chat:hover { background: var(--panel); }
@@ -92,7 +92,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .model-error { border-bottom: 1px solid var(--line); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); padding: 9px 16px; font-size: 13px; }
-.messages { overflow: auto; padding: 28px max(24px, 8vw); }
+.messages { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 28px max(24px, 8vw); }
 .message { display: grid; margin: 0 0 18px; }
 .message.user { justify-items: end; }
 .bubble { max-width: min(760px, 100%); white-space: pre-wrap; line-height: 1.55; padding: 13px 16px; border-radius: 8px; background: var(--panel-2); }
