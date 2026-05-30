@@ -95,13 +95,13 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .messages { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 28px max(24px, 8vw); }
 .message { display: grid; margin: 0 0 18px; }
 .message.user { justify-items: end; }
-.bubble { max-width: min(760px, 100%); line-height: 1.55; padding: 13px 16px; border-radius: 8px; background: var(--panel-2); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.bubble { max-width: min(760px, 100%); line-height: 1.55; padding: 13px 16px; border-radius: 8px; background: var(--panel-2); overflow-wrap: anywhere; }
 .bubble > *:first-child { margin-top: 0; }
 .bubble > *:last-child { margin-bottom: 0; }
 .bubble p, .bubble ul, .bubble ol, .bubble blockquote, .bubble pre, .bubble table { margin: 0 0 12px; }
 .bubble ul, .bubble ol { padding-left: 22px; }
 .bubble li + li { margin-top: 4px; }
-.bubble code { font-family: inherit; font-size: .95em; background: color-mix(in srgb, var(--text) 8%, transparent); border: 1px solid var(--line); border-radius: 5px; padding: 1px 4px; }
+.bubble code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .95em; background: color-mix(in srgb, var(--text) 8%, transparent); border: 1px solid var(--line); border-radius: 5px; padding: 1px 4px; }
 .bubble pre { min-height: 0; max-width: 100%; overflow: auto; background: #2f343a; color: #f6f8fa; border: 1px solid #4b5563; padding: 12px; }
 .bubble pre code { background: transparent; border: 0; padding: 0; color: inherit; }
 .bubble blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted); }
