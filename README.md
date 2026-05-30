@@ -1,5 +1,9 @@
 # Wilson
 
+<p align="center">
+  <img src="assets/logo.png" alt="Wilson logo" width="192" height="192">
+</p>
+
 Wilson is a Watson 7 C# server and React dashboard for tenant-aware chat against Ollama or OpenAI-compatible model runners.
 
 ## Features
