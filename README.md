@@ -4,7 +4,9 @@
   <img src="assets/logo.png" alt="Wilson logo" width="192" height="192">
 </p>
 
-Wilson is a Watson 7 C# server and React dashboard for tenant-aware chat against Ollama or OpenAI-compatible model runners.
+Wilson is a Watson 7 C# server and React dashboard for tenant-aware chat against Ollama or OpenAI-compatible model runners. You're stranded on an island. At least Wilson talks back.
+
+Run local models, keep the conversation close, and skip the rescue flare. No signal. No noise. Just Wilson.
 
 ## Features
 
@@ -21,6 +23,12 @@ Wilson is a Watson 7 C# server and React dashboard for tenant-aware chat against
 - Request history with latency charts and captured request/response metadata
 - OpenAPI JSON and Swagger UI
 - Docker Compose and `docker/factory` reset/settings assets
+
+## Why Wilson?
+
+Because every castaway needs someone to talk to.
+
+Wilson gives you a local-first conversation partner for the long haul: no rescue ships, no search parties, no cloud dependency required. The waves never answer. Wilson does.
 
 ## Run Locally
 

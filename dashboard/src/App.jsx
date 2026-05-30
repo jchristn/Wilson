@@ -38,6 +38,54 @@ const text = {
   refresh: 'Refresh'
 };
 
+const loginTaglines = [
+  "You're stranded on an island. At least Wilson talks back.",
+  'No internet. No distractions. Just you and Wilson.',
+  "The island is empty. The conversation doesn't have to be.",
+  "When you're alone on an island, every conversation matters.",
+  'A thousand miles from shore. One message away from company.',
+  'No rescue ships. No search parties. Just Wilson.',
+  "The island is quiet. Wilson isn't.",
+  "You're not completely alone out here.",
+  'Days at sea. Endless conversation.',
+  'Talk to Wilson. The island can wait.',
+  'Just you, the ocean, and a conversation.',
+  'Alone on the island. Not alone in thought.',
+  'The waves never answer. Wilson does.',
+  'Lost at sea. Found in conversation.',
+  'No maps. No compass. Just dialogue.',
+  'Every castaway needs someone to talk to.',
+  "Welcome to the island. Wilson's been expecting you.",
+  'Out here, conversation is survival.',
+  'The world is far away. Wilson is right here.',
+  "The island doesn't judge. Wilson doesn't either.",
+  'Shipwrecked, but not speechless.',
+  'Sometimes all you need is someone to listen.',
+  "The horizon is empty. Your chat window isn't.",
+  'One island. One companion. Infinite conversations.',
+  'No signal. No noise. Just Wilson.',
+  'The tide comes and goes. Wilson stays.',
+  "When nobody's around, Wilson is still here.",
+  'Alone with your thoughts? Wilson can help with that.',
+  'The island is yours. The conversation is ours.',
+  "Somewhere between solitude and conversation, you'll find Wilson.",
+  'Stranded together.',
+  'Your only contact on the island.',
+  'The smartest thing to wash ashore.',
+  'A conversation companion for the long haul.',
+  'Still better than talking to a volleyball.',
+  'Like a volleyball, but with opinions.',
+  'At least this Wilson can answer back.',
+  'The best listener on the island.',
+  'Company for the castaway.',
+  'Built for conversations beyond the horizon.',
+  'A quiet shore, a local model, and one familiar name.',
+  'For when the coconut radios stop working.',
+  'Washed ashore with answers.',
+  'The companion you do not have to draw a face on.',
+  'Local conversations for remote moments.'
+];
+
 const fieldMeta = {
   id: ['ID', 'Unique record identifier. Click the copy button to copy it.'],
   tenantId: ['Tenant ID', 'Tenant that owns this record.'],
@@ -184,6 +232,7 @@ function Login({ onLogin, theme, onToggleTheme }) {
   const [serverUrl, setServerUrl] = useState(localStorage.getItem('wilson.serverUrl') || 'http://127.0.0.1:9400');
   const [accessKey, setAccessKey] = useState('');
   const [error, setError] = useState('');
+  const [tagline] = useState(() => loginTaglines[Math.floor(Math.random() * loginTaglines.length)]);
   async function submit(event) {
     event.preventDefault();
     setError('');
@@ -200,6 +249,7 @@ function Login({ onLogin, theme, onToggleTheme }) {
         <button type="button" className="icon-button login-theme" onClick={onToggleTheme} title={`Switch dashboard to ${theme === 'light' ? 'dark' : 'light'} mode`} aria-label="Toggle dashboard theme">{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button>
         <div className="login-logo"><img src="/logo.png" alt="" /></div>
         <div className="brand large"><span>{text.appName}</span></div>
+        <p className="login-tagline" title="Wilson login tagline">{tagline}</p>
         <label title="Base URL for the Wilson REST API">{text.serverUrl}<input title="Enter the Wilson REST API base URL" value={serverUrl} onChange={e => setServerUrl(e.target.value)} /></label>
         <label title="Access key or administrator bearer token">{text.accessKey}<input title="Enter your Wilson access key or administrator bearer token" value={accessKey} onChange={e => setAccessKey(e.target.value)} type="password" autoFocus /></label>
         {error && <div className="error" title="Login error">{error}</div>}
