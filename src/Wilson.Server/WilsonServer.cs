@@ -718,13 +718,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 string title = await Inference.ChatAsync(
                     runner,
                     model,
-                    "Generate a concise title of 6 words or fewer for this conversation. Return only the title, with no quotes, punctuation flourish, preamble, or explanation." + Environment.NewLine + Environment.NewLine + transcript,
+                    "Generate a short conversation title. Use 2 to 4 words, 32 characters or fewer. Return only the title, with no quotes, punctuation flourish, preamble, or explanation." + Environment.NewLine + Environment.NewLine + transcript,
                     new CompletionRequestSettings
                     {
-                        SystemPrompt = "You write short, clear conversation titles. Return only the title.",
+                        SystemPrompt = "You write very short, clear conversation titles. Return only 2 to 4 words.",
                         Temperature = 0.2,
                         TopP = 0.9,
-                        MaxTokens = 24
+                        MaxTokens = 12
                     },
                     token).ConfigureAwait(false);
 
@@ -743,7 +743,9 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private static string CleanGeneratedTitle(string title)
         {
             string clean = title.Replace("\r", " ").Replace("\n", " ").Trim().Trim('"', '\'', '`', '.', ':', '-', ' ');
-            if (clean.Length > 64) clean = clean.Substring(0, 64).Trim();
+            string[] words = clean.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 4) clean = String.Join(' ', words.Take(4));
+            if (clean.Length > 32) clean = clean.Substring(0, 32).Trim();
             return String.IsNullOrWhiteSpace(clean) ? String.Empty : clean;
         }
 

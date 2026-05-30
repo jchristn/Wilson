@@ -533,15 +533,17 @@ function Chat({ api }) {
       <aside className="conversation-list">
         <button className="new-chat" title="Start a new conversation" onClick={() => { desiredSelection.current = { runnerId: '', model: '' }; localStorage.removeItem(lastConversationStorageKey); setConversation(null); setTruncationNotice(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
         {conversationError && <div className="conversation-error" title="Conversation action error">{conversationError}</div>}
-        {conversations.map(item => (
-          <div key={item.id} className={conversation?.id === item.id ? 'conversation-row active' : 'conversation-row'} title={`Conversation: ${item.title}`}>
-            <button title={`Load conversation ${item.title}`} className="conversation" onClick={() => loadConversation(item)}>{item.title}</button>
-            <ActionMenu title="Open conversation actions" items={[
-              { label: 'Rename', tooltip: `Rename conversation ${item.title}`, icon: Pencil, onClick: () => { setConversationError(''); setRenameConversation(item); } },
-              { label: text.delete, tooltip: `Delete conversation ${item.title}`, icon: Trash2, danger: true, onClick: () => { setConversationError(''); setDeleteConversation(item); } }
-            ]} />
-          </div>
-        ))}
+        <div className="conversation-scroll">
+          {conversations.map(item => (
+            <div key={item.id} className={conversation?.id === item.id ? 'conversation-row active' : 'conversation-row'} title={`Conversation: ${item.title}`}>
+              <button title={`Load conversation ${item.title}`} className="conversation" onClick={() => loadConversation(item)}>{item.title}</button>
+              <ActionMenu title="Open conversation actions" items={[
+                { label: 'Rename', tooltip: `Rename conversation ${item.title}`, icon: Pencil, onClick: () => { setConversationError(''); setRenameConversation(item); } },
+                { label: text.delete, tooltip: `Delete conversation ${item.title}`, icon: Trash2, danger: true, onClick: () => { setConversationError(''); setDeleteConversation(item); } }
+              ]} />
+            </div>
+          ))}
+        </div>
         {renameConversation && (
           <RenameConversationModal
             conversation={renameConversation}
