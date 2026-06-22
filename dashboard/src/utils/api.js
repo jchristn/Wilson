@@ -43,6 +43,8 @@ class ApiClient {
   login(accessKey) { return this.request('POST', '/v1.0/auth/token', { accessKey }); }
   me() { return this.request('GET', '/v1.0/api/me'); }
   runners(params = {}) { return this.request('GET', '/v1.0/api/model-runners', null, params); }
+  runnerHealth() { return this.request('GET', '/v1.0/api/model-runners/health'); }
+  runnerHealthById(runnerId) { return this.request('GET', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/health`); }
   pullModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/pull`, { model }); }
   loadModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/load`, { model }); }
   conversations(params = {}) { return this.request('GET', '/v1.0/api/conversations', null, params); }

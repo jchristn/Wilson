@@ -80,6 +80,8 @@ namespace Wilson.Core.Services
             foreach (ModelRunnerSettings runner in _Settings.ModelRunners)
             {
                 token.ThrowIfCancellationRequested();
+                ModelRunnerSettings runnerDefaults = CopyRunner(runner);
+                ModelRunnerSettings.ApplyHealthCheckDefaults(runnerDefaults);
                 ModelRunnerStatus status = new ModelRunnerStatus
                 {
                     Id = runner.Id,
@@ -87,7 +89,16 @@ namespace Wilson.Core.Services
                     ApiType = runner.ApiType,
                     Endpoint = runner.Endpoint,
                     ConfiguredModels = new List<string>(runner.Models),
-                    ContextWindowTokens = runner.ContextWindowTokens
+                    ContextWindowTokens = runner.ContextWindowTokens,
+                    HealthCheckEnabled = runnerDefaults.HealthCheckEnabled,
+                    HealthCheckUrl = runnerDefaults.HealthCheckUrl,
+                    HealthCheckMethod = runnerDefaults.HealthCheckMethod.ToString(),
+                    HealthCheckIntervalMs = runnerDefaults.HealthCheckIntervalMs,
+                    HealthCheckTimeoutMs = runnerDefaults.HealthCheckTimeoutMs,
+                    HealthCheckExpectedStatusCode = runnerDefaults.HealthCheckExpectedStatusCode,
+                    HealthyThreshold = runnerDefaults.HealthyThreshold,
+                    UnhealthyThreshold = runnerDefaults.UnhealthyThreshold,
+                    HealthCheckUseAuth = runnerDefaults.HealthCheckUseAuth
                 };
 
                 try
@@ -467,7 +478,16 @@ namespace Wilson.Core.Services
                 Endpoint = runner.Endpoint,
                 ApiKey = runner.ApiKey,
                 Models = new List<string>(runner.Models),
-                ContextWindowTokens = runner.ContextWindowTokens
+                ContextWindowTokens = runner.ContextWindowTokens,
+                HealthCheckEnabled = runner.HealthCheckEnabled,
+                HealthCheckUrl = runner.HealthCheckUrl,
+                HealthCheckMethod = runner.HealthCheckMethod,
+                HealthCheckIntervalMs = runner.HealthCheckIntervalMs,
+                HealthCheckTimeoutMs = runner.HealthCheckTimeoutMs,
+                HealthCheckExpectedStatusCode = runner.HealthCheckExpectedStatusCode,
+                HealthyThreshold = runner.HealthyThreshold,
+                UnhealthyThreshold = runner.UnhealthyThreshold,
+                HealthCheckUseAuth = runner.HealthCheckUseAuth
             };
         }
 

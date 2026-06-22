@@ -150,6 +150,22 @@ namespace Wilson.Core.Settings
     }
 
     /// <summary>
+    /// Health check HTTP method.
+    /// </summary>
+    public enum HealthCheckMethodEnum
+    {
+        /// <summary>
+        /// HTTP GET method.
+        /// </summary>
+        GET = 0,
+
+        /// <summary>
+        /// HTTP HEAD method.
+        /// </summary>
+        HEAD = 1
+    }
+
+    /// <summary>
     /// Model runner settings.
     /// </summary>
     public class ModelRunnerSettings
@@ -188,6 +204,94 @@ namespace Wilson.Core.Settings
         /// Context window for truncation.
         /// </summary>
         public int ContextWindowTokens { get; set; } = 8192;
+
+        /// <summary>
+        /// Enable periodic health checks for this model server.
+        /// </summary>
+        public bool HealthCheckEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Absolute URL or path to probe for model server health. Empty uses API-type defaults.
+        /// </summary>
+        public string? HealthCheckUrl { get; set; } = null;
+
+        /// <summary>
+        /// HTTP method used for health checks.
+        /// </summary>
+        public HealthCheckMethodEnum HealthCheckMethod { get; set; } = HealthCheckMethodEnum.GET;
+
+        /// <summary>
+        /// Milliseconds between health checks.
+        /// </summary>
+        public int HealthCheckIntervalMs { get; set; } = 0;
+
+        /// <summary>
+        /// Per-check timeout in milliseconds.
+        /// </summary>
+        public int HealthCheckTimeoutMs { get; set; } = 0;
+
+        /// <summary>
+        /// Expected HTTP status code for a healthy response.
+        /// </summary>
+        public int HealthCheckExpectedStatusCode { get; set; } = 200;
+
+        /// <summary>
+        /// Consecutive successes required to transition to healthy.
+        /// </summary>
+        public int HealthyThreshold { get; set; } = 2;
+
+        /// <summary>
+        /// Consecutive failures required to transition to unhealthy.
+        /// </summary>
+        public int UnhealthyThreshold { get; set; } = 2;
+
+        /// <summary>
+        /// Send the configured API key with health check requests.
+        /// </summary>
+        public bool HealthCheckUseAuth { get; set; } = false;
+
+        /// <summary>
+        /// Apply API-type-aware health check defaults.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        public static void ApplyHealthCheckDefaults(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+
+            if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl))
+            {
+                string baseUrl = (runner.Endpoint ?? String.Empty).TrimEnd('/');
+                runner.HealthCheckUrl = IsOllama(runner) ? baseUrl + "/api/tags" : baseUrl + "/v1/models";
+            }
+
+            if (runner.HealthCheckIntervalMs <= 0)
+            {
+                runner.HealthCheckIntervalMs = IsOllama(runner) ? 5000 : 15000;
+            }
+
+            if (runner.HealthCheckTimeoutMs <= 0)
+            {
+                runner.HealthCheckTimeoutMs = IsOllama(runner) ? 2000 : 5000;
+            }
+
+            if (runner.HealthCheckExpectedStatusCode < 100 || runner.HealthCheckExpectedStatusCode > 599)
+            {
+                runner.HealthCheckExpectedStatusCode = 200;
+            }
+
+            if (runner.HealthyThreshold <= 0) runner.HealthyThreshold = 2;
+            if (runner.UnhealthyThreshold <= 0) runner.UnhealthyThreshold = 2;
+
+            if (!IsOllama(runner) && !String.IsNullOrWhiteSpace(runner.ApiKey))
+            {
+                runner.HealthCheckUseAuth = true;
+            }
+        }
+
+        private static bool IsOllama(ModelRunnerSettings runner)
+        {
+            return String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>

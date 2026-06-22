@@ -1,16 +1,29 @@
-# React + Vite
+# Wilson Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite dashboard for Wilson.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+npm install
+npm run dev
+```
 
-## React Compiler
+The dashboard defaults to `http://127.0.0.1:9401` and connects to a Wilson server at `http://127.0.0.1:9400`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Model Server Health
 
-## Expanding the ESLint configuration
+The Model Servers view shows:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- Aggregate healthy, unhealthy, and awaiting-check counts
+- Per-server health badges
+- Recent health check histograms
+- Health detail modal with uptime, consecutive success/failure counts, last error, timestamps, history, and probe configuration
+- Health-check settings in both the Model Server editor and Settings page
+
+## Checks
+
+```powershell
+npm run lint
+npm run build
+```

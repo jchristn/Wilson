@@ -48,7 +48,16 @@
       "endpoint": "http://192.168.86.250:11434",
       "apiKey": null,
       "models": [],
-      "contextWindowTokens": 63556
+      "contextWindowTokens": 63556,
+      "healthCheckEnabled": true,
+      "healthCheckUrl": "http://192.168.86.250:11434/api/tags",
+      "healthCheckMethod": "GET",
+      "healthCheckIntervalMs": 5000,
+      "healthCheckTimeoutMs": 2000,
+      "healthCheckExpectedStatusCode": 200,
+      "healthyThreshold": 2,
+      "unhealthyThreshold": 2,
+      "healthCheckUseAuth": false
     }
   ],
   "seed": {

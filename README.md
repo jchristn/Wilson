@@ -20,6 +20,7 @@ Wilson can:
 - Stream model responses over server-sent events
 - Keep conversation history in a database
 - Manage multiple configured model servers
+- Check model server health in the background with thresholds and recent history
 - Pull and load Ollama models from the dashboard
 - Show which Ollama models are available and currently loaded
 - Capture request history, response timing, and request/response payload metadata
@@ -31,7 +32,7 @@ The waves never answer. Wilson does.
 ## Features
 
 - **Dashboard chat**: browser-based chat with model server/model selectors, streaming responses, response timing details, feedback buttons, and conversation rename/delete.
-- **Model server management**: configure Ollama, OpenAI, or OpenAI-compatible runners; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
+- **Model server management**: configure Ollama, OpenAI, or OpenAI-compatible runners; inspect health, uptime, and recent health history; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
 - **Tenant-aware auth**: tenants, users, credentials, admin tokens, tenant admins, and bearer-token authentication.
 - **Conversation storage**: saved conversations and messages backed by SQLite or PostgreSQL.
 - **Request history**: latency summary, activity chart, detailed request/response metadata, headers, bodies, timing, and token estimates.
@@ -131,6 +132,16 @@ Important sections:
 - `modelRunners`: Ollama/OpenAI/OpenAI-compatible model servers
 - `seed`: first-run tenant, user, and access key
 
+Each `modelRunners` entry supports endpoint health checks:
+
+- `healthCheckEnabled`: enables background probing
+- `healthCheckUrl`: absolute URL or endpoint path; defaults to `/api/tags` for Ollama and `/v1/models` for OpenAI-compatible APIs
+- `healthCheckMethod`: `GET` or `HEAD`
+- `healthCheckIntervalMs`, `healthCheckTimeoutMs`
+- `healthCheckExpectedStatusCode`
+- `healthyThreshold`, `unhealthyThreshold`
+- `healthCheckUseAuth`: sends the runner API key as a bearer token during probes
+
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
 ## API
@@ -138,6 +149,17 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 - OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`
 - Swagger UI: `http://127.0.0.1:9400/swagger`
 - Dashboard API Explorer: available inside the dashboard after login
+- Model server health: `GET /v1.0/api/model-runners/health`
+- Single model server health: `GET /v1.0/api/model-runners/{id}/health`
+
+Model server list responses also include the latest health snapshot when health checks are enabled.
+
+## SDKs And Postman
+
+- C# SDK: `sdk/csharp`
+- JavaScript SDK: `sdk/javascript`
+- Python SDK: `sdk/python`
+- Postman collection: `postman/Wilson.postman_collection.json`
 
 ## Tests And Checks
 

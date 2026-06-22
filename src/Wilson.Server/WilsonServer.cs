@@ -47,6 +47,11 @@ namespace Wilson.Server
         public InferenceService Inference { get; private set; }
 
         /// <summary>
+        /// Model runner health check service.
+        /// </summary>
+        public ModelRunnerHealthCheckService HealthChecks { get; }
+
+        /// <summary>
         /// Watson webserver.
         /// </summary>
         public Webserver Server { get; }
@@ -59,6 +64,7 @@ namespace Wilson.Server
             _Json.Converters.Add(new JsonStringEnumConverter());
             Database = new DatabaseDriver(settings.Database);
             Inference = new InferenceService(settings);
+            HealthChecks = new ModelRunnerHealthCheckService(settings);
             WebserverSettings webserverSettings = new WebserverSettings(settings.Rest.Hostname, settings.Rest.Port, settings.Rest.Ssl);
             Server = new Webserver(webserverSettings, DefaultRouteAsync);
             ConfigureWatson();
@@ -83,6 +89,7 @@ namespace Wilson.Server
                 settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(settingsFile), json) ?? DefaultSettings();
             }
 
+            NormalizeSettings(settings);
             WilsonServer server = new WilsonServer(settings, settingsFile);
             await server.Database.InitializeAsync().ConfigureAwait(false);
             await server.Database.SeedAsync(settings.Seed).ConfigureAwait(false);
@@ -110,13 +117,24 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             Console.WriteLine("Wilson server listening on " + Settings.Rest.Hostname + ":" + Settings.Rest.Port);
             Console.WriteLine("Default admin bearer token: " + String.Join(", ", Settings.Auth.AdminBearerTokens));
             Console.WriteLine("Default user access key: " + Settings.Seed.AccessKey);
+            HealthChecks.Start(_TokenSource.Token);
             _ = Task.Run(() => Server.StartAsync(_TokenSource.Token), _TokenSource.Token);
             Console.CancelKeyPress += (sender, eventArgs) =>
             {
                 eventArgs.Cancel = true;
                 _TokenSource.Cancel();
             };
-            while (!_TokenSource.Token.IsCancellationRequested) await Task.Delay(500, _TokenSource.Token).ConfigureAwait(false);
+            try
+            {
+                while (!_TokenSource.Token.IsCancellationRequested) await Task.Delay(500, _TokenSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                await HealthChecks.StopAsync().ConfigureAwait(false);
+            }
         }
 
         private static Settings DefaultSettings()
@@ -131,7 +149,26 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 Models = new List<string>(),
                 ContextWindowTokens = 8192
             });
+            NormalizeSettings(settings);
             return settings;
+        }
+
+        private static void NormalizeSettings(Settings settings)
+        {
+            settings.ModelRunners ??= new List<ModelRunnerSettings>();
+            foreach (ModelRunnerSettings runner in settings.ModelRunners)
+            {
+                runner.Models ??= new List<string>();
+                ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
+            }
+        }
+
+        private void AttachHealth(List<ModelRunnerStatus> statuses)
+        {
+            foreach (ModelRunnerStatus status in statuses)
+            {
+                status.Health = HealthChecks.GetHealthStatus(status.Id);
+            }
         }
 
         private void ConfigureWatson()
@@ -255,7 +292,24 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             if (path == "/v1.0/api/model-runners" && method == "GET")
             {
-                await SendJsonAsync(ctx, Enumerate(await Inference.GetRunnerStatusesAsync(ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
+                List<ModelRunnerStatus> statuses = await Inference.GetRunnerStatusesAsync(ctx.Token).ConfigureAwait(false);
+                AttachHealth(statuses);
+                await SendJsonAsync(ctx, Enumerate(statuses, Enumeration(ctx))).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/model-runners/health" && method == "GET")
+            {
+                await SendJsonAsync(ctx, HealthChecks.GetAllHealthStatuses()).ConfigureAwait(false);
+                return;
+            }
+
+            if (path.StartsWith("/v1.0/api/model-runners/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/health", StringComparison.OrdinalIgnoreCase) && method == "GET")
+            {
+                string id = Segment(path, 3);
+                EndpointHealthStatus? health = HealthChecks.GetHealthStatus(id);
+                if (health == null) throw new KeyNotFoundException("No health data available for model server '" + id + "'.");
+                await SendJsonAsync(ctx, health).ConfigureAwait(false);
                 return;
             }
 
@@ -285,8 +339,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 RequireAdmin(requestContext);
                 Settings updated = Body<Settings>(ctx);
+                NormalizeSettings(updated);
                 Settings = updated;
                 Inference = new InferenceService(Settings);
+                HealthChecks.UpdateSettings(Settings);
                 File.WriteAllText(_SettingsFile, JsonSerializer.Serialize(Settings, _Json));
                 await SendJsonAsync(ctx, Settings).ConfigureAwait(false);
                 return;
@@ -768,6 +824,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "/swagger", new { get = new { summary = "Swagger UI" } } },
                     { "/v1.0/api/me", new { get = new { summary = "Current principal" } } },
                     { "/v1.0/api/model-runners", new { get = new { summary = "List model servers" } } },
+                    { "/v1.0/api/model-runners/health", new { get = new { summary = "List model server health" } } },
+                    { "/v1.0/api/model-runners/{id}/health", new { get = new { summary = "Get model server health" } } },
                     { "/v1.0/api/model-runners/{id}/pull", new { post = new { summary = "Pull an Ollama model" } } },
                     { "/v1.0/api/model-runners/{id}/load", new { post = new { summary = "Load an Ollama model into memory" } } },
                     { "/v1.0/api/chat", new { post = new { summary = "Non-streaming chat" } } },

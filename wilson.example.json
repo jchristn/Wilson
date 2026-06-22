@@ -32,7 +32,16 @@
       "endpoint": "http://host.docker.internal:11434",
       "apiKey": null,
       "models": [],
-      "contextWindowTokens": 8192
+      "contextWindowTokens": 8192,
+      "healthCheckEnabled": true,
+      "healthCheckUrl": "http://host.docker.internal:11434/api/tags",
+      "healthCheckMethod": "GET",
+      "healthCheckIntervalMs": 5000,
+      "healthCheckTimeoutMs": 2000,
+      "healthCheckExpectedStatusCode": 200,
+      "healthyThreshold": 2,
+      "unhealthyThreshold": 2,
+      "healthCheckUseAuth": false
     },
     {
       "id": "openai-compatible",
@@ -41,7 +50,16 @@
       "endpoint": "https://api.openai.com",
       "apiKey": "replace-me",
       "models": [ "gpt-4.1-mini" ],
-      "contextWindowTokens": 128000
+      "contextWindowTokens": 128000,
+      "healthCheckEnabled": true,
+      "healthCheckUrl": "https://api.openai.com/v1/models",
+      "healthCheckMethod": "GET",
+      "healthCheckIntervalMs": 15000,
+      "healthCheckTimeoutMs": 5000,
+      "healthCheckExpectedStatusCode": 200,
+      "healthyThreshold": 2,
+      "unhealthyThreshold": 2,
+      "healthCheckUseAuth": true
     }
   ],
   "seed": {

@@ -2,6 +2,7 @@ namespace Wilson.Core.Models
 {
     using System;
     using System.Collections.Generic;
+    using System.Text.Json.Serialization;
     using Wilson.Core.Helpers;
 
     /// <summary>
@@ -316,6 +317,149 @@ namespace Wilson.Core.Models
     }
 
     /// <summary>
+    /// A single model server health check result.
+    /// </summary>
+    public class HealthCheckRecord
+    {
+        /// <summary>UTC timestamp of the check.</summary>
+        public DateTime TimestampUtc { get; set; }
+        /// <summary>Whether the check succeeded.</summary>
+        public bool Success { get; set; }
+    }
+
+    /// <summary>
+    /// In-memory runtime health state for a model server.
+    /// </summary>
+    public class EndpointHealthState
+    {
+        /// <summary>Endpoint identifier.</summary>
+        public string EndpointId { get; set; } = String.Empty;
+        /// <summary>Endpoint display name.</summary>
+        public string EndpointName { get; set; } = String.Empty;
+        /// <summary>Tenant scope. Wilson model servers are global, so this is empty.</summary>
+        public string TenantId { get; set; } = String.Empty;
+        /// <summary>Current health state. Starts false until enough successful checks occur.</summary>
+        public bool IsHealthy { get; set; } = false;
+        /// <summary>When monitoring began.</summary>
+        public DateTime FirstCheckUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>Most recent check time.</summary>
+        public DateTime? LastCheckUtc { get; set; }
+        /// <summary>Last transition to healthy.</summary>
+        public DateTime? LastHealthyUtc { get; set; }
+        /// <summary>Last transition to unhealthy.</summary>
+        public DateTime? LastUnhealthyUtc { get; set; }
+        /// <summary>Last transition in either direction.</summary>
+        public DateTime? LastStateChangeUtc { get; set; }
+        /// <summary>Cumulative healthy milliseconds.</summary>
+        public long TotalUptimeMs { get; set; } = 0;
+        /// <summary>Cumulative unhealthy milliseconds.</summary>
+        public long TotalDowntimeMs { get; set; } = 0;
+        /// <summary>Running counter of consecutive successes.</summary>
+        public int ConsecutiveSuccesses { get; set; } = 0;
+        /// <summary>Running counter of consecutive failures.</summary>
+        public int ConsecutiveFailures { get; set; } = 0;
+        /// <summary>Error message from the most recent failed check.</summary>
+        public string? LastError { get; set; }
+        /// <summary>Rolling window of individual check results.</summary>
+        public List<HealthCheckRecord> CheckHistory { get; } = new List<HealthCheckRecord>();
+        /// <summary>Per-state lock for thread safety.</summary>
+        [JsonIgnore]
+        public object Lock { get; } = new object();
+        /// <summary>Separate lock for history list access.</summary>
+        [JsonIgnore]
+        public object HistoryLock { get; } = new object();
+    }
+
+    /// <summary>
+    /// Model server health status for API responses and dashboard display.
+    /// </summary>
+    public class EndpointHealthStatus
+    {
+        /// <summary>Endpoint identifier.</summary>
+        public string EndpointId { get; set; } = String.Empty;
+        /// <summary>Endpoint display name.</summary>
+        public string EndpointName { get; set; } = String.Empty;
+        /// <summary>Tenant scope. Wilson model servers are global, so this is empty.</summary>
+        public string TenantId { get; set; } = String.Empty;
+        /// <summary>Current health state.</summary>
+        public bool IsHealthy { get; set; }
+        /// <summary>When monitoring began.</summary>
+        public DateTime FirstCheckUtc { get; set; }
+        /// <summary>Most recent check time.</summary>
+        public DateTime? LastCheckUtc { get; set; }
+        /// <summary>Last transition to healthy.</summary>
+        public DateTime? LastHealthyUtc { get; set; }
+        /// <summary>Last transition to unhealthy.</summary>
+        public DateTime? LastUnhealthyUtc { get; set; }
+        /// <summary>Last transition in either direction.</summary>
+        public DateTime? LastStateChangeUtc { get; set; }
+        /// <summary>Cumulative healthy milliseconds.</summary>
+        public long TotalUptimeMs { get; set; }
+        /// <summary>Cumulative unhealthy milliseconds.</summary>
+        public long TotalDowntimeMs { get; set; }
+        /// <summary>Uptime percentage from monitoring start until now.</summary>
+        public double UptimePercentage { get; set; }
+        /// <summary>Consecutive successful checks.</summary>
+        public int ConsecutiveSuccesses { get; set; }
+        /// <summary>Consecutive failed checks.</summary>
+        public int ConsecutiveFailures { get; set; }
+        /// <summary>Error message from the most recent failed check.</summary>
+        public string? LastError { get; set; }
+        /// <summary>Rolling window of check history records.</summary>
+        public List<HealthCheckRecord> History { get; set; } = new List<HealthCheckRecord>();
+
+        /// <summary>
+        /// Create an API health status snapshot from runtime state.
+        /// </summary>
+        /// <param name="state">Runtime state.</param>
+        /// <returns>Health status snapshot.</returns>
+        public static EndpointHealthStatus FromState(EndpointHealthState state)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+
+            EndpointHealthStatus status = new EndpointHealthStatus();
+
+            lock (state.Lock)
+            {
+                status.EndpointId = state.EndpointId;
+                status.EndpointName = state.EndpointName;
+                status.TenantId = state.TenantId;
+                status.IsHealthy = state.IsHealthy;
+                status.FirstCheckUtc = state.FirstCheckUtc;
+                status.LastCheckUtc = state.LastCheckUtc;
+                status.LastHealthyUtc = state.LastHealthyUtc;
+                status.LastUnhealthyUtc = state.LastUnhealthyUtc;
+                status.LastStateChangeUtc = state.LastStateChangeUtc;
+                status.ConsecutiveSuccesses = state.ConsecutiveSuccesses;
+                status.ConsecutiveFailures = state.ConsecutiveFailures;
+                status.LastError = state.LastError;
+
+                long uptimeMs = state.TotalUptimeMs;
+                long downtimeMs = state.TotalDowntimeMs;
+                if (state.LastStateChangeUtc.HasValue)
+                {
+                    long currentPeriodMs = (long)(DateTime.UtcNow - state.LastStateChangeUtc.Value).TotalMilliseconds;
+                    if (currentPeriodMs < 0) currentPeriodMs = 0;
+                    if (state.IsHealthy) uptimeMs += currentPeriodMs;
+                    else downtimeMs += currentPeriodMs;
+                }
+
+                status.TotalUptimeMs = uptimeMs;
+                status.TotalDowntimeMs = downtimeMs;
+                long totalMs = uptimeMs + downtimeMs;
+                status.UptimePercentage = totalMs > 0 ? Math.Round((double)uptimeMs / totalMs * 100.0, 2) : 0.0;
+            }
+
+            lock (state.HistoryLock)
+            {
+                status.History = new List<HealthCheckRecord>(state.CheckHistory);
+            }
+
+            return status;
+        }
+    }
+
+    /// <summary>
     /// Model runner status for dashboard display.
     /// </summary>
     public class ModelRunnerStatus
@@ -342,6 +486,26 @@ namespace Wilson.Core.Models
         public List<string> Models { get; set; } = new List<string>();
         /// <summary>Context window for truncation.</summary>
         public int ContextWindowTokens { get; set; } = 8192;
+        /// <summary>Whether background health checks are enabled.</summary>
+        public bool HealthCheckEnabled { get; set; } = true;
+        /// <summary>Effective health check URL.</summary>
+        public string? HealthCheckUrl { get; set; }
+        /// <summary>Health check HTTP method.</summary>
+        public string HealthCheckMethod { get; set; } = "GET";
+        /// <summary>Milliseconds between health checks.</summary>
+        public int HealthCheckIntervalMs { get; set; }
+        /// <summary>Per-check timeout in milliseconds.</summary>
+        public int HealthCheckTimeoutMs { get; set; }
+        /// <summary>Expected HTTP status code for a healthy response.</summary>
+        public int HealthCheckExpectedStatusCode { get; set; } = 200;
+        /// <summary>Consecutive successes required to mark healthy.</summary>
+        public int HealthyThreshold { get; set; } = 2;
+        /// <summary>Consecutive failures required to mark unhealthy.</summary>
+        public int UnhealthyThreshold { get; set; } = 2;
+        /// <summary>Whether the API key is sent with health check requests.</summary>
+        public bool HealthCheckUseAuth { get; set; }
+        /// <summary>Latest background health check status, if health checks are enabled.</summary>
+        public EndpointHealthStatus? Health { get; set; }
         /// <summary>Whether the model server status query succeeded.</summary>
         public bool Online { get; set; } = true;
         /// <summary>Status or error message.</summary>

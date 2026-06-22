@@ -1,0 +1,163 @@
+{
+  "info": {
+    "name": "Wilson",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Wilson API collection with model server health checks."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:9400" },
+    { "key": "accessKey", "value": "wilsonadmin" },
+    { "key": "token", "value": "wilsonadmin" },
+    { "key": "runnerId", "value": "local-ollama" },
+    { "key": "modelName", "value": "llama3.2" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{token}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Create Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/auth/token",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "auth", "token" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accessKey\": \"{{accessKey}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Current Principal",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/me",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "me" ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Model Servers",
+      "item": [
+        {
+          "name": "List Model Servers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/model-runners?pageNumber=1&pageSize=100",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "model-runners" ],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "100" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Model Server Health",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/model-runners/health",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "model-runners", "health" ]
+            }
+          }
+        },
+        {
+          "name": "Get Model Server Health",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/model-runners/{{runnerId}}/health",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "model-runners", "{{runnerId}}", "health" ]
+            }
+          }
+        },
+        {
+          "name": "Pull Ollama Model",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/model-runners/{{runnerId}}/pull",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "model-runners", "{{runnerId}}", "pull" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{modelName}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Load Ollama Model",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/model-runners/{{runnerId}}/load",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "model-runners", "{{runnerId}}", "load" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{modelName}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Service",
+      "item": [
+        {
+          "name": "Service Health",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/health",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "health" ]
+            }
+          }
+        },
+        {
+          "name": "OpenAPI",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "url": {
+              "raw": "{{baseUrl}}/openapi.json",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "openapi.json" ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

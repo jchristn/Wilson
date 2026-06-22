@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye,
+  Activity, AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye,
   Gauge, History, Info, KeyRound, LayoutDashboard, ListFilter, LogOut,
   MessageSquarePlus, Moon, MoreVertical, Pencil, Play, Plus, RefreshCw, Save,
   Search, Send, Server, Settings, Square, Sun, Trash2, ThumbsDown, ThumbsUp, Users, X
@@ -113,6 +113,15 @@ const fieldMeta = {
   apiType: ['API type', 'Protocol used by this model server.'],
   endpoint: ['Endpoint', 'Base URL for this model server.'],
   contextWindowTokens: ['Context window', 'Maximum token window used for prompt truncation.'],
+  healthCheckEnabled: ['Health checks', 'Enables periodic model server health probes.'],
+  healthCheckUrl: ['Health URL', 'Absolute URL or endpoint path Wilson probes for health.'],
+  healthCheckMethod: ['Health method', 'HTTP method used for health probes.'],
+  healthCheckIntervalMs: ['Health interval', 'Milliseconds between health probes.'],
+  healthCheckTimeoutMs: ['Health timeout', 'Milliseconds Wilson waits before marking a probe failed.'],
+  healthCheckExpectedStatusCode: ['Expected status', 'HTTP status code required for a healthy probe.'],
+  healthyThreshold: ['Healthy threshold', 'Consecutive successful checks required to mark healthy.'],
+  unhealthyThreshold: ['Unhealthy threshold', 'Consecutive failed checks required to mark unhealthy.'],
+  healthCheckUseAuth: ['Use auth', 'Send this model server API key with health probes.'],
   title: ['Title', 'Human-readable conversation title.'],
   name: ['Name', 'Human-readable name.'],
   email: ['Email', 'User email address.'],
@@ -786,6 +795,81 @@ function RenameConversationModal({ conversation, onClose, onSave }) {
   );
 }
 
+function defaultHealthCheckSettings(apiType = 'Ollama', endpoint = 'http://localhost:11434', apiKey = '') {
+  const isOllama = String(apiType || '').toLowerCase() === 'ollama';
+  const base = String(endpoint || '').replace(/\/+$/, '');
+  return {
+    healthCheckEnabled: true,
+    healthCheckUrl: `${base}${isOllama ? '/api/tags' : '/v1/models'}`,
+    healthCheckMethod: 'GET',
+    healthCheckIntervalMs: isOllama ? 5000 : 15000,
+    healthCheckTimeoutMs: isOllama ? 2000 : 5000,
+    healthCheckExpectedStatusCode: 200,
+    healthyThreshold: 2,
+    unhealthyThreshold: 2,
+    healthCheckUseAuth: !isOllama && Boolean(apiKey)
+  };
+}
+
+function newModelRunner() {
+  return {
+    id: `runner-${Date.now()}`,
+    name: '',
+    apiType: 'Ollama',
+    endpoint: 'http://localhost:11434',
+    apiKey: '',
+    models: [],
+    contextWindowTokens: 8192,
+    ...defaultHealthCheckSettings('Ollama', 'http://localhost:11434')
+  };
+}
+
+function normalizeRunnerForSave(runner) {
+  const defaults = defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey);
+  return {
+    ...runner,
+    models: runner.models || [],
+    contextWindowTokens: Number(runner.contextWindowTokens || 8192),
+    apiKey: runner.apiKey || null,
+    healthCheckEnabled: runner.healthCheckEnabled !== false,
+    healthCheckUrl: runner.healthCheckUrl || defaults.healthCheckUrl,
+    healthCheckMethod: runner.healthCheckMethod || defaults.healthCheckMethod,
+    healthCheckIntervalMs: Number(runner.healthCheckIntervalMs || defaults.healthCheckIntervalMs),
+    healthCheckTimeoutMs: Number(runner.healthCheckTimeoutMs || defaults.healthCheckTimeoutMs),
+    healthCheckExpectedStatusCode: Number(runner.healthCheckExpectedStatusCode || defaults.healthCheckExpectedStatusCode),
+    healthyThreshold: Number(runner.healthyThreshold || defaults.healthyThreshold),
+    unhealthyThreshold: Number(runner.unhealthyThreshold || defaults.unhealthyThreshold),
+    healthCheckUseAuth: Boolean(runner.healthCheckUseAuth)
+  };
+}
+
+function healthField(health, key) {
+  if (!health) return undefined;
+  const pascal = key.charAt(0).toUpperCase() + key.slice(1);
+  return health[key] ?? health[pascal];
+}
+
+function healthHistory(health) {
+  return healthField(health, 'history') || [];
+}
+
+function healthMapFromList(items) {
+  const map = {};
+  (Array.isArray(items) ? items : enumerationObjects(items)).forEach(item => {
+    const id = healthField(item, 'endpointId');
+    if (id) map[id] = item;
+  });
+  return map;
+}
+
+function modelServerHealthPresentation(server) {
+  if (server.healthCheckEnabled === false) return { label: 'Disabled', tone: 'status-redirect', title: 'Health checks are disabled for this model server.' };
+  const health = server.health;
+  if (!health || !healthField(health, 'lastCheckUtc')) return { label: 'Awaiting Check', tone: 'status-warn', title: 'Awaiting the first background health check.' };
+  if (healthField(health, 'isHealthy')) return { label: 'Healthy', tone: 'status-ok', title: `Healthy since ${formatDate(healthField(health, 'lastHealthyUtc')) || 'the latest passing checks'}.` };
+  return { label: 'Unhealthy', tone: 'status-error', title: healthField(health, 'lastError') || 'The latest health checks are failing.' };
+}
+
 function ModelServersView({ api }) {
   const [servers, setServers] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -797,8 +881,13 @@ function ModelServersView({ api }) {
     setLoading(true);
     try {
       setError('');
-      const [runnerItems, settingItems] = await Promise.all([api.runners({ pageNumber: 1, pageSize: 500 }), api.settings()]);
-      setServers(enumerationObjects(runnerItems));
+      const [runnerItems, settingItems, healthItems] = await Promise.all([
+        api.runners({ pageNumber: 1, pageSize: 500 }),
+        api.settings(),
+        api.runnerHealth().catch(() => [])
+      ]);
+      const healthMap = healthMapFromList(healthItems);
+      setServers(enumerationObjects(runnerItems).map(item => ({ ...item, health: item.health || healthMap[item.id] })));
       setSettings(settingItems);
     } catch (err) {
       setError(String(err.message || err));
@@ -811,15 +900,20 @@ function ModelServersView({ api }) {
   const totals = useMemo(() => {
     const available = servers.reduce((sum, server) => sum + (server.availableModels || server.models || []).length, 0);
     const loaded = servers.reduce((sum, server) => sum + (server.loadedModels || []).length, 0);
-    return { available, loaded };
+    const monitored = servers.filter(server => server.healthCheckEnabled !== false);
+    const healthy = monitored.filter(server => healthField(server.health, 'isHealthy') === true && healthField(server.health, 'lastCheckUtc')).length;
+    const unhealthy = monitored.filter(server => healthField(server.health, 'isHealthy') === false && healthField(server.health, 'lastCheckUtc')).length;
+    const pending = monitored.length - healthy - unhealthy;
+    return { available, loaded, monitored: monitored.length, healthy, unhealthy, pending };
   }, [servers]);
 
   async function saveServer(server) {
     const next = structuredCloneSafe(settings);
     const runners = next.modelRunners || [];
+    const normalized = normalizeRunnerForSave(server);
     const index = runners.findIndex(item => item.id === server.id);
-    if (index >= 0) runners[index] = server;
-    else runners.push(server);
+    if (index >= 0) runners[index] = normalized;
+    else runners.push(normalized);
     next.modelRunners = runners;
     const updated = await api.settings(next);
     setSettings(updated);
@@ -840,13 +934,16 @@ function ModelServersView({ api }) {
     <div className="page model-servers-page">
       <PageIntro title="Model Servers" description="Review configured model runners, see available and loaded models, pull Ollama models, and manage model server settings." actions={
         <div className="page-actions">
-          <button className="primary" title="Add a configured model server to Wilson settings" onClick={() => setEditServer({ id: `runner-${Date.now()}`, name: '', apiType: 'Ollama', endpoint: 'http://localhost:11434', apiKey: '', models: [], contextWindowTokens: 8192 })}><Plus size={16} />Add</button>
+          <button className="primary" title="Add a configured model server to Wilson settings" onClick={() => setEditServer(newModelRunner())}><Plus size={16} />Add</button>
           <button className="icon-button" title={loading ? 'Reloading model server status and Ollama model lists' : 'Reload model server status and query Ollama for available and loaded models'} onClick={load} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
         </div>
       } />
       {error && <PermissionPanel message={error} />}
       <div className="request-summary-grid">
         <MetricCard icon={Server} label="Servers" value={servers.length} />
+        <MetricCard icon={Activity} label="Healthy" value={totals.healthy} tone={totals.healthy > 0 ? 'success' : ''} />
+        <MetricCard icon={AlertCircle} label="Unhealthy" value={totals.unhealthy} tone={totals.unhealthy > 0 ? 'danger' : ''} />
+        <MetricCard icon={Clock} label="Awaiting" value={totals.pending} />
         <MetricCard icon={ListFilter} label="Available models" value={totals.available} />
         <MetricCard icon={Play} label="Loaded models" value={totals.loaded} tone={totals.loaded > 0 ? 'success' : ''} />
       </div>
@@ -872,14 +969,24 @@ function withRunnerSettings(server, settings) {
     name: configured.name || server.name,
     apiType: configured.apiType || server.apiType,
     endpoint: configured.endpoint || server.endpoint,
+    health: server.health,
     configuredModels: configured.models || server.configuredModels || [],
-    contextWindowTokens: configured.contextWindowTokens ?? server.contextWindowTokens
+    contextWindowTokens: configured.contextWindowTokens ?? server.contextWindowTokens,
+    healthCheckEnabled: configured.healthCheckEnabled ?? server.healthCheckEnabled,
+    healthCheckUrl: configured.healthCheckUrl || server.healthCheckUrl,
+    healthCheckMethod: configured.healthCheckMethod || server.healthCheckMethod,
+    healthCheckIntervalMs: configured.healthCheckIntervalMs ?? server.healthCheckIntervalMs,
+    healthCheckTimeoutMs: configured.healthCheckTimeoutMs ?? server.healthCheckTimeoutMs,
+    healthCheckExpectedStatusCode: configured.healthCheckExpectedStatusCode ?? server.healthCheckExpectedStatusCode,
+    healthyThreshold: configured.healthyThreshold ?? server.healthyThreshold,
+    unhealthyThreshold: configured.unhealthyThreshold ?? server.unhealthyThreshold,
+    healthCheckUseAuth: configured.healthCheckUseAuth ?? server.healthCheckUseAuth
   };
 }
 
 function toRunnerSettings(server, settings) {
   const configured = settings?.modelRunners?.find(item => item.id === server.id);
-  return structuredCloneSafe(configured || { id: server.id, name: server.name, apiType: server.apiType, endpoint: server.endpoint, apiKey: '', models: server.configuredModels || [], contextWindowTokens: server.contextWindowTokens || 8192 });
+  return structuredCloneSafe(configured || normalizeRunnerForSave({ id: server.id, name: server.name, apiType: server.apiType, endpoint: server.endpoint, apiKey: '', models: server.configuredModels || [], contextWindowTokens: server.contextWindowTokens || 8192, ...defaultHealthCheckSettings(server.apiType, server.endpoint) }));
 }
 
 function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
@@ -888,7 +995,10 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
   const embeddingModels = server.embeddingModels || [];
   const configured = server.configuredModels || [];
   const loaded = server.loadedModels || [];
+  const healthPresentation = modelServerHealthPresentation(server);
+  const history = healthHistory(server.health);
   const [pullOpen, setPullOpen] = useState(false);
+  const [healthOpen, setHealthOpen] = useState(false);
   return (
     <section className="model-server-card" title={`${server.name || server.id} model server`}>
       <header>
@@ -896,7 +1006,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
           <h2 title="Model server display name">{server.name || server.id}</h2>
           <CopyableId value={server.id} label="Model server ID" />
         </div>
-        <span className={server.online === false ? 'status-pill status-error' : 'status-pill status-ok'} title={server.statusMessage || 'Model server status'}>{server.online === false ? 'Offline' : 'Online'}</span>
+        <button className={`health-status-button ${healthPresentation.tone}`} title={healthPresentation.title} onClick={() => setHealthOpen(true)}><Activity size={14} />{healthPresentation.label}</button>
       </header>
       {server.apiType === 'Ollama' && (
         <div className="model-server-actions">
@@ -916,6 +1026,14 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
         <DetailField name="endpoint" value={server.endpoint} />
         <DetailField name="contextWindowTokens" value={server.contextWindowTokens} />
       </div>
+      <div className="server-health-line" title="Recent background health checks for this model server">
+        <div>
+          <label>Health history</label>
+          <span>{history.length ? `${history.length} recent check${history.length === 1 ? '' : 's'}` : (server.healthCheckEnabled === false ? 'Disabled' : 'Awaiting check')}</span>
+        </div>
+        <HealthHistogram history={history} width={150} height={20} />
+        <button className="secondary compact-button" title={`Open health details for ${server.name || server.id}`} onClick={() => setHealthOpen(true)}><Activity size={15} />Details</button>
+      </div>
       <ModelList title="Configured models" tooltip="Model names explicitly configured in Wilson JSON for this server. Empty means Wilson resolves available models from Ollama when possible." models={configured} empty="No models configured" />
       <ModelList title="Available models" tooltip="Models available from this server. For Ollama, Wilson queries the Ollama API when no models are configured." models={available} empty="No available models reported" />
       <ModelList title="Chat-capable models" tooltip="Models Wilson will show in the Chat model dropdown because they can handle chat or completion requests." models={chatModels} empty="No chat-capable models reported" />
@@ -923,7 +1041,111 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       <ModelList title="Loaded / running models" tooltip="Models currently loaded or running according to the model server. Ollama reports this from /api/ps." models={loaded} empty={server.apiType === 'Ollama' ? 'No models currently loaded' : 'Loaded model status is not supported for this API type'} loaded />
       {server.statusMessage && server.online === false && <div className="model-server-error" title="Model server status error">{server.statusMessage}</div>}
       {pullOpen && <ModelPullModal server={server} api={api} suggestions={[...available, ...configured]} onClose={() => setPullOpen(false)} onPulled={onPulled} />}
+      {healthOpen && <ModelServerHealthModal server={server} api={api} onClose={() => setHealthOpen(false)} />}
     </section>
+  );
+}
+
+function HealthHistogram({ history, width = 120, height = 24, fill = false }) {
+  const records = (history || []).slice(fill ? -96 : -32);
+  if (!records.length) return <div className={fill ? 'health-histogram fill empty' : 'health-histogram empty'} style={{ width: fill ? undefined : width, height }} title="No health check history yet" />;
+  return (
+    <div className={fill ? 'health-histogram fill' : 'health-histogram'} style={{ width: fill ? undefined : width, height }} title="Recent health check history">
+      {records.map((record, index) => {
+        const success = healthField(record, 'success') === true;
+        const timestamp = healthField(record, 'timestampUtc');
+        return <span key={`${timestamp || index}-${index}`} className={success ? 'ok' : 'fail'} title={`${success ? 'Healthy' : 'Unhealthy'}${timestamp ? ` at ${formatDate(timestamp)}` : ''}`} />;
+      })}
+    </div>
+  );
+}
+
+function ModelServerHealthModal({ server, api, onClose }) {
+  const [health, setHealth] = useState(server.health || null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const displayServer = { ...server, health };
+  const presentation = modelServerHealthPresentation(displayServer);
+  const history = healthHistory(health);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      if (server.healthCheckEnabled === false) return;
+      setLoading(true);
+      setError('');
+      try {
+        const latest = await api.runnerHealthById(server.id);
+        if (active) setHealth(latest);
+      } catch (err) {
+        if (active) setError(String(err.message || err));
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [api, server.id, server.healthCheckEnabled]);
+
+  return (
+    <Modal title={`Health: ${server.name || server.id}`} onClose={onClose} wide>
+      <div className="health-modal">
+        <div className="health-stats-row">
+          <div className="health-stat-card" title={presentation.title}>
+            <div className="health-stat-label">Status</div>
+            <div className="health-stat-value"><span className={`status-pill ${presentation.tone}`}>{presentation.label}</span></div>
+          </div>
+          <div className="health-stat-card" title="Uptime percentage since health monitoring started">
+            <div className="health-stat-label">Uptime</div>
+            <div className="health-stat-value">{health ? `${Number(healthField(health, 'uptimePercentage') || 0).toFixed(2)}%` : '-'}</div>
+          </div>
+          <div className="health-stat-card" title="Consecutive successful health checks">
+            <div className="health-stat-label">Consecutive OK</div>
+            <div className="health-stat-value health-stat-success">{healthField(health, 'consecutiveSuccesses') ?? '-'}</div>
+          </div>
+          <div className="health-stat-card" title="Consecutive failed health checks">
+            <div className="health-stat-label">Consecutive Fail</div>
+            <div className="health-stat-value health-stat-danger">{healthField(health, 'consecutiveFailures') ?? '-'}</div>
+          </div>
+        </div>
+
+        {healthField(health, 'lastError') && (
+          <div className="health-error-box" title="Most recent health check error">
+            <div className="health-error-label">Last Error</div>
+            <div className="health-error-message">{healthField(health, 'lastError')}</div>
+          </div>
+        )}
+
+        <div className="health-histogram-section">
+          <div className="health-section-label">Health History</div>
+          <HealthHistogram history={history} height={34} fill />
+        </div>
+
+        <div className="health-timestamps">
+          <div className="health-timestamp-item" title="When monitoring began for this model server"><span className="health-timestamp-label">First check</span><span className="health-timestamp-value">{formatDate(healthField(health, 'firstCheckUtc')) || '-'}</span></div>
+          <div className="health-timestamp-item" title="Most recent health probe time"><span className="health-timestamp-label">Last check</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastCheckUtc')) || '-'}</span></div>
+          <div className="health-timestamp-item" title="Most recent healthy transition"><span className="health-timestamp-label">Last healthy</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastHealthyUtc')) || '-'}</span></div>
+          <div className="health-timestamp-item" title="Most recent unhealthy transition"><span className="health-timestamp-label">Last unhealthy</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastUnhealthyUtc')) || '-'}</span></div>
+        </div>
+
+        <div className="health-config-table">
+          <KeyValueTable rows={[
+            ['healthCheckEnabled', server.healthCheckEnabled !== false],
+            ['healthCheckUrl', server.healthCheckUrl],
+            ['healthCheckMethod', server.healthCheckMethod],
+            ['healthCheckIntervalMs', server.healthCheckIntervalMs],
+            ['healthCheckTimeoutMs', server.healthCheckTimeoutMs],
+            ['healthCheckExpectedStatusCode', server.healthCheckExpectedStatusCode],
+            ['healthyThreshold', server.healthyThreshold],
+            ['unhealthyThreshold', server.unhealthyThreshold],
+            ['healthCheckUseAuth', server.healthCheckUseAuth]
+          ]} />
+        </div>
+
+        {loading && <p className="model-empty" title="Health details loading">Loading health details...</p>}
+        {error && <PermissionPanel message={error} />}
+      </div>
+    </Modal>
   );
 }
 
@@ -979,7 +1201,7 @@ function ModelPullModal({ server, api, suggestions, onClose, onPulled }) {
 }
 
 function ModelServerEditModal({ server, onClose, onSave }) {
-  const [draft, setDraft] = useState(structuredCloneSafe(server));
+  const [draft, setDraft] = useState(normalizeRunnerForSave(structuredCloneSafe(server)));
   const [error, setError] = useState('');
   const set = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
   async function save() {
@@ -989,7 +1211,7 @@ function ModelServerEditModal({ server, onClose, onSave }) {
     }
     try {
       setError('');
-      await onSave({ ...draft, contextWindowTokens: Number(draft.contextWindowTokens || 8192), apiKey: draft.apiKey || null });
+      await onSave(normalizeRunnerForSave(draft));
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -1003,6 +1225,18 @@ function ModelServerEditModal({ server, onClose, onSave }) {
         <FormInput label="Endpoint" tooltip="Base URL for this model server" value={draft.endpoint} onChange={v => set('endpoint', v)} />
         <FormInput label="API key" tooltip="Optional API key sent to this model server" value={draft.apiKey || ''} onChange={v => set('apiKey', v)} />
         <FormInput label="Context window tokens" tooltip="Maximum context window used for prompt truncation" type="number" value={draft.contextWindowTokens || 8192} onChange={v => set('contextWindowTokens', v)} />
+        <div className="health-editor-block">
+          <div className="runner-editor-header"><strong>Health Checks</strong></div>
+          <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server" checked={draft.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
+          <FormInput label="Health URL" tooltip="Absolute URL or path to probe. Ollama defaults to /api/tags; OpenAI-compatible defaults to /v1/models." value={draft.healthCheckUrl || ''} onChange={v => set('healthCheckUrl', v)} />
+          <FormSelect label="Method" tooltip="HTTP method used for health probes" value={draft.healthCheckMethod || 'GET'} options={['GET', 'HEAD']} onChange={v => set('healthCheckMethod', v)} />
+          <FormInput label="Expected status" tooltip="HTTP status code that marks the probe as successful" type="number" value={draft.healthCheckExpectedStatusCode ?? 200} onChange={v => set('healthCheckExpectedStatusCode', v)} />
+          <FormInput label="Interval (ms)" tooltip="Milliseconds between health probes" type="number" value={draft.healthCheckIntervalMs ?? 5000} onChange={v => set('healthCheckIntervalMs', v)} />
+          <FormInput label="Timeout (ms)" tooltip="Milliseconds to wait before a probe fails" type="number" value={draft.healthCheckTimeoutMs ?? 2000} onChange={v => set('healthCheckTimeoutMs', v)} />
+          <FormInput label="Healthy threshold" tooltip="Consecutive successful probes required to mark healthy" type="number" value={draft.healthyThreshold ?? 2} onChange={v => set('healthyThreshold', v)} />
+          <FormInput label="Unhealthy threshold" tooltip="Consecutive failed probes required to mark unhealthy" type="number" value={draft.unhealthyThreshold ?? 2} onChange={v => set('unhealthyThreshold', v)} />
+          <FormCheck label="Use API key" tooltip="Send this model server API key with health probes" checked={!!draft.healthCheckUseAuth} onChange={v => set('healthCheckUseAuth', v)} />
+        </div>
         <StringListRows label="Configured models" tooltip="Known model names, one per row. Leave empty for Ollama to query available models." value={draft.models || []} onChange={v => set('models', v)} />
       </div>
       {error && <div className="error" title="Model server validation error">{error}</div>}
@@ -1621,7 +1855,7 @@ function SettingsAdmin({ api }) {
         </SettingsSection>
         <SettingsSection title="Model Servers">
           {runners.map((runner, index) => <ModelRunnerEditor key={index} runner={runner} index={index} onChange={(next) => set(['modelRunners', index], next)} onDelete={() => set(['modelRunners'], runners.filter((_, i) => i !== index))} />)}
-          <button className="secondary" title="Add a new model server definition" onClick={() => set(['modelRunners'], [...runners, { id: '', name: '', apiType: 'Ollama', endpoint: 'http://localhost:11434', apiKey: null, models: [], contextWindowTokens: 8192 }])}><Plus size={16} />Add Server</button>
+          <button className="secondary" title="Add a new model server definition" onClick={() => set(['modelRunners'], [...runners, { ...newModelRunner(), id: '' }])}><Plus size={16} />Add Server</button>
         </SettingsSection>
         <SettingsSection title="Seed User" restart>
           <FormInput label="Tenant name" tooltip="Default tenant name used during first-run seeding. Requires reseed/restart to affect existing data." value={draft.seed?.tenantName || ''} onChange={v => set(['seed', 'tenantName'], v)} />
@@ -1648,6 +1882,18 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
       <FormInput label="API key" tooltip="Optional API key for the model server." value={runner.apiKey || ''} onChange={v => set('apiKey', v || null)} />
       <FormList label="Configured models" tooltip="Known model names. Leave empty for Ollama to let Wilson query the Ollama server." value={runner.models || []} onChange={v => set('models', v)} />
       <FormInput label="Context window tokens" tooltip="Context window used for prompt truncation." type="number" value={runner.contextWindowTokens ?? 8192} onChange={v => set('contextWindowTokens', Number(v))} />
+      <div className="health-editor-block">
+        <div className="runner-editor-header"><strong>Health Checks</strong></div>
+        <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server." checked={runner.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
+        <FormInput label="Health URL" tooltip="Absolute URL or path to probe for health." value={runner.healthCheckUrl || defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey).healthCheckUrl} onChange={v => set('healthCheckUrl', v)} />
+        <FormSelect label="Method" tooltip="HTTP method used for health probes." value={runner.healthCheckMethod || 'GET'} options={['GET', 'HEAD']} onChange={v => set('healthCheckMethod', v)} />
+        <FormInput label="Expected status" tooltip="HTTP status code required for a healthy response." type="number" value={runner.healthCheckExpectedStatusCode ?? 200} onChange={v => set('healthCheckExpectedStatusCode', Number(v))} />
+        <FormInput label="Interval (ms)" tooltip="Milliseconds between health probes." type="number" value={runner.healthCheckIntervalMs ?? defaultHealthCheckSettings(runner.apiType).healthCheckIntervalMs} onChange={v => set('healthCheckIntervalMs', Number(v))} />
+        <FormInput label="Timeout (ms)" tooltip="Milliseconds to wait before a health probe fails." type="number" value={runner.healthCheckTimeoutMs ?? defaultHealthCheckSettings(runner.apiType).healthCheckTimeoutMs} onChange={v => set('healthCheckTimeoutMs', Number(v))} />
+        <FormInput label="Healthy threshold" tooltip="Consecutive successful probes required to mark healthy." type="number" value={runner.healthyThreshold ?? 2} onChange={v => set('healthyThreshold', Number(v))} />
+        <FormInput label="Unhealthy threshold" tooltip="Consecutive failed probes required to mark unhealthy." type="number" value={runner.unhealthyThreshold ?? 2} onChange={v => set('unhealthyThreshold', Number(v))} />
+        <FormCheck label="Use API key" tooltip="Send the model server API key with health probes." checked={!!runner.healthCheckUseAuth} onChange={v => set('healthCheckUseAuth', v)} />
+      </div>
     </div>
   );
 }

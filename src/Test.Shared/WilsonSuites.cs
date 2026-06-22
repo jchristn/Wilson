@@ -22,6 +22,8 @@ namespace Test.Shared
             await DatabaseRoundTripAsync().ConfigureAwait(false);
             IdLength();
             ContextTruncationAsync();
+            HealthCheckDefaults();
+            HealthStatusSnapshot();
         }
 
         private static async Task DatabaseRoundTripAsync()
@@ -67,6 +69,41 @@ namespace Test.Shared
             {
                 if (id.Length > 32) throw new InvalidOperationException("Generated ID exceeds 32 characters: " + id);
             }
+        }
+
+        private static void HealthCheckDefaults()
+        {
+            ModelRunnerSettings ollama = new ModelRunnerSettings { ApiType = "Ollama", Endpoint = "http://localhost:11434" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(ollama);
+            if (!String.Equals(ollama.HealthCheckUrl, "http://localhost:11434/api/tags", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected Ollama health check URL.");
+            if (ollama.HealthCheckIntervalMs != 5000 || ollama.HealthCheckTimeoutMs != 2000) throw new InvalidOperationException("Unexpected Ollama health check timing defaults.");
+
+            ModelRunnerSettings openAi = new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "https://api.openai.com", ApiKey = "test-key" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(openAi);
+            if (!String.Equals(openAi.HealthCheckUrl, "https://api.openai.com/v1/models", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected OpenAI health check URL.");
+            if (!openAi.HealthCheckUseAuth) throw new InvalidOperationException("Expected OpenAI health checks to use auth when an API key is configured.");
+        }
+
+        private static void HealthStatusSnapshot()
+        {
+            EndpointHealthState state = new EndpointHealthState
+            {
+                EndpointId = "runner-1",
+                EndpointName = "Runner 1",
+                IsHealthy = true,
+                FirstCheckUtc = DateTime.UtcNow.AddSeconds(-2),
+                LastStateChangeUtc = DateTime.UtcNow.AddSeconds(-1),
+                ConsecutiveSuccesses = 2
+            };
+            lock (state.HistoryLock)
+            {
+                state.CheckHistory.Add(new HealthCheckRecord { TimestampUtc = DateTime.UtcNow, Success = true });
+            }
+
+            EndpointHealthStatus status = EndpointHealthStatus.FromState(state);
+            if (!status.IsHealthy) throw new InvalidOperationException("Expected health status to be healthy.");
+            if (status.UptimePercentage <= 0) throw new InvalidOperationException("Expected positive uptime percentage.");
+            if (status.History.Count != 1) throw new InvalidOperationException("Expected health history snapshot.");
         }
     }
 }
