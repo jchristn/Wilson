@@ -4,6 +4,7 @@
 
 - Added background model server health checks with configurable URL, method, interval, timeout, expected status, thresholds, and auth.
 - Added model server health API routes and embedded health snapshots in model server list responses.
+- Added a fast model server listing mode that returns configured servers and cached health without waiting on upstream model APIs.
 - Added dashboard health summary metrics, health badges, recent health histograms, health detail modal, and health-check settings editors.
 - Added C#, JavaScript, and Python SDK surfaces for model runner and model runner health APIs.
 - Added a Postman collection and updated configuration examples for health-check fields.

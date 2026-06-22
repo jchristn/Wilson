@@ -73,7 +73,7 @@ namespace Wilson.Core.Services
         /// <summary>
         /// Resolve model runner status, including available and loaded models where supported.
         /// </summary>
-        public async Task<List<ModelRunnerStatus>> GetRunnerStatusesAsync(CancellationToken token = default)
+        public async Task<List<ModelRunnerStatus>> GetRunnerStatusesAsync(bool includeLiveStatus = true, CancellationToken token = default)
         {
             List<ModelRunnerStatus> statuses = new List<ModelRunnerStatus>();
 
@@ -101,6 +101,23 @@ namespace Wilson.Core.Services
                     HealthCheckUseAuth = runnerDefaults.HealthCheckUseAuth
                 };
 
+                if (!includeLiveStatus)
+                {
+                    status.AvailableModels = new List<string>(runner.Models);
+                    ModelCapabilityClassification nameClassification = ClassifyModelsFromNames(status.AvailableModels);
+                    status.ChatModels = nameClassification.ChatModels;
+                    status.EmbeddingModels = nameClassification.EmbeddingModels;
+                    status.Models = new List<string>(status.ChatModels);
+                    status.Online = true;
+                    status.StatusMessage = "Live model status not queried.";
+                    statuses.Add(status);
+                    continue;
+                }
+
+                using CancellationTokenSource statusTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                statusTimeout.CancelAfter(Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs));
+                CancellationToken statusToken = statusTimeout.Token;
+
                 try
                 {
                     if (runner.Models.Count > 0)
@@ -109,24 +126,33 @@ namespace Wilson.Core.Services
                     }
                     else if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
                     {
-                        status.AvailableModels = await ListModelsAsync(runner, token).ConfigureAwait(false);
+                        status.AvailableModels = await ListModelsAsync(runner, statusToken).ConfigureAwait(false);
                     }
 
                     if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
                     {
-                        status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, token).ConfigureAwait(false);
+                        status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, statusToken).ConfigureAwait(false);
                     }
 
-                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, token).ConfigureAwait(false);
+                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, statusToken).ConfigureAwait(false);
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
                     status.Models = new List<string>(status.ChatModels);
                     status.Online = true;
                     status.StatusMessage = "Connected";
                 }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
+                    status.ChatModels = classification.ChatModels;
+                    status.EmbeddingModels = classification.EmbeddingModels;
+                    status.Models = new List<string>(status.ChatModels);
+                    status.Online = false;
+                    status.StatusMessage = "Live model status timed out after " + runnerDefaults.HealthCheckTimeoutMs + "ms.";
+                }
                 catch (Exception ex)
                 {
-                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, token).ConfigureAwait(false);
+                    ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
                     status.Models = new List<string>(status.ChatModels);
@@ -344,6 +370,20 @@ namespace Wilson.Core.Services
                     : GetModelCapabilityFromName(model);
 
                 if (capability == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
+                else classification.ChatModels.Add(model);
+            }
+
+            classification.ChatModels = classification.ChatModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            classification.EmbeddingModels = classification.EmbeddingModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            return classification;
+        }
+
+        private static ModelCapabilityClassification ClassifyModelsFromNames(List<string> models)
+        {
+            ModelCapabilityClassification classification = new ModelCapabilityClassification();
+            foreach (string model in models.Where(item => !String.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (GetModelCapabilityFromName(model) == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
                 else classification.ChatModels.Add(model);
             }
 

@@ -292,7 +292,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             if (path == "/v1.0/api/model-runners" && method == "GET")
             {
-                List<ModelRunnerStatus> statuses = await Inference.GetRunnerStatusesAsync(ctx.Token).ConfigureAwait(false);
+                bool includeLiveStatus = !String.Equals(Query(ctx, "includeLiveStatus"), "false", StringComparison.OrdinalIgnoreCase);
+                List<ModelRunnerStatus> statuses = await Inference.GetRunnerStatusesAsync(includeLiveStatus, ctx.Token).ConfigureAwait(false);
                 AttachHealth(statuses);
                 await SendJsonAsync(ctx, Enumerate(statuses, Enumeration(ctx))).ConfigureAwait(false);
                 return;

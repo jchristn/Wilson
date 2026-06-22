@@ -330,6 +330,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .permission-panel span { color: var(--text); overflow-wrap: anywhere; }
 
 .model-server-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.model-live-refresh { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 10px; margin: -6px 0 14px; font-size: 13px; }
 .model-server-card, .empty-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 16px; box-shadow: var(--shadow); }
 .model-server-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .model-server-card h2 { margin: 0 0 6px; font-size: 18px; }

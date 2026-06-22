@@ -40,9 +40,13 @@ namespace Wilson.Sdk
             return result;
         }
 
-        public Task<EnumerationResult<ModelRunnerStatus>> GetModelRunnersAsync(int pageNumber = 1, int pageSize = 100, CancellationToken token = default)
+        public Task<EnumerationResult<ModelRunnerStatus>> GetModelRunnersAsync(int pageNumber = 1, int pageSize = 100, bool includeLiveStatus = true, CancellationToken token = default)
         {
-            return SendAsync<EnumerationResult<ModelRunnerStatus>>(HttpMethod.Get, "/v1.0/api/model-runners?pageNumber=" + pageNumber + "&pageSize=" + pageSize, null, token);
+            return SendAsync<EnumerationResult<ModelRunnerStatus>>(
+                HttpMethod.Get,
+                "/v1.0/api/model-runners?pageNumber=" + pageNumber + "&pageSize=" + pageSize + "&includeLiveStatus=" + includeLiveStatus.ToString().ToLowerInvariant(),
+                null,
+                token);
         }
 
         public Task<List<EndpointHealthStatus>> GetModelRunnerHealthAsync(CancellationToken token = default)

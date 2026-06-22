@@ -875,14 +875,42 @@ function ModelServersView({ api }) {
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [liveLoading, setLiveLoading] = useState(false);
   const [editServer, setEditServer] = useState(null);
   const [deleteServer, setDeleteServer] = useState(null);
+  const refreshLiveStatus = useCallback(async () => {
+    setLiveLoading(true);
+    try {
+      const [runnerItems, healthItems] = await Promise.all([
+        api.runners({ pageNumber: 1, pageSize: 500 }),
+        api.runnerHealth().catch(() => [])
+      ]);
+      const liveItems = enumerationObjects(runnerItems);
+      const liveMap = Object.fromEntries(liveItems.map(item => [item.id, item]));
+      const healthMap = healthMapFromList(healthItems);
+      setServers(current => {
+        const currentIds = new Set(current.map(item => item.id));
+        const merged = current.map(server => {
+          const live = liveMap[server.id];
+          return live ? { ...server, ...live, health: live.health || healthMap[server.id] || server.health } : { ...server, health: healthMap[server.id] || server.health };
+        });
+        liveItems.forEach(item => {
+          if (!currentIds.has(item.id)) merged.push({ ...item, health: item.health || healthMap[item.id] });
+        });
+        return merged;
+      });
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setLiveLoading(false);
+    }
+  }, [api]);
   const load = useCallback(async () => {
     setLoading(true);
     try {
       setError('');
       const [runnerItems, settingItems, healthItems] = await Promise.all([
-        api.runners({ pageNumber: 1, pageSize: 500 }),
+        api.runners({ pageNumber: 1, pageSize: 500, includeLiveStatus: false }),
         api.settings(),
         api.runnerHealth().catch(() => [])
       ]);
@@ -894,7 +922,8 @@ function ModelServersView({ api }) {
     } finally {
       setLoading(false);
     }
-  }, [api]);
+    refreshLiveStatus();
+  }, [api, refreshLiveStatus]);
   useEffect(() => { load(); }, [load]);
 
   const totals = useMemo(() => {
@@ -935,10 +964,11 @@ function ModelServersView({ api }) {
       <PageIntro title="Model Servers" description="Review configured model runners, see available and loaded models, pull Ollama models, and manage model server settings." actions={
         <div className="page-actions">
           <button className="primary" title="Add a configured model server to Wilson settings" onClick={() => setEditServer(newModelRunner())}><Plus size={16} />Add</button>
-          <button className="icon-button" title={loading ? 'Reloading model server status and Ollama model lists' : 'Reload model server status and query Ollama for available and loaded models'} onClick={load} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
+          <button className="icon-button" title={loading ? 'Reloading configured model servers and cached health' : 'Reload model servers, cached health, and refresh live model details in the background'} onClick={load} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
         </div>
       } />
       {error && <PermissionPanel message={error} />}
+      {liveLoading && <div className="model-live-refresh" title="Wilson is refreshing available and loaded model details without blocking the table"><RefreshCw size={14} className="spin" />Refreshing live model details...</div>}
       <div className="request-summary-grid">
         <MetricCard icon={Server} label="Servers" value={servers.length} />
         <MetricCard icon={Activity} label="Healthy" value={totals.healthy} tone={totals.healthy > 0 ? 'success' : ''} />
