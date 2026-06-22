@@ -102,6 +102,7 @@ const defaultCompletionSettings = {
 };
 
 const lastConversationStorageKey = 'wilson.chat.lastConversationId';
+const compactHealthHistorySampleLimit = 10;
 
 const fieldMeta = {
   id: ['ID', 'Unique record identifier. Click the copy button to copy it.'],
@@ -1027,6 +1028,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
   const loaded = server.loadedModels || [];
   const healthPresentation = modelServerHealthPresentation(server);
   const history = healthHistory(server.health);
+  const compactHistoryCount = Math.min(history.length, compactHealthHistorySampleLimit);
   const [pullOpen, setPullOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   return (
@@ -1059,7 +1061,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       <div className="server-health-line" title="Recent background health checks for this model server">
         <div>
           <label>Health history</label>
-          <span>{history.length ? `${history.length} recent check${history.length === 1 ? '' : 's'}` : (server.healthCheckEnabled === false ? 'Disabled' : 'Awaiting check')}</span>
+          <span>{history.length ? `${compactHistoryCount} recent check${compactHistoryCount === 1 ? '' : 's'}` : (server.healthCheckEnabled === false ? 'Disabled' : 'Awaiting check')}</span>
         </div>
         <HealthHistogram history={history} width={150} height={20} />
         <button className="secondary compact-button" title={`Open health details for ${server.name || server.id}`} onClick={() => setHealthOpen(true)}><Activity size={15} />Details</button>
@@ -1077,7 +1079,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
 }
 
 function HealthHistogram({ history, width = 120, height = 24, fill = false }) {
-  const records = (history || []).slice(fill ? -96 : -32);
+  const records = (history || []).slice(fill ? -96 : -compactHealthHistorySampleLimit);
   if (!records.length) return <div className={fill ? 'health-histogram fill empty' : 'health-histogram empty'} style={{ width: fill ? undefined : width, height }} title="No health check history yet" />;
   return (
     <div className={fill ? 'health-histogram fill' : 'health-histogram'} style={{ width: fill ? undefined : width, height }} title="Recent health check history">
