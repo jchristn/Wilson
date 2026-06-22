@@ -154,6 +154,7 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 
 Model server list responses also include the latest health snapshot when health checks are enabled.
 Use `GET /v1.0/api/model-runners?includeLiveStatus=false` to return configured servers and cached health without waiting on upstream model list or loaded-model calls.
+The dashboard refreshes model server health summaries and health detail modals every 15 seconds.
 
 ## SDKs And Postman
 

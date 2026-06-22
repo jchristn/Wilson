@@ -346,7 +346,7 @@ namespace Wilson.Core.Models
         public DateTime? LastCheckUtc { get; set; }
         /// <summary>Last transition to healthy.</summary>
         public DateTime? LastHealthyUtc { get; set; }
-        /// <summary>Last transition to unhealthy.</summary>
+        /// <summary>Most recent unhealthy transition, or first failed check before initial recovery.</summary>
         public DateTime? LastUnhealthyUtc { get; set; }
         /// <summary>Last transition in either direction.</summary>
         public DateTime? LastStateChangeUtc { get; set; }
@@ -389,7 +389,7 @@ namespace Wilson.Core.Models
         public DateTime? LastCheckUtc { get; set; }
         /// <summary>Last transition to healthy.</summary>
         public DateTime? LastHealthyUtc { get; set; }
-        /// <summary>Last transition to unhealthy.</summary>
+        /// <summary>Most recent unhealthy transition, or first failed check before initial recovery.</summary>
         public DateTime? LastUnhealthyUtc { get; set; }
         /// <summary>Last transition in either direction.</summary>
         public DateTime? LastStateChangeUtc { get; set; }

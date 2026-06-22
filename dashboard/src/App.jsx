@@ -103,6 +103,7 @@ const defaultCompletionSettings = {
 
 const lastConversationStorageKey = 'wilson.chat.lastConversationId';
 const compactHealthHistorySampleLimit = 10;
+const modelServerHealthRefreshIntervalMs = 15000;
 
 const fieldMeta = {
   id: ['ID', 'Unique record identifier. Click the copy button to copy it.'],
@@ -854,6 +855,25 @@ function healthHistory(health) {
   return healthField(health, 'history') || [];
 }
 
+function mergeHealthSnapshot(previous, latest) {
+  if (!latest) return previous || null;
+  const previousLastUnhealthy = healthField(previous, 'lastUnhealthyUtc');
+  if (previousLastUnhealthy && !healthField(latest, 'lastUnhealthyUtc')) {
+    return { ...latest, lastUnhealthyUtc: previousLastUnhealthy };
+  }
+  return latest;
+}
+
+function lastUnhealthyTimestamp(health) {
+  const direct = healthField(health, 'lastUnhealthyUtc');
+  if (direct) return direct;
+  const history = healthHistory(health);
+  for (let index = history.length - 1; index >= 0; index--) {
+    if (healthField(history[index], 'success') === false) return healthField(history[index], 'timestampUtc');
+  }
+  return undefined;
+}
+
 function healthMapFromList(items) {
   const map = {};
   (Array.isArray(items) ? items : enumerationObjects(items)).forEach(item => {
@@ -879,6 +899,14 @@ function ModelServersView({ api }) {
   const [liveLoading, setLiveLoading] = useState(false);
   const [editServer, setEditServer] = useState(null);
   const [deleteServer, setDeleteServer] = useState(null);
+  const refreshHealthStatus = useCallback(async () => {
+    try {
+      const healthMap = healthMapFromList(await api.runnerHealth());
+      setServers(current => current.map(server => ({ ...server, health: mergeHealthSnapshot(server.health, healthMap[server.id]) })));
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  }, [api]);
   const refreshLiveStatus = useCallback(async () => {
     setLiveLoading(true);
     try {
@@ -893,10 +921,11 @@ function ModelServersView({ api }) {
         const currentIds = new Set(current.map(item => item.id));
         const merged = current.map(server => {
           const live = liveMap[server.id];
-          return live ? { ...server, ...live, health: live.health || healthMap[server.id] || server.health } : { ...server, health: healthMap[server.id] || server.health };
+          const health = mergeHealthSnapshot(server.health, healthMap[server.id] || live?.health);
+          return live ? { ...server, ...live, health } : { ...server, health };
         });
         liveItems.forEach(item => {
-          if (!currentIds.has(item.id)) merged.push({ ...item, health: item.health || healthMap[item.id] });
+          if (!currentIds.has(item.id)) merged.push({ ...item, health: mergeHealthSnapshot(null, healthMap[item.id] || item.health) });
         });
         return merged;
       });
@@ -916,7 +945,7 @@ function ModelServersView({ api }) {
         api.runnerHealth().catch(() => [])
       ]);
       const healthMap = healthMapFromList(healthItems);
-      setServers(enumerationObjects(runnerItems).map(item => ({ ...item, health: item.health || healthMap[item.id] })));
+      setServers(enumerationObjects(runnerItems).map(item => ({ ...item, health: mergeHealthSnapshot(null, healthMap[item.id] || item.health) })));
       setSettings(settingItems);
     } catch (err) {
       setError(String(err.message || err));
@@ -926,6 +955,10 @@ function ModelServersView({ api }) {
     refreshLiveStatus();
   }, [api, refreshLiveStatus]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const interval = setInterval(refreshHealthStatus, modelServerHealthRefreshIntervalMs);
+    return () => clearInterval(interval);
+  }, [refreshHealthStatus]);
 
   const totals = useMemo(() => {
     const available = servers.reduce((sum, server) => sum + (server.availableModels || server.models || []).length, 0);
@@ -1099,24 +1132,29 @@ function ModelServerHealthModal({ server, api, onClose }) {
   const displayServer = { ...server, health };
   const presentation = modelServerHealthPresentation(displayServer);
   const history = healthHistory(health);
+  const lastUnhealthy = lastUnhealthyTimestamp(health);
 
   useEffect(() => {
     let active = true;
-    async function load() {
+    async function load(showLoading = true) {
       if (server.healthCheckEnabled === false) return;
-      setLoading(true);
+      if (showLoading) setLoading(true);
       setError('');
       try {
         const latest = await api.runnerHealthById(server.id);
-        if (active) setHealth(latest);
+        if (active) setHealth(current => mergeHealthSnapshot(current, latest));
       } catch (err) {
         if (active) setError(String(err.message || err));
       } finally {
-        if (active) setLoading(false);
+        if (active && showLoading) setLoading(false);
       }
     }
     load();
-    return () => { active = false; };
+    const interval = server.healthCheckEnabled === false ? null : setInterval(() => load(false), modelServerHealthRefreshIntervalMs);
+    return () => {
+      active = false;
+      if (interval) clearInterval(interval);
+    };
   }, [api, server.id, server.healthCheckEnabled]);
 
   return (
@@ -1157,7 +1195,7 @@ function ModelServerHealthModal({ server, api, onClose }) {
           <div className="health-timestamp-item" title="When monitoring began for this model server"><span className="health-timestamp-label">First check</span><span className="health-timestamp-value">{formatDate(healthField(health, 'firstCheckUtc')) || '-'}</span></div>
           <div className="health-timestamp-item" title="Most recent health probe time"><span className="health-timestamp-label">Last check</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastCheckUtc')) || '-'}</span></div>
           <div className="health-timestamp-item" title="Most recent healthy transition"><span className="health-timestamp-label">Last healthy</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastHealthyUtc')) || '-'}</span></div>
-          <div className="health-timestamp-item" title="Most recent unhealthy transition"><span className="health-timestamp-label">Last unhealthy</span><span className="health-timestamp-value">{formatDate(healthField(health, 'lastUnhealthyUtc')) || '-'}</span></div>
+          <div className="health-timestamp-item" title="Most recent unhealthy transition or failed health check"><span className="health-timestamp-label">Last unhealthy</span><span className="health-timestamp-value">{formatDate(lastUnhealthy) || '-'}</span></div>
         </div>
 
         <div className="health-config-table">

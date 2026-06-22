@@ -18,6 +18,7 @@ The Model Servers view shows:
 - Aggregate healthy, unhealthy, and awaiting-check counts
 - Per-server health badges
 - Recent health check histograms
+- Automatic health refresh every 15 seconds on the page and health detail modal
 - Health detail modal with uptime, consecutive success/failure counts, last error, timestamps, history, and probe configuration
 - Health-check settings in both the Model Server editor and Settings page
 

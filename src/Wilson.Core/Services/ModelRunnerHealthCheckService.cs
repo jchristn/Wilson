@@ -291,6 +291,10 @@ namespace Wilson.Core.Services
                     state.ConsecutiveFailures++;
                     state.ConsecutiveSuccesses = 0;
                     state.LastError = errorMessage;
+                    if (!state.IsHealthy && !state.LastUnhealthyUtc.HasValue)
+                    {
+                        state.LastUnhealthyUtc = now;
+                    }
 
                     if (state.IsHealthy && state.ConsecutiveFailures >= runner.UnhealthyThreshold)
                     {

@@ -86,12 +86,14 @@ namespace Test.Shared
 
         private static void HealthStatusSnapshot()
         {
+            DateTime lastUnhealthy = DateTime.UtcNow.AddSeconds(-3);
             EndpointHealthState state = new EndpointHealthState
             {
                 EndpointId = "runner-1",
                 EndpointName = "Runner 1",
                 IsHealthy = true,
                 FirstCheckUtc = DateTime.UtcNow.AddSeconds(-2),
+                LastUnhealthyUtc = lastUnhealthy,
                 LastStateChangeUtc = DateTime.UtcNow.AddSeconds(-1),
                 ConsecutiveSuccesses = 2
             };
@@ -102,6 +104,7 @@ namespace Test.Shared
 
             EndpointHealthStatus status = EndpointHealthStatus.FromState(state);
             if (!status.IsHealthy) throw new InvalidOperationException("Expected health status to be healthy.");
+            if (status.LastUnhealthyUtc != lastUnhealthy) throw new InvalidOperationException("Expected last unhealthy timestamp to be preserved.");
             if (status.UptimePercentage <= 0) throw new InvalidOperationException("Expected positive uptime percentage.");
             if (status.History.Count != 1) throw new InvalidOperationException("Expected health history snapshot.");
         }
