@@ -5,6 +5,7 @@ namespace Wilson.Server
     using System.Diagnostics;
     using System.IO;
     using System.Linq;
+    using System.Reflection;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
@@ -818,28 +819,97 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             return new
             {
                 openapi = "3.0.1",
-                info = new { title = "Wilson API", version = "1.0.0" },
+                info = new
+                {
+                    title = "Wilson API",
+                    version = "1.0.0",
+                    description = "Local-first chat, model runner, tenant, request history, feedback, and settings API."
+                },
+                servers = new[] { new { url = "/" } },
+                tags = new[]
+                {
+                    new { name = "System", description = "Health, OpenAPI, and Swagger UI endpoints." },
+                    new { name = "Authentication", description = "Token validation and current principal metadata." },
+                    new { name = "Model Runners", description = "Configured model runner inventory, health, and Ollama model actions." },
+                    new { name = "Administration", description = "Settings, tenants, users, and credentials." },
+                    new { name = "Chat", description = "Conversations, messages, and model chat requests." },
+                    new { name = "Feedback", description = "User feedback capture and review." },
+                    new { name = "Request History", description = "Captured request metadata, timing, and summaries." }
+                },
                 paths = new Dictionary<string, object>
                 {
-                    { "/v1.0/auth/token", new { post = new { summary = "Authenticate with an access key" } } },
-                    { "/swagger", new { get = new { summary = "Swagger UI" } } },
-                    { "/v1.0/api/me", new { get = new { summary = "Current principal" } } },
-                    { "/v1.0/api/model-runners", new { get = new { summary = "List model servers" } } },
-                    { "/v1.0/api/model-runners/health", new { get = new { summary = "List model server health" } } },
-                    { "/v1.0/api/model-runners/{id}/health", new { get = new { summary = "Get model server health" } } },
-                    { "/v1.0/api/model-runners/{id}/pull", new { post = new { summary = "Pull an Ollama model" } } },
-                    { "/v1.0/api/model-runners/{id}/load", new { post = new { summary = "Load an Ollama model into memory" } } },
-                    { "/v1.0/api/chat", new { post = new { summary = "Non-streaming chat" } } },
-                    { "/v1.0/api/chat/stream", new { post = new { summary = "Streaming chat over SSE" } } },
-                    { "/v1.0/api/conversations", new { get = new { summary = "List conversations" }, post = new { summary = "Create conversation" } } },
-                    { "/v1.0/api/conversations/{id}", new { put = new { summary = "Update conversation" }, delete = new { summary = "Delete conversation" } } },
-                    { "/v1.0/api/tenants", new { get = new { summary = "List tenants" }, post = new { summary = "Create tenant" } } },
-                    { "/v1.0/api/users", new { get = new { summary = "List users" }, post = new { summary = "Create user" } } },
-                    { "/v1.0/api/credentials", new { get = new { summary = "List credentials" }, post = new { summary = "Create credential" } } },
-                    { "/v1.0/api/feedback", new { get = new { summary = "List feedback" }, post = new { summary = "Create feedback" } } },
-                    { "/v1.0/api/request-history", new { get = new { summary = "List request history" } } },
-                    { "/v1.0/api/request-history/summary", new { get = new { summary = "Request history summary" } } },
-                    { "/v1.0/api/settings", new { get = new { summary = "Read settings" }, put = new { summary = "Update settings" } } }
+                    { "/", Path(Operation("get", "getRootHealth", "System", "Root health check", "Returns basic Wilson service health.", "HealthResponse", false)) },
+                    { "/health", Path(Operation("get", "getHealth", "System", "Health check", "Returns basic Wilson service health.", "HealthResponse", false)) },
+                    { "/v1.0/api/health", Path(Operation("get", "getVersionedHealth", "System", "Versioned health check", "Returns basic Wilson service health.", "HealthResponse", false)) },
+                    { "/openapi.json", Path(Operation("get", "getOpenApiDocument", "System", "OpenAPI document", "Returns the Wilson OpenAPI JSON document.", "OpenApiDocument", false)) },
+                    { "/swagger", Path(Operation("get", "getSwaggerUi", "System", "Swagger UI", "Serves the Swagger UI for this Wilson server.", "HtmlDocument", false, responseContentType: "text/html")) },
+                    { "/v1.0/auth/token", Path(Operation("post", "authenticateWithAccessKey", "Authentication", "Authenticate with an access key", "Validates a Wilson access key and returns the bearer token plus principal metadata.", "AuthTokenResponse", false, requestSchema: "AuthTokenRequest")) },
+                    { "/v1.0/api/me", Path(Operation("get", "getCurrentPrincipal", "Authentication", "Current principal", "Returns the authenticated user or administrator represented by the bearer token.", "RequestContext", true)) },
+                    { "/v1.0/api/model-runners", Path(Operation("get", "listModelRunners", "Model Runners", "List model runners", "Lists configured model runners with model inventory and health metadata.", "ModelRunnerStatusEnumeration", true, parameters: WithPagination(QueryParameter("includeLiveStatus", "When false, skips live upstream model inventory refreshes.", BooleanSchema())))) },
+                    { "/v1.0/api/model-runners/health", Path(Operation("get", "listModelRunnerHealth", "Model Runners", "List model runner health", "Lists the latest health status for all model runners with health checks enabled.", "EndpointHealthStatusArray", true)) },
+                    { "/v1.0/api/model-runners/{id}/health", Path(Operation("get", "getModelRunnerHealth", "Model Runners", "Get model runner health", "Returns the latest health status for one model runner.", "EndpointHealthStatus", true, parameters: Parameters(PathParameter("id", "Model runner identifier.")))) },
+                    { "/v1.0/api/model-runners/{id}/pull", Path(Operation("post", "pullOllamaModel", "Model Runners", "Pull an Ollama model", "Starts an Ollama model pull for the selected model runner. Requires a global administrator bearer token.", "ModelPullResult", true, parameters: Parameters(PathParameter("id", "Model runner identifier.")), requestSchema: "ModelPullRequest")) },
+                    { "/v1.0/api/model-runners/{id}/load", Path(Operation("post", "loadOllamaModel", "Model Runners", "Load an Ollama model into memory", "Loads an Ollama model for the selected model runner.", "ModelPullResult", true, parameters: Parameters(PathParameter("id", "Model runner identifier.")), requestSchema: "ModelPullRequest")) },
+                    { "/v1.0/api/settings", Path(
+                        Operation("get", "getSettings", "Administration", "Read settings", "Returns the active Wilson settings. Requires a global administrator bearer token.", "Settings", true),
+                        Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
+                    { "/v1.0/api/tenants", Path(
+                        Operation("get", "listTenants", "Administration", "List tenants", "Lists tenant records. Requires a global administrator bearer token.", "TenantEnumeration", true, parameters: WithPagination()),
+                        Operation("post", "createTenant", "Administration", "Create tenant", "Creates a tenant record. Requires a global administrator bearer token.", "Tenant", true, requestSchema: "Tenant", successStatus: "201", successDescription: "Tenant created.")) },
+                    { "/v1.0/api/tenants/{id}", Path(
+                        Operation("get", "getTenant", "Administration", "Get tenant", "Gets a tenant record by identifier. Requires a global administrator bearer token.", "Tenant", true, parameters: Parameters(PathParameter("id", "Tenant identifier."))),
+                        Operation("put", "updateTenant", "Administration", "Update tenant", "Updates a tenant record. Requires a global administrator bearer token.", "Tenant", true, parameters: Parameters(PathParameter("id", "Tenant identifier.")), requestSchema: "Tenant"),
+                        Operation("delete", "deleteTenant", "Administration", "Delete tenant", "Deletes a tenant record. Requires a global administrator bearer token.", null, true, parameters: Parameters(PathParameter("id", "Tenant identifier.")), successStatus: "204", successDescription: "Tenant deleted.")) },
+                    { "/v1.0/api/users", Path(
+                        Operation("get", "listUsers", "Administration", "List users", "Lists users for the authenticated tenant administrator or, for global administrators, an optional tenant scope.", "UserEnumeration", true, parameters: WithPagination(TenantScopeParameter())),
+                        Operation("post", "createUser", "Administration", "Create user", "Creates a user. Tenant administrators create users in their own tenant; global administrators can set tenantId in the body.", "User", true, requestSchema: "User", successStatus: "201", successDescription: "User created.")) },
+                    { "/v1.0/api/users/{id}", Path(
+                        Operation("get", "getUser", "Administration", "Get user", "Gets a user by identifier.", "User", true, parameters: Parameters(PathParameter("id", "User identifier."), TenantScopeParameter())),
+                        Operation("put", "updateUser", "Administration", "Update user", "Updates a user by identifier.", "User", true, parameters: Parameters(PathParameter("id", "User identifier."), TenantScopeParameter()), requestSchema: "User"),
+                        Operation("delete", "deleteUser", "Administration", "Delete user", "Deletes a user by identifier.", null, true, parameters: Parameters(PathParameter("id", "User identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "User deleted.")) },
+                    { "/v1.0/api/credentials", Path(
+                        Operation("get", "listCredentials", "Administration", "List credentials", "Lists credentials for the authenticated tenant administrator or, for global administrators, an optional tenant scope.", "CredentialEnumeration", true, parameters: WithPagination(TenantScopeParameter())),
+                        Operation("post", "createCredential", "Administration", "Create credential", "Creates a credential. Tenant administrators create credentials in their own tenant; global administrators can set tenantId in the body.", "Credential", true, requestSchema: "Credential", successStatus: "201", successDescription: "Credential created.")) },
+                    { "/v1.0/api/credentials/{id}", Path(
+                        Operation("get", "getCredential", "Administration", "Get credential", "Gets a credential by identifier.", "Credential", true, parameters: Parameters(PathParameter("id", "Credential identifier."), TenantScopeParameter())),
+                        Operation("put", "updateCredential", "Administration", "Update credential", "Updates credential metadata while preserving its access key.", "Credential", true, parameters: Parameters(PathParameter("id", "Credential identifier."), TenantScopeParameter()), requestSchema: "Credential"),
+                        Operation("delete", "deleteCredential", "Administration", "Delete credential", "Deletes a credential by identifier.", null, true, parameters: Parameters(PathParameter("id", "Credential identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "Credential deleted.")) },
+                    { "/v1.0/api/conversations", Path(
+                        Operation("get", "listConversations", "Chat", "List conversations", "Lists conversations visible to the authenticated principal.", "ConversationEnumeration", true, parameters: WithPagination()),
+                        Operation("post", "createConversation", "Chat", "Create conversation", "Creates a conversation owned by the authenticated principal.", "Conversation", true, requestSchema: "Conversation", successStatus: "201", successDescription: "Conversation created.")) },
+                    { "/v1.0/api/conversations/{id}", Path(
+                        Operation("put", "updateConversation", "Chat", "Update conversation", "Updates conversation metadata.", "Conversation", true, parameters: Parameters(PathParameter("id", "Conversation identifier.")), requestSchema: "Conversation"),
+                        Operation("delete", "deleteConversation", "Chat", "Delete conversation", "Deletes a conversation and its associated messages and feedback.", null, true, parameters: Parameters(PathParameter("id", "Conversation identifier.")), successStatus: "204", successDescription: "Conversation deleted.")) },
+                    { "/v1.0/api/conversations/{id}/messages", Path(Operation("get", "listConversationMessages", "Chat", "List conversation messages", "Lists messages for a conversation visible to the authenticated principal.", "ChatMessageEnumeration", true, parameters: WithPagination(PathParameter("id", "Conversation identifier.")))) },
+                    { "/v1.0/api/chat", Path(Operation("post", "createChatCompletion", "Chat", "Non-streaming chat", "Sends a prompt to a chat-capable model and stores the user and assistant messages.", "ChatResponse", true, requestSchema: "ChatRequest")) },
+                    { "/v1.0/api/chat/stream", Path(Operation("post", "streamChatCompletion", "Chat", "Streaming chat over SSE", "Streams model output as server-sent events and stores the completed assistant message.", "SseEventStream", true, requestSchema: "ChatRequest", responseContentType: "text/event-stream")) },
+                    { "/v1.0/api/feedback", Path(
+                        Operation("get", "listFeedback", "Feedback", "List feedback", "Lists feedback for review. Requires tenant administrator or global administrator access.", "FeedbackEnumeration", true, parameters: WithPagination(TenantScopeParameter())),
+                        Operation("post", "createFeedback", "Feedback", "Create feedback", "Creates feedback for a conversation message owned by the authenticated principal.", "Feedback", true, requestSchema: "Feedback", successStatus: "201", successDescription: "Feedback created.")) },
+                    { "/v1.0/api/request-history", Path(Operation("get", "listRequestHistory", "Request History", "List request history", "Lists captured request history. Requires tenant administrator or global administrator access.", "RequestHistoryEntryEnumeration", true, parameters: WithPagination(TenantScopeParameter()))) },
+                    { "/v1.0/api/request-history/summary", Path(Operation("get", "summarizeRequestHistory", "Request History", "Request history summary", "Summarizes captured request history over a UTC time range. Requires tenant administrator or global administrator access.", "RequestHistorySummary", true, parameters: Parameters(
+                        TenantScopeParameter(),
+                        QueryParameter("fromUtc", "Inclusive UTC start timestamp. Defaults to 24 hours ago.", StringSchema("date-time")),
+                        QueryParameter("toUtc", "Inclusive UTC end timestamp. Defaults to now.", StringSchema("date-time")),
+                        QueryParameter("bucketMinutes", "Bucket size in minutes. Defaults to 60.", IntegerSchema())))) },
+                    { "/v1.0/api/request-history/{id}", Path(Operation("delete", "deleteRequestHistoryEntry", "Request History", "Delete request history entry", "Deletes one captured request history entry. Requires tenant administrator or global administrator access.", null, true, parameters: Parameters(PathParameter("id", "Request history entry identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "Request history entry deleted.")) }
+                },
+                components = new
+                {
+                    securitySchemes = new Dictionary<string, object>
+                    {
+                        {
+                            "bearerAuth",
+                            new
+                            {
+                                type = "http",
+                                scheme = "bearer",
+                                bearerFormat = "Wilson access key or admin token",
+                                description = "Paste a Wilson user access key or admin bearer token. Swagger UI sends it as the Authorization bearer token."
+                            }
+                        }
+                    },
+                    schemas = OpenApiSchemas()
                 }
             };
         }
@@ -856,10 +926,330 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 <body>
   <div id="swagger-ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-  <script>window.onload = () => SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' });</script>
+  <script>
+    window.onload = () => SwaggerUIBundle({
+      url: '/openapi.json',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      displayRequestDuration: true,
+      persistAuthorization: true,
+      tryItOutEnabled: true
+    });
+  </script>
 </body>
 </html>
 """;
+        }
+
+        private static Dictionary<string, object> Path(params KeyValuePair<string, object>[] operations)
+        {
+            Dictionary<string, object> path = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, object> operation in operations) path[operation.Key] = operation.Value;
+            return path;
+        }
+
+        private static KeyValuePair<string, object> Operation(
+            string method,
+            string operationId,
+            string tag,
+            string summary,
+            string description,
+            string? responseSchema,
+            bool auth,
+            object[]? parameters = null,
+            string? requestSchema = null,
+            string successStatus = "200",
+            string successDescription = "OK",
+            string responseContentType = "application/json")
+        {
+            Dictionary<string, object> operation = new Dictionary<string, object>
+            {
+                { "operationId", operationId },
+                { "tags", new[] { tag } },
+                { "summary", summary },
+                { "description", description },
+                { "responses", Responses(responseSchema, successStatus, successDescription, responseContentType, auth) }
+            };
+
+            if (parameters != null && parameters.Length > 0) operation["parameters"] = parameters;
+            if (!String.IsNullOrWhiteSpace(requestSchema)) operation["requestBody"] = RequestBody(requestSchema);
+            if (auth) operation["security"] = new object[] { new Dictionary<string, object> { { "bearerAuth", Array.Empty<string>() } } };
+
+            return new KeyValuePair<string, object>(method, operation);
+        }
+
+        private static Dictionary<string, object> Responses(string? responseSchema, string successStatus, string successDescription, string responseContentType, bool auth)
+        {
+            Dictionary<string, object> responses = new Dictionary<string, object>
+            {
+                {
+                    successStatus,
+                    String.IsNullOrWhiteSpace(responseSchema)
+                        ? new Dictionary<string, object> { { "description", successDescription } }
+                        : Response(successDescription, responseSchema, responseContentType)
+                },
+                { "400", Response("Invalid request.", "ErrorResponse") },
+                { "404", Response("Resource not found.", "ErrorResponse") },
+                { "500", Response("Server error.", "ErrorResponse") }
+            };
+
+            if (auth) responses["401"] = Response("Authentication or authorization failed.", "ErrorResponse");
+            return responses;
+        }
+
+        private static Dictionary<string, object> Response(string description, string schemaName, string contentType = "application/json")
+        {
+            return new Dictionary<string, object>
+            {
+                { "description", description },
+                {
+                    "content",
+                    new Dictionary<string, object>
+                    {
+                        { contentType, new Dictionary<string, object> { { "schema", SchemaRef(schemaName) } } }
+                    }
+                }
+            };
+        }
+
+        private static Dictionary<string, object> RequestBody(string schemaName)
+        {
+            return new Dictionary<string, object>
+            {
+                { "required", true },
+                {
+                    "content",
+                    new Dictionary<string, object>
+                    {
+                        { "application/json", new Dictionary<string, object> { { "schema", SchemaRef(schemaName) } } }
+                    }
+                }
+            };
+        }
+
+        private static object[] Parameters(params object[] parameters)
+        {
+            return parameters;
+        }
+
+        private static object[] WithPagination(params object[] additional)
+        {
+            return Parameters(
+                QueryParameter("pageNumber", "One-based page number. Defaults to 1.", IntegerSchema()),
+                QueryParameter("pageSize", "Page size. Defaults to 25 and is capped at 500.", IntegerSchema()))
+                .Concat(additional)
+                .ToArray();
+        }
+
+        private static Dictionary<string, object> PathParameter(string name, string description)
+        {
+            return Parameter(name, "path", description, StringSchema(), true);
+        }
+
+        private static Dictionary<string, object> QueryParameter(string name, string description, object schema)
+        {
+            return Parameter(name, "query", description, schema, false);
+        }
+
+        private static Dictionary<string, object> TenantScopeParameter()
+        {
+            return QueryParameter("tenantId", "Optional tenant scope for global administrators. Tenant administrators are scoped to their own tenant.", StringSchema());
+        }
+
+        private static Dictionary<string, object> Parameter(string name, string location, string description, object schema, bool required)
+        {
+            return new Dictionary<string, object>
+            {
+                { "name", name },
+                { "in", location },
+                { "description", description },
+                { "required", required },
+                { "schema", schema }
+            };
+        }
+
+        private static Dictionary<string, object> OpenApiSchemas()
+        {
+            Dictionary<string, object> schemas = new Dictionary<string, object>
+            {
+                { "ErrorResponse", ObjectSchema(Property("error", StringSchema())) },
+                { "HealthResponse", ObjectSchema(Property("status", StringSchema()), Property("service", StringSchema())) },
+                { "OpenApiDocument", new Dictionary<string, object> { { "type", "object" }, { "description", "OpenAPI 3.0 document." } } },
+                { "HtmlDocument", new Dictionary<string, object> { { "type", "string" }, { "description", "HTML document." } } },
+                { "SseEventStream", new Dictionary<string, object> { { "type", "string" }, { "description", "Server-sent event stream containing conversation, truncation, chunk, done, or error events." } } },
+                {
+                    "AuthTokenRequest",
+                    ObjectSchema(
+                        Property("accessKey", StringSchema()),
+                        Property("token", StringSchema()))
+                },
+                {
+                    "AuthTokenResponse",
+                    ObjectSchema(
+                        Property("token", StringSchema()),
+                        Property("user", SchemaRef("RequestContext")))
+                },
+                {
+                    "ChatResponse",
+                    ObjectSchema(
+                        Property("conversation", SchemaRef("Conversation")),
+                        Property("userMessage", SchemaRef("ChatMessage")),
+                        Property("assistantMessage", SchemaRef("ChatMessage")),
+                        Property("truncation", SchemaRef("ChatTruncationNotice")))
+                }
+            };
+
+            AddComponentSchema(schemas, typeof(RequestContext));
+            AddComponentSchema(schemas, typeof(ModelRunnerStatus));
+            AddComponentSchema(schemas, typeof(EndpointHealthStatus));
+            AddComponentSchema(schemas, typeof(ModelPullResult));
+            AddComponentSchema(schemas, typeof(Settings));
+            AddComponentSchema(schemas, typeof(Tenant));
+            AddComponentSchema(schemas, typeof(User));
+            AddComponentSchema(schemas, typeof(Credential));
+            AddComponentSchema(schemas, typeof(Conversation));
+            AddComponentSchema(schemas, typeof(ChatMessage));
+            AddComponentSchema(schemas, typeof(ChatTruncationNotice));
+            AddComponentSchema(schemas, typeof(ChatRequest));
+            AddComponentSchema(schemas, typeof(ModelPullRequest));
+            AddComponentSchema(schemas, typeof(Feedback));
+            AddComponentSchema(schemas, typeof(RequestHistoryEntry));
+            AddComponentSchema(schemas, typeof(RequestHistorySummary));
+
+            schemas["EndpointHealthStatusArray"] = ArraySchema(SchemaRef("EndpointHealthStatus"));
+            schemas["ModelRunnerStatusEnumeration"] = EnumerationSchema("ModelRunnerStatus");
+            schemas["TenantEnumeration"] = EnumerationSchema("Tenant");
+            schemas["UserEnumeration"] = EnumerationSchema("User");
+            schemas["CredentialEnumeration"] = EnumerationSchema("Credential");
+            schemas["ConversationEnumeration"] = EnumerationSchema("Conversation");
+            schemas["ChatMessageEnumeration"] = EnumerationSchema("ChatMessage");
+            schemas["FeedbackEnumeration"] = EnumerationSchema("Feedback");
+            schemas["RequestHistoryEntryEnumeration"] = EnumerationSchema("RequestHistoryEntry");
+
+            return schemas;
+        }
+
+        private static void AddComponentSchema(Dictionary<string, object> schemas, Type type)
+        {
+            string name = OpenApiSchemaName(type);
+            if (schemas.ContainsKey(name)) return;
+
+            schemas[name] = new Dictionary<string, object> { { "type", "object" } };
+            Dictionary<string, object> properties = new Dictionary<string, object>();
+            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            {
+                if (property.GetMethod == null || property.GetIndexParameters().Length > 0) continue;
+                if (property.GetCustomAttribute<JsonIgnoreAttribute>() != null) continue;
+                properties[JsonNamingPolicy.CamelCase.ConvertName(property.Name)] = SchemaForType(property.PropertyType, schemas);
+            }
+
+            schemas[name] = new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "properties", properties }
+            };
+        }
+
+        private static object SchemaForType(Type type, Dictionary<string, object> schemas)
+        {
+            Type? nullable = Nullable.GetUnderlyingType(type);
+            if (nullable != null) return SchemaForType(nullable, schemas);
+            if (type == typeof(string)) return StringSchema();
+            if (type == typeof(bool)) return BooleanSchema();
+            if (type == typeof(int)) return IntegerSchema();
+            if (type == typeof(long)) return IntegerSchema("int64");
+            if (type == typeof(double) || type == typeof(float) || type == typeof(decimal)) return NumberSchema();
+            if (type == typeof(DateTime) || type == typeof(DateTimeOffset)) return StringSchema("date-time");
+            if (type.IsEnum) return EnumSchema(type);
+            if (type.IsArray) return ArraySchema(SchemaForType(type.GetElementType()!, schemas));
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>)) return ArraySchema(SchemaForType(type.GetGenericArguments()[0], schemas));
+
+            AddComponentSchema(schemas, type);
+            return SchemaRef(OpenApiSchemaName(type));
+        }
+
+        private static Dictionary<string, object> EnumerationSchema(string itemSchemaName)
+        {
+            return ObjectSchema(
+                Property("objects", ArraySchema(SchemaRef(itemSchemaName))),
+                Property("pageNumber", IntegerSchema()),
+                Property("pageSize", IntegerSchema()),
+                Property("totalRecords", IntegerSchema()),
+                Property("totalPages", IntegerSchema()));
+        }
+
+        private static Dictionary<string, object> ObjectSchema(params KeyValuePair<string, object>[] properties)
+        {
+            Dictionary<string, object> propertyMap = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, object> property in properties) propertyMap[property.Key] = property.Value;
+            return new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "properties", propertyMap }
+            };
+        }
+
+        private static KeyValuePair<string, object> Property(string name, object schema)
+        {
+            return new KeyValuePair<string, object>(name, schema);
+        }
+
+        private static Dictionary<string, object> SchemaRef(string schemaName)
+        {
+            return new Dictionary<string, object> { { "$ref", "#/components/schemas/" + schemaName } };
+        }
+
+        private static Dictionary<string, object> ArraySchema(object itemSchema)
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "items", itemSchema }
+            };
+        }
+
+        private static Dictionary<string, object> StringSchema(string? format = null)
+        {
+            Dictionary<string, object> schema = new Dictionary<string, object> { { "type", "string" } };
+            if (!String.IsNullOrWhiteSpace(format)) schema["format"] = format;
+            return schema;
+        }
+
+        private static Dictionary<string, object> BooleanSchema()
+        {
+            return new Dictionary<string, object> { { "type", "boolean" } };
+        }
+
+        private static Dictionary<string, object> IntegerSchema(string format = "int32")
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "integer" },
+                { "format", format }
+            };
+        }
+
+        private static Dictionary<string, object> NumberSchema()
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "number" },
+                { "format", "double" }
+            };
+        }
+
+        private static Dictionary<string, object> EnumSchema(Type type)
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "string" },
+                { "enum", Enum.GetNames(type) }
+            };
+        }
+
+        private static string OpenApiSchemaName(Type type)
+        {
+            return type.IsGenericType ? type.Name.Split('`')[0] : type.Name;
         }
     }
 
