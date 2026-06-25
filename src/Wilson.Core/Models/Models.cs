@@ -486,6 +486,18 @@ namespace Wilson.Core.Models
         public List<string> Models { get; set; } = new List<string>();
         /// <summary>Context window for truncation.</summary>
         public int ContextWindowTokens { get; set; } = 8192;
+        /// <summary>Whether tools are enabled for this runner.</summary>
+        public bool ToolsEnabled { get; set; } = true;
+        /// <summary>Whether this runner supports tool calls.</summary>
+        public bool SupportsTools { get; set; } = true;
+        /// <summary>Tool-calling API format.</summary>
+        public string ToolCallingApiFormat { get; set; } = String.Empty;
+        /// <summary>Whether this runner supports parallel tool calls.</summary>
+        public bool SupportsParallelToolCalls { get; set; } = false;
+        /// <summary>Whether this runner supports streaming tool-call deltas.</summary>
+        public bool SupportsStreamingToolCalls { get; set; } = false;
+        /// <summary>Chat-completions path for tool-capable transports.</summary>
+        public string ChatCompletionsPath { get; set; } = String.Empty;
         /// <summary>Whether background health checks are enabled.</summary>
         public bool HealthCheckEnabled { get; set; } = true;
         /// <summary>Effective health check URL.</summary>

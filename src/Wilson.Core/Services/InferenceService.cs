@@ -4,8 +4,10 @@ namespace Wilson.Core.Services
     using System.Collections.Generic;
     using System.Linq;
     using System.Net.Http;
+    using System.Net.Http.Headers;
     using System.Text;
     using System.Text.Json;
+    using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
     using PolyPrompt.Clients;
@@ -20,6 +22,11 @@ namespace Wilson.Core.Services
     public sealed class InferenceService
     {
         private readonly Settings _Settings;
+        private static readonly JsonSerializerOptions _ToolJson = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false
+        };
 
         /// <summary>
         /// Instantiate the inference service.
@@ -90,6 +97,12 @@ namespace Wilson.Core.Services
                     Endpoint = runner.Endpoint,
                     ConfiguredModels = new List<string>(runner.Models),
                     ContextWindowTokens = runner.ContextWindowTokens,
+                    ToolsEnabled = runnerDefaults.ToolsEnabled,
+                    SupportsTools = runnerDefaults.SupportsTools,
+                    ToolCallingApiFormat = runnerDefaults.ToolCallingApiFormat,
+                    SupportsParallelToolCalls = runnerDefaults.SupportsParallelToolCalls,
+                    SupportsStreamingToolCalls = runnerDefaults.SupportsStreamingToolCalls,
+                    ChatCompletionsPath = runnerDefaults.ChatCompletionsPath,
                     HealthCheckEnabled = runnerDefaults.HealthCheckEnabled,
                     HealthCheckUrl = runnerDefaults.HealthCheckUrl,
                     HealthCheckMethod = runnerDefaults.HealthCheckMethod.ToString(),
@@ -291,6 +304,48 @@ namespace Wilson.Core.Services
         }
 
         /// <summary>
+        /// Execute a non-streaming tool-capable chat request using a provider-native chat-completions API.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <param name="request">Tool-capable request.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool-capable response.</returns>
+        public async Task<ToolCapableInferenceResponse> ChatWithToolsAsync(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token = default)
+        {
+            ArgumentNullException.ThrowIfNull(runner);
+            ArgumentNullException.ThrowIfNull(request);
+            if (request.Messages == null || request.Messages.Count == 0) throw new ArgumentException("At least one message is required.", nameof(request));
+
+            ModelRunnerSettings effectiveRunner = CopyRunner(runner);
+            ModelRunnerSettings.ApplyToolDefaults(effectiveRunner);
+            if (!effectiveRunner.ToolsEnabled || !effectiveRunner.SupportsTools)
+            {
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Runner is not configured for tool-capable requests."
+                };
+            }
+
+            string format = effectiveRunner.ToolCallingApiFormat ?? String.Empty;
+            if (String.Equals(format, "OpenAIChatCompletions", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SendOpenAIChatCompletionsWithToolsAsync(effectiveRunner, request, token).ConfigureAwait(false);
+            }
+
+            if (String.Equals(format, "OllamaChat", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SendOllamaChatWithToolsAsync(effectiveRunner, request, token).ConfigureAwait(false);
+            }
+
+            return new ToolCapableInferenceResponse
+            {
+                Success = false,
+                ErrorMessage = "Unsupported tool-calling API format '" + format + "'."
+            };
+        }
+
+        /// <summary>
         /// Execute a streaming chat request.
         /// </summary>
         public async IAsyncEnumerable<string> ChatStreamingAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
@@ -308,12 +363,373 @@ namespace Wilson.Core.Services
         }
 
         /// <summary>
+        /// Parse a provider response from a tool-capable non-streaming chat request.
+        /// </summary>
+        /// <param name="toolCallingApiFormat">Tool calling API format.</param>
+        /// <param name="responseBody">Provider response body.</param>
+        /// <returns>Parsed response.</returns>
+        public static ToolCapableInferenceResponse ParseToolCapableResponse(string toolCallingApiFormat, string responseBody)
+        {
+            if (String.IsNullOrWhiteSpace(responseBody))
+            {
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Provider returned an empty response."
+                };
+            }
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(responseBody);
+                if (String.Equals(toolCallingApiFormat, "OpenAIChatCompletions", StringComparison.OrdinalIgnoreCase))
+                    return ParseOpenAIChatCompletionsResponse(document.RootElement);
+                if (String.Equals(toolCallingApiFormat, "OllamaChat", StringComparison.OrdinalIgnoreCase))
+                    return ParseOllamaChatResponse(document.RootElement);
+
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Unsupported tool-calling API format '" + toolCallingApiFormat + "'."
+                };
+            }
+            catch (JsonException ex)
+            {
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Provider returned malformed JSON: " + ex.Message
+                };
+            }
+        }
+
+        /// <summary>
         /// Estimate token count for truncation.
         /// </summary>
         public static int EstimateTokens(string value)
         {
             if (String.IsNullOrWhiteSpace(value)) return 0;
             return Math.Max(1, value.Length / 4);
+        }
+
+        private async Task<ToolCapableInferenceResponse> SendOpenAIChatCompletionsWithToolsAsync(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token)
+        {
+            string url = ChatCompletionsUrl(runner);
+            Dictionary<string, object> body = new Dictionary<string, object>
+            {
+                ["model"] = EffectiveToolModel(runner, request),
+                ["messages"] = BuildProviderMessages(request.Messages)
+            };
+
+            if (request.MaxTokens > 0) body["max_tokens"] = request.MaxTokens;
+            body["temperature"] = request.Temperature;
+            body["top_p"] = request.TopP <= 0 ? 1 : request.TopP;
+
+            List<ModelToolDefinition> tools = NormalizeToolDefinitions(request.Tools);
+            if (tools.Count > 0)
+            {
+                body["tools"] = tools;
+                string toolChoice = NormalizeOpenAIToolChoice(request.ToolChoice);
+                if (!String.IsNullOrWhiteSpace(toolChoice)) body["tool_choice"] = toolChoice;
+                if (runner.SupportsParallelToolCalls && _Settings.Tools.AllowParallelToolCalls) body["parallel_tool_calls"] = true;
+            }
+
+            return await SendToolChatRequestAsync(url, FirstNonEmpty(runner.ApiKey, request.ApiKey), body, "OpenAIChatCompletions", token).ConfigureAwait(false);
+        }
+
+        private async Task<ToolCapableInferenceResponse> SendOllamaChatWithToolsAsync(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token)
+        {
+            string url = runner.Endpoint.TrimEnd('/') + "/api/chat";
+            Dictionary<string, object> options = new Dictionary<string, object>
+            {
+                ["temperature"] = request.Temperature,
+                ["top_p"] = request.TopP <= 0 ? 1 : request.TopP
+            };
+            if (request.MaxTokens > 0) options["num_predict"] = request.MaxTokens;
+
+            Dictionary<string, object> body = new Dictionary<string, object>
+            {
+                ["model"] = EffectiveToolModel(runner, request),
+                ["messages"] = BuildOllamaProviderMessages(request.Messages),
+                ["stream"] = false,
+                ["options"] = options
+            };
+
+            List<ModelToolDefinition> tools = NormalizeToolDefinitions(request.Tools);
+            if (tools.Count > 0) body["tools"] = tools;
+
+            return await SendToolChatRequestAsync(url, FirstNonEmpty(runner.ApiKey, request.ApiKey), body, "OllamaChat", token).ConfigureAwait(false);
+        }
+
+        private static string EffectiveToolModel(ModelRunnerSettings runner, ToolCapableInferenceRequest request)
+        {
+            if (!String.IsNullOrWhiteSpace(request.Model)) return request.Model.Trim();
+            return runner.Models.FirstOrDefault(model => !String.IsNullOrWhiteSpace(model)) ?? String.Empty;
+        }
+
+        private static string? FirstNonEmpty(params string?[] values)
+        {
+            foreach (string? value in values)
+            {
+                if (!String.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+
+            return null;
+        }
+
+        private static async Task<ToolCapableInferenceResponse> SendToolChatRequestAsync(string url, string? apiKey, Dictionary<string, object> body, string format, CancellationToken token)
+        {
+            string json = JsonSerializer.Serialize(body, _ToolJson);
+            using HttpClient client = new HttpClient();
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            if (!String.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+
+            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Provider returned HTTP " + (int)response.StatusCode + ".",
+                    Telemetry = new Dictionary<string, object>
+                    {
+                        ["statusCode"] = (int)response.StatusCode,
+                        ["format"] = format
+                    }
+                };
+            }
+
+            ToolCapableInferenceResponse parsed = ParseToolCapableResponse(format, responseBody);
+            parsed.Telemetry ??= new Dictionary<string, object>
+            {
+                ["statusCode"] = (int)response.StatusCode,
+                ["format"] = format
+            };
+            return parsed;
+        }
+
+        private static string ChatCompletionsUrl(ModelRunnerSettings runner)
+        {
+            string endpoint = (runner.Endpoint ?? String.Empty).TrimEnd('/');
+            if (endpoint.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) return endpoint;
+            string path = String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) ? "/v1/chat/completions" : runner.ChatCompletionsPath.Trim();
+            if (!path.StartsWith("/", StringComparison.Ordinal)) path = "/" + path;
+            return endpoint + path;
+        }
+
+        private static List<object> BuildProviderMessages(List<ModelChatMessage> messages)
+        {
+            List<object> output = new List<object>();
+            foreach (ModelChatMessage message in messages)
+            {
+                if (message == null || String.IsNullOrWhiteSpace(message.Role)) continue;
+                Dictionary<string, object> item = new Dictionary<string, object>
+                {
+                    ["role"] = message.Role.Trim()
+                };
+                if (message.Content != null) item["content"] = message.Content;
+                if (message.ToolCalls != null && message.ToolCalls.Count > 0) item["tool_calls"] = NormalizeToolCalls(message.ToolCalls);
+                if (!String.IsNullOrWhiteSpace(message.ToolCallId)) item["tool_call_id"] = message.ToolCallId.Trim();
+                if (!String.IsNullOrWhiteSpace(message.Name)) item["name"] = message.Name.Trim();
+                output.Add(item);
+            }
+
+            return output;
+        }
+
+        private static List<object> BuildOllamaProviderMessages(List<ModelChatMessage> messages)
+        {
+            List<object> output = new List<object>();
+            foreach (ModelChatMessage message in messages)
+            {
+                if (message == null || String.IsNullOrWhiteSpace(message.Role)) continue;
+                Dictionary<string, object> item = new Dictionary<string, object>
+                {
+                    ["role"] = message.Role.Trim()
+                };
+                if (message.Content != null) item["content"] = message.Content;
+                if (String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!String.IsNullOrWhiteSpace(message.Name)) item["tool_name"] = message.Name.Trim();
+                    output.Add(item);
+                    continue;
+                }
+
+                if (message.ToolCalls != null && message.ToolCalls.Count > 0) item["tool_calls"] = BuildOllamaToolCalls(message.ToolCalls);
+                output.Add(item);
+            }
+
+            return output;
+        }
+
+        private static List<object> BuildOllamaToolCalls(IEnumerable<ModelToolCall> toolCalls)
+        {
+            List<object> output = new List<object>();
+            int index = 0;
+            foreach (ModelToolCall call in NormalizeToolCalls(toolCalls))
+            {
+                Dictionary<string, object> function = new Dictionary<string, object>
+                {
+                    ["index"] = index,
+                    ["name"] = call.Function!.Name,
+                    ["arguments"] = ParseToolArgumentsForProvider(call.Function.Arguments)
+                };
+                output.Add(new Dictionary<string, object>
+                {
+                    ["type"] = String.IsNullOrWhiteSpace(call.Type) ? "function" : call.Type.Trim(),
+                    ["function"] = function
+                });
+                index++;
+            }
+
+            return output;
+        }
+
+        private static object ParseToolArgumentsForProvider(string arguments)
+        {
+            string json = String.IsNullOrWhiteSpace(arguments) ? "{}" : arguments.Trim();
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(json);
+                return document.RootElement.Clone();
+            }
+            catch
+            {
+                return new Dictionary<string, object>();
+            }
+        }
+
+        private static string NormalizeOpenAIToolChoice(string toolChoice)
+        {
+            if (String.IsNullOrWhiteSpace(toolChoice)) return ToolChoiceModes.Auto;
+            string normalized = toolChoice.Trim().ToLowerInvariant();
+            if (normalized == ToolChoiceModes.None || normalized == ToolChoiceModes.Required || normalized == ToolChoiceModes.Auto) return normalized;
+            if (normalized == ToolChoiceModes.AllowedOnly) return ToolChoiceModes.Auto;
+            return ToolChoiceModes.Auto;
+        }
+
+        private static List<ModelToolDefinition> NormalizeToolDefinitions(IEnumerable<ModelToolDefinition>? tools)
+        {
+            if (tools == null) return new List<ModelToolDefinition>();
+            return tools
+                .Where(tool => tool != null && tool.Function != null && !String.IsNullOrWhiteSpace(tool.Function.Name))
+                .Select(tool => new ModelToolDefinition
+                {
+                    Type = String.IsNullOrWhiteSpace(tool.Type) ? "function" : tool.Type.Trim(),
+                    Function = new ModelToolFunctionDefinition
+                    {
+                        Name = tool.Function!.Name.Trim(),
+                        Description = tool.Function.Description ?? String.Empty,
+                        Parameters = tool.Function.Parameters
+                    }
+                })
+                .ToList();
+        }
+
+        private static List<ModelToolCall> NormalizeToolCalls(IEnumerable<ModelToolCall>? toolCalls)
+        {
+            if (toolCalls == null) return new List<ModelToolCall>();
+            return toolCalls
+                .Where(call => call != null && call.Function != null && !String.IsNullOrWhiteSpace(call.Function.Name))
+                .Select(call => new ModelToolCall
+                {
+                    Id = String.IsNullOrWhiteSpace(call.Id) ? null : call.Id.Trim(),
+                    Type = String.IsNullOrWhiteSpace(call.Type) ? "function" : call.Type.Trim(),
+                    Function = new ModelToolFunctionCall
+                    {
+                        Name = call.Function!.Name.Trim(),
+                        Arguments = String.IsNullOrWhiteSpace(call.Function.Arguments) ? "{}" : call.Function.Arguments.Trim()
+                    }
+                })
+                .ToList();
+        }
+
+        private static ToolCapableInferenceResponse ParseOpenAIChatCompletionsResponse(JsonElement root)
+        {
+            if (!root.TryGetProperty("choices", out JsonElement choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+            {
+                return new ToolCapableInferenceResponse { Success = false, ErrorMessage = "OpenAI-compatible response contained no choices." };
+            }
+
+            JsonElement choice = choices[0];
+            JsonElement message = choice.TryGetProperty("message", out JsonElement messageElement) ? messageElement : default;
+            List<ModelToolCall> toolCalls = message.ValueKind == JsonValueKind.Object ? ParseToolCalls(message) : new List<ModelToolCall>();
+            string? finishReason = choice.TryGetProperty("finish_reason", out JsonElement finishElement) && finishElement.ValueKind == JsonValueKind.String
+                ? finishElement.GetString()
+                : null;
+            if (String.IsNullOrWhiteSpace(finishReason) && toolCalls.Count > 0) finishReason = "tool_calls";
+
+            return new ToolCapableInferenceResponse
+            {
+                Success = true,
+                Content = message.ValueKind == JsonValueKind.Object ? GetOptionalString(message, "content") : null,
+                ToolCalls = toolCalls,
+                FinishReason = String.IsNullOrWhiteSpace(finishReason) ? "stop" : finishReason
+            };
+        }
+
+        private static ToolCapableInferenceResponse ParseOllamaChatResponse(JsonElement root)
+        {
+            if (!root.TryGetProperty("message", out JsonElement message) || message.ValueKind != JsonValueKind.Object)
+            {
+                return new ToolCapableInferenceResponse { Success = false, ErrorMessage = "Ollama response contained no message." };
+            }
+
+            List<ModelToolCall> toolCalls = ParseToolCalls(message);
+            string? finishReason = GetOptionalString(root, "done_reason");
+            if (String.IsNullOrWhiteSpace(finishReason) && toolCalls.Count > 0) finishReason = "tool_calls";
+
+            return new ToolCapableInferenceResponse
+            {
+                Success = true,
+                Content = GetOptionalString(message, "content"),
+                ToolCalls = toolCalls,
+                FinishReason = String.IsNullOrWhiteSpace(finishReason) ? "stop" : finishReason
+            };
+        }
+
+        private static List<ModelToolCall> ParseToolCalls(JsonElement message)
+        {
+            List<ModelToolCall> calls = new List<ModelToolCall>();
+            if (!message.TryGetProperty("tool_calls", out JsonElement toolCalls) || toolCalls.ValueKind != JsonValueKind.Array) return calls;
+
+            foreach (JsonElement callElement in toolCalls.EnumerateArray())
+            {
+                if (callElement.ValueKind != JsonValueKind.Object) continue;
+                if (!callElement.TryGetProperty("function", out JsonElement functionElement) || functionElement.ValueKind != JsonValueKind.Object) continue;
+                string? name = GetOptionalString(functionElement, "name");
+                if (String.IsNullOrWhiteSpace(name)) continue;
+
+                string arguments = "{}";
+                if (functionElement.TryGetProperty("arguments", out JsonElement argumentsElement))
+                {
+                    arguments = argumentsElement.ValueKind == JsonValueKind.String
+                        ? argumentsElement.GetString() ?? "{}"
+                        : argumentsElement.GetRawText();
+                }
+
+                calls.Add(new ModelToolCall
+                {
+                    Id = GetOptionalString(callElement, "id"),
+                    Type = GetOptionalString(callElement, "type") ?? "function",
+                    Function = new ModelToolFunctionCall
+                    {
+                        Name = name.Trim(),
+                        Arguments = String.IsNullOrWhiteSpace(arguments) ? "{}" : arguments.Trim()
+                    }
+                });
+            }
+
+            return calls;
+        }
+
+        private static string? GetOptionalString(JsonElement element, string propertyName)
+        {
+            if (!element.TryGetProperty(propertyName, out JsonElement value)) return null;
+            if (value.ValueKind == JsonValueKind.String) return value.GetString();
+            return null;
         }
 
         private async Task<List<string>> ListModelsAsync(ModelRunnerSettings runner, CancellationToken token)
@@ -519,6 +935,12 @@ namespace Wilson.Core.Services
                 ApiKey = runner.ApiKey,
                 Models = new List<string>(runner.Models),
                 ContextWindowTokens = runner.ContextWindowTokens,
+                ToolsEnabled = runner.ToolsEnabled,
+                SupportsTools = runner.SupportsTools,
+                ToolCallingApiFormat = runner.ToolCallingApiFormat,
+                SupportsParallelToolCalls = runner.SupportsParallelToolCalls,
+                SupportsStreamingToolCalls = runner.SupportsStreamingToolCalls,
+                ChatCompletionsPath = runner.ChatCompletionsPath,
                 HealthCheckEnabled = runner.HealthCheckEnabled,
                 HealthCheckUrl = runner.HealthCheckUrl,
                 HealthCheckMethod = runner.HealthCheckMethod,

@@ -39,6 +39,11 @@ namespace Wilson.Core.Settings
         public RequestHistorySettings RequestHistory { get; set; } = new RequestHistorySettings();
 
         /// <summary>
+        /// Tool execution settings.
+        /// </summary>
+        public ToolsSettings Tools { get; set; } = new ToolsSettings();
+
+        /// <summary>
         /// Model runner definitions.
         /// </summary>
         public List<ModelRunnerSettings> ModelRunners { get; set; } = new List<ModelRunnerSettings>();
@@ -206,6 +211,36 @@ namespace Wilson.Core.Settings
         public int ContextWindowTokens { get; set; } = 8192;
 
         /// <summary>
+        /// Whether this runner can be used with tool-enabled requests when global tools are enabled.
+        /// </summary>
+        public bool ToolsEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Whether this runner supports model tool calls.
+        /// </summary>
+        public bool SupportsTools { get; set; } = true;
+
+        /// <summary>
+        /// Tool-calling API format, such as OpenAIChatCompletions or OllamaChat.
+        /// </summary>
+        public string ToolCallingApiFormat { get; set; } = String.Empty;
+
+        /// <summary>
+        /// Whether this runner supports parallel tool calls.
+        /// </summary>
+        public bool SupportsParallelToolCalls { get; set; } = false;
+
+        /// <summary>
+        /// Whether this runner supports streaming tool-call deltas.
+        /// </summary>
+        public bool SupportsStreamingToolCalls { get; set; } = false;
+
+        /// <summary>
+        /// Chat-completions path for OpenAI-compatible tool-capable transports.
+        /// </summary>
+        public string ChatCompletionsPath { get; set; } = String.Empty;
+
+        /// <summary>
         /// Enable periodic health checks for this model server.
         /// </summary>
         public bool HealthCheckEnabled { get; set; } = true;
@@ -285,6 +320,37 @@ namespace Wilson.Core.Settings
             if (!IsOllama(runner) && !String.IsNullOrWhiteSpace(runner.ApiKey))
             {
                 runner.HealthCheckUseAuth = true;
+            }
+
+            ApplyToolDefaults(runner);
+        }
+
+        /// <summary>
+        /// Apply API-type-aware tool-call defaults.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        public static void ApplyToolDefaults(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+
+            string apiType = runner.ApiType ?? String.Empty;
+            bool ollama = IsOllama(runner);
+            bool openAiLike = String.Equals(apiType, "OpenAI", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(apiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
+
+            if (String.IsNullOrWhiteSpace(runner.ToolCallingApiFormat))
+            {
+                runner.ToolCallingApiFormat = ollama ? "OllamaChat" : openAiLike ? "OpenAIChatCompletions" : String.Empty;
+            }
+
+            if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && openAiLike)
+            {
+                runner.ChatCompletionsPath = "/v1/chat/completions";
+            }
+
+            if (!openAiLike && !ollama)
+            {
+                runner.SupportsTools = false;
             }
         }
 

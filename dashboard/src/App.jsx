@@ -333,6 +333,12 @@ function Chat({ api }) {
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [streaming, setStreaming] = useState(true);
+  const [toolsEnabled, setToolsEnabled] = useState(() => localStorage.getItem('wilson.chat.toolsEnabled') === 'true');
+  const [toolApprovalPolicy, setToolApprovalPolicy] = useState(() => {
+    const stored = localStorage.getItem('wilson.chat.toolApprovalPolicy');
+    return stored === 'deny' ? 'deny' : 'auto';
+  });
+  const [toolCatalog, setToolCatalog] = useState([]);
   const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.systemPrompt') || defaultSystemPrompt);
   const [completionSettings, setCompletionSettings] = useState(() => {
     try { return { ...defaultCompletionSettings, ...JSON.parse(localStorage.getItem('wilson.chat.completionSettings') || '{}') }; }
@@ -400,6 +406,13 @@ function Chat({ api }) {
   }, [prompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.systemPrompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.completionSettings', JSON.stringify(completionSettings)); }, [completionSettings]);
+  useEffect(() => { localStorage.setItem('wilson.chat.toolsEnabled', String(toolsEnabled)); }, [toolsEnabled]);
+  useEffect(() => { localStorage.setItem('wilson.chat.toolApprovalPolicy', toolApprovalPolicy); }, [toolApprovalPolicy]);
+  useEffect(() => {
+    let cancelled = false;
+    api.tools().then(items => { if (!cancelled) setToolCatalog(Array.isArray(items) ? items : []); }).catch(() => { if (!cancelled) setToolCatalog([]); });
+    return () => { cancelled = true; };
+  }, [api]);
 
   useEffect(() => {
     const selected = runners.find(item => item.id === runnerId);
@@ -446,6 +459,10 @@ function Chat({ api }) {
     const controller = new AbortController();
     generationAbort.current = controller;
     const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, completionSettings) };
+    if (toolRequestEnabled) {
+      body.toolsEnabled = true;
+      body.approvalPolicy = toolApprovalPolicy;
+    }
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
     setMessages(prev => [...prev, user]);
     setPrompt('');
@@ -457,7 +474,12 @@ function Chat({ api }) {
         setConversation(result.conversation);
         handleTruncationNotice(result.truncation);
         localStorage.setItem(lastConversationStorageKey, result.conversation.id);
-        setMessages(prev => [...prev, result.assistantMessage]);
+        setMessages(prev => [...prev, {
+          ...result.assistantMessage,
+          toolRun: result.toolRun || null,
+          toolCalls: result.toolCalls || [],
+          toolMetrics: result.toolMetrics || null
+        }]);
       } else {
         const response = await api.raw('POST', '/v1.0/api/chat/stream', JSON.stringify(body), null, { signal: controller.signal });
         if (!response.ok) throw new Error(await response.text());
@@ -496,7 +518,7 @@ function Chat({ api }) {
               setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
             }
             if (event === 'done') {
-              assistant = parsed;
+              assistant = { ...parsed, toolRun: parsed.toolRun || null, toolCalls: parsed.toolCalls || [], toolMetrics: parsed.toolMetrics || null };
               setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
             }
           });
@@ -557,6 +579,9 @@ function Chat({ api }) {
   const modelLoaded = loadedKeys.has(selectedModelKey) || (selectedRunner?.loadedModels || []).some(item => sameModelName(item, model));
   const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
   const modelLoading = loadingModelKey === selectedModelKey;
+  const availableTools = toolCatalog.filter(item => item.available);
+  const toolRequestEnabled = toolsEnabled && availableTools.length > 0;
+  const toolToggleDisabled = availableTools.length < 1 || busy;
   return (
     <div className="chat-layout">
       <aside className="conversation-list">
@@ -615,7 +640,13 @@ function Chat({ api }) {
           {modelLoading && <span className="model-loading-note" title="Model loading may take several minutes depending on model size">Model loading may take several minutes depending on model size</span>}
           <button className="secondary toolbar-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} />System Prompt</button>
           <button className="secondary toolbar-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} />Settings</button>
-          <label className="toggle" title="Enable streaming responses"><input title="Toggle streaming responses" type="checkbox" checked={streaming} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
+          <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for non-streaming chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => { const checked = e.target.checked; setToolsEnabled(checked); if (checked) setStreaming(false); }} />Tools</label>
+          <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
+            <option value="auto">Auto</option>
+            <option value="deny">Deny</option>
+            <option value="ask" disabled>Ask</option>
+          </select>
+          <label className="toggle" title={toolRequestEnabled ? 'Streaming is disabled while tool chat uses the non-streaming path' : 'Enable streaming responses'}><input title="Toggle streaming responses" type="checkbox" checked={streaming} disabled={toolRequestEnabled} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
         </div>
         {modelError && <div className="model-error" title="Model loading status">{modelError}</div>}
         <div className="messages">
@@ -645,6 +676,7 @@ function Message({ api, message, conversation }) {
   const [rated, setRated] = useState(false);
   const [feedbackDraft, setFeedbackDraft] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
   async function rate(value, comment) {
     if (!conversation) return;
     await api.feedback({ conversationId: conversation.id, messageId: message.id, rating: value, comment: comment || '' });
@@ -654,6 +686,7 @@ function Message({ api, message, conversation }) {
   return (
     <div className={`message ${message.role}`}>
       <div className="bubble">{message.content ? <MarkdownMessage content={message.content} /> : (message.role === 'assistant' ? <ThinkingIndicator /> : '')}</div>
+      {message.role === 'assistant' && toolCalls.length > 0 && <ToolActivity toolCalls={toolCalls} metrics={message.toolMetrics} />}
       {message.role === 'assistant' && <div className="rating">
         <button onClick={() => setFeedbackDraft({ rating: 1, comment: '' })} disabled={rated} title="Mark this assistant response as helpful and optionally explain why"><ThumbsUp size={15} /></button>
         <button onClick={() => setFeedbackDraft({ rating: -1, comment: '' })} disabled={rated} title="Mark this assistant response as not helpful and optionally explain why"><ThumbsDown size={15} /></button>
@@ -672,6 +705,61 @@ function Message({ api, message, conversation }) {
   );
 }
 
+function ToolActivity({ toolCalls, metrics }) {
+  const [open, setOpen] = useState(toolCalls.some(call => call.success === false || call.denied));
+  const count = toolCalls.length;
+  const failed = toolCalls.filter(call => call.success === false || call.denied).length;
+  const runtime = metrics?.totalToolElapsedMs ?? toolCalls.reduce((sum, call) => sum + Number(call.elapsedMs || 0), 0);
+  const label = failed > 0 ? `${failed} failed` : 'Completed';
+  return (
+    <div className="tool-activity">
+      <button className="tool-activity-summary" type="button" title="Show tool activity for this response" onClick={() => setOpen(value => !value)}>
+        <Activity size={15} />
+        <span>Tool activity</span>
+        <span className="tool-activity-count">{count} tool{count === 1 ? '' : 's'}</span>
+        <span className={failed > 0 ? 'tool-status failed' : 'tool-status complete'}>{label}</span>
+        <span className="tool-runtime"><Clock size={13} />{formatNumber(runtime)} ms</span>
+        <ChevronDown size={15} className={open ? 'open' : ''} />
+      </button>
+      {open && <div className="tool-call-list">{toolCalls.map((call, index) => <ToolCallRow key={call.toolCallId || `${call.toolName}-${index}`} call={call} />)}</div>}
+    </div>
+  );
+}
+
+function ToolCallRow({ call }) {
+  const [open, setOpen] = useState(false);
+  const success = call.success !== false && !call.denied;
+  return (
+    <div className="tool-call-row">
+      <button className="tool-call-main" type="button" title={`Show ${call.displayLabel || call.toolName || 'tool'} details`} onClick={() => setOpen(value => !value)}>
+        {success ? <Check size={14} /> : <AlertCircle size={14} />}
+        <span className="tool-call-name">{call.displayLabel || call.toolName || 'Tool'}</span>
+        <span className={success ? 'tool-status complete' : 'tool-status failed'}>{success ? 'completed' : 'failed'}</span>
+        <span className="tool-runtime">{formatNumber(call.elapsedMs || 0)} ms</span>
+        <ChevronDown size={14} className={open ? 'open' : ''} />
+      </button>
+      {open && (
+        <div className="tool-call-details">
+          <KeyValueTable rows={[
+            ['toolName', call.toolName || ''],
+            ['toolCallId', call.toolCallId || ''],
+            ['iteration', call.iteration || 0],
+            ['sequenceNumber', call.sequenceNumber || 0],
+            ['success', String(Boolean(call.success))],
+            ['denied', String(Boolean(call.denied))],
+            ['truncated', String(Boolean(call.truncated))],
+            ['outputCharacters', call.outputCharacters || 0],
+            ['elapsedMs', formatNumber(call.elapsedMs || 0)],
+            ['startedUtc', call.startedUtc || ''],
+            ['completedUtc', call.completedUtc || ''],
+            ['summary', call.summary || '']
+          ]} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MarkdownMessage({ content }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
 }
@@ -681,14 +769,23 @@ function ThinkingIndicator() {
 }
 
 function MessageInfoModal({ message, onClose }) {
+  const rows = [
+    ['timeToFirstTokenMs', message.timeToFirstTokenMs || 0],
+    ['streamingTimeMs', message.streamingTimeMs || 0],
+    ['totalTimeMs', message.totalTimeMs || 0],
+    ['tokensUsed', message.tokensUsed || message.tokenEstimate || 0]
+  ];
+  if (message.toolMetrics) {
+    rows.push(
+      ['toolCallCount', message.toolMetrics.toolCallCount || 0],
+      ['toolErrorCount', message.toolMetrics.errorCount || 0],
+      ['toolIterationCount', message.toolMetrics.iterationCount || 0],
+      ['totalToolElapsedMs', formatNumber(message.toolMetrics.totalToolElapsedMs || 0)]
+    );
+  }
   return (
     <Modal title="Response Details" onClose={onClose}>
-      <KeyValueTable rows={[
-        ['timeToFirstTokenMs', message.timeToFirstTokenMs || 0],
-        ['streamingTimeMs', message.streamingTimeMs || 0],
-        ['totalTimeMs', message.totalTimeMs || 0],
-        ['tokensUsed', message.tokensUsed || message.tokenEstimate || 0]
-      ]} />
+      <KeyValueTable rows={rows} />
     </Modal>
   );
 }

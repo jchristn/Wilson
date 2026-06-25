@@ -113,6 +113,21 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .thinking-indicator span:nth-child(3) { animation-delay: .3s; }
 @keyframes pulse-dot { 0%, 80%, 100% { opacity: .35; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
 .message.user .bubble { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.tool-activity { max-width: min(760px, 100%); margin-top: 6px; display: grid; gap: 6px; color: var(--muted); }
+.tool-activity-summary, .tool-call-main { width: 100%; min-height: 32px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); padding: 6px 8px; text-align: left; }
+.tool-activity-summary:hover:not(:disabled), .tool-call-main:hover:not(:disabled) { background: var(--panel-2); }
+.tool-activity-summary svg, .tool-call-main svg { flex: 0 0 auto; color: var(--muted); }
+.tool-activity-summary svg.open, .tool-call-main svg.open { transform: rotate(180deg); }
+.tool-activity-count, .tool-runtime, .tool-status { white-space: nowrap; font-size: 12px; }
+.tool-status { min-width: 76px; text-align: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; text-transform: lowercase; }
+.tool-status.complete { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.tool-status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
+.tool-runtime { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; color: var(--muted); min-width: 58px; }
+.tool-call-list { display: grid; gap: 6px; padding-left: 12px; border-left: 2px solid var(--line); }
+.tool-call-row { display: grid; gap: 5px; min-width: 0; }
+.tool-call-main { grid-template-columns: auto minmax(0, 1fr) auto auto auto; background: var(--panel-2); }
+.tool-call-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-call-details { max-width: 100%; overflow: auto; }
 .context-truncation-notice { max-width: 820px; margin: 8px auto 12px; border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 13px; text-align: center; }
 .rating { display: flex; gap: 4px; margin-top: 5px; }
 .rating button { width: 30px; height: 30px; border-radius: 6px; background: transparent; color: var(--muted); }
@@ -128,6 +143,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .system-prompt-textarea { min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.5; }
 .muted-settings { opacity: .72; }
 .settings-note { margin: 0; color: var(--muted); font-size: 13px; }
+.compact-select { width: auto; min-width: 92px; height: 34px; padding: 6px 8px; align-self: end; margin-bottom: 8px; }
 .composer { border-top: 1px solid var(--line); padding: 12px max(20px, 8vw); display: grid; grid-template-columns: minmax(0, 1fr) 46px; align-items: start; gap: 10px; }
 .composer-input { display: grid; gap: 6px; }
 .composer textarea { min-height: 44px; height: auto; max-height: min(220px, 28vh); overflow-y: auto; border-radius: 8px; }
@@ -439,6 +455,11 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .chat-toolbar { align-items: stretch; gap: 8px; padding: 10px; }
   .chat-toolbar label { width: 100%; }
   .chat-toolbar .toggle { margin-left: 0; padding-bottom: 0; }
+  .compact-select { width: 100%; align-self: stretch; margin-bottom: 0; }
+  .tool-activity-summary { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .tool-activity-count, .tool-status, .tool-runtime { grid-column: 2 / -1; justify-self: start; }
+  .tool-call-main { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .tool-call-main .tool-status, .tool-call-main .tool-runtime { grid-column: 2 / -1; justify-self: start; }
   .model-loading-note { max-width: none; padding-bottom: 0; }
   .messages { padding: 18px 12px; }
   .composer { padding: 10px; grid-template-columns: minmax(0, 1fr) 42px; }
