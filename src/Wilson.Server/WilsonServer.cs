@@ -18,6 +18,7 @@ namespace Wilson.Server
     using Wilson.Core.Models;
     using Wilson.Core.Services;
     using Wilson.Core.Settings;
+    using Wilson.Core.Tools;
 
     /// <summary>
     /// Wilson Watson server host.
@@ -48,6 +49,11 @@ namespace Wilson.Server
         public InferenceService Inference { get; private set; }
 
         /// <summary>
+        /// Tool service.
+        /// </summary>
+        public ToolService ToolService { get; private set; }
+
+        /// <summary>
         /// Model runner health check service.
         /// </summary>
         public ModelRunnerHealthCheckService HealthChecks { get; }
@@ -65,6 +71,7 @@ namespace Wilson.Server
             _Json.Converters.Add(new JsonStringEnumConverter());
             Database = new DatabaseDriver(settings.Database);
             Inference = new InferenceService(settings);
+            ToolService = new ToolService(settings);
             HealthChecks = new ModelRunnerHealthCheckService(settings);
             WebserverSettings webserverSettings = new WebserverSettings(settings.Rest.Hostname, settings.Rest.Port, settings.Rest.Ssl);
             Server = new Webserver(webserverSettings, DefaultRouteAsync);
@@ -157,12 +164,95 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
         private static void NormalizeSettings(Settings settings)
         {
+            settings.Tools ??= new ToolsSettings();
+            NormalizeTools(settings.Tools);
             settings.ModelRunners ??= new List<ModelRunnerSettings>();
             foreach (ModelRunnerSettings runner in settings.ModelRunners)
             {
                 runner.Models ??= new List<string>();
                 ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
             }
+        }
+
+        private static void NormalizeTools(ToolsSettings tools)
+        {
+            tools.DefaultApprovalPolicy = NormalizeValue(tools.DefaultApprovalPolicy, "ask", "deny", "ask", "auto");
+            tools.ToolChoiceMode = NormalizeValue(tools.ToolChoiceMode, "auto", "auto", "required", "none", "allowed_only");
+            tools.WorkingDirectory = tools.WorkingDirectory?.Trim() ?? String.Empty;
+            tools.AllowedRoots = NormalizeList(tools.AllowedRoots);
+            tools.EnabledToolNames = NormalizeToolNameList(tools.EnabledToolNames);
+            tools.DisabledToolNames = NormalizeToolNameList(tools.DisabledToolNames);
+            tools.MaxAgentIterations = Math.Clamp(tools.MaxAgentIterations, 1, 100);
+            tools.MaxToolIterations = Math.Clamp(tools.MaxToolIterations, 1, 20);
+            tools.MaxToolCallsPerTurn = Math.Clamp(tools.MaxToolCallsPerTurn, 1, 50);
+            tools.MaxParallelToolCalls = tools.AllowParallelToolCalls ? Math.Clamp(tools.MaxParallelToolCalls, 1, 16) : 1;
+            tools.ToolTimeoutMs = Math.Clamp(tools.ToolTimeoutMs, 1000, 300000);
+            tools.ProcessTimeoutMs = Math.Clamp(tools.ProcessTimeoutMs, 1000, 600000);
+            tools.MaxReadFileBytes = Math.Clamp(tools.MaxReadFileBytes, 1, 104857600);
+            tools.MaxToolResultBytes = Math.Clamp(tools.MaxToolResultBytes, 1024, 10485760);
+            tools.MaxToolOutputChars = Math.Clamp(tools.MaxToolOutputChars, 1024, 200000);
+            tools.MaxToolOutputCharsPerTurn = Math.Clamp(tools.MaxToolOutputCharsPerTurn, tools.MaxToolOutputChars, 500000);
+            tools.MaxToolResultItems = Math.Clamp(tools.MaxToolResultItems, 1, 1000);
+
+            tools.WebSearch ??= new WebSearchToolSettings();
+            tools.WebSearch.Providers ??= new List<WebSearchProviderSettings>();
+            tools.WebSearch.Providers = tools.WebSearch.Providers
+                .Where(provider => provider != null)
+                .Select(provider =>
+                {
+                    provider.Name = provider.Name?.Trim() ?? String.Empty;
+                    provider.ProviderType = provider.ProviderType?.Trim() ?? String.Empty;
+                    provider.Endpoint = provider.Endpoint?.Trim() ?? String.Empty;
+                    provider.ApiKey = provider.ApiKey?.Trim() ?? String.Empty;
+                    provider.TimeoutMs = Math.Clamp(provider.TimeoutMs, 1000, 300000);
+                    return provider;
+                })
+                .ToList();
+
+            tools.Mcp ??= new McpToolSettings();
+            tools.Mcp.Servers ??= new List<McpServerSettings>();
+            tools.Mcp.Servers = tools.Mcp.Servers
+                .Where(server => server != null)
+                .Select(server =>
+                {
+                    server.Name = server.Name?.Trim() ?? String.Empty;
+                    server.Transport = NormalizeValue(server.Transport, "stdio", "stdio", "http");
+                    server.Command = server.Command?.Trim() ?? String.Empty;
+                    server.Args = NormalizeList(server.Args);
+                    server.Env ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    server.Url = server.Url?.Trim() ?? String.Empty;
+                    server.McpPath = server.McpPath?.Trim() ?? String.Empty;
+                    return server;
+                })
+                .ToList();
+        }
+
+        private static string NormalizeValue(string? value, string fallback, params string[] allowed)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return fallback;
+            string trimmed = value.Trim();
+            foreach (string candidate in allowed)
+            {
+                if (String.Equals(trimmed, candidate, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+            return fallback;
+        }
+
+        private static List<string> NormalizeList(List<string>? values)
+        {
+            return (values ?? new List<string>())
+                .Where(value => !String.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static List<string> NormalizeToolNameList(List<string>? values)
+        {
+            return NormalizeList(values)
+                .Select(value => value.ToLowerInvariant())
+                .ToList();
         }
 
         private void AttachHealth(List<ModelRunnerStatus> statuses)
@@ -345,9 +435,25 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 NormalizeSettings(updated);
                 Settings = updated;
                 Inference = new InferenceService(Settings);
+                ToolService = new ToolService(Settings);
                 HealthChecks.UpdateSettings(Settings);
                 File.WriteAllText(_SettingsFile, JsonSerializer.Serialize(Settings, _Json));
                 await SendJsonAsync(ctx, Settings).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/tools" && method == "GET")
+            {
+                await SendJsonAsync(ctx, ToolService.ListTools(true)).ConfigureAwait(false);
+                return;
+            }
+
+            if (path.StartsWith("/v1.0/api/tools/", StringComparison.OrdinalIgnoreCase) && method == "GET")
+            {
+                string name = Segment(path, 3);
+                ToolDescriptor? descriptor = ToolService.GetTool(name);
+                if (descriptor == null) throw new KeyNotFoundException("Unknown tool '" + name + "'.");
+                await SendJsonAsync(ctx, descriptor).ConfigureAwait(false);
                 return;
             }
 
@@ -537,6 +643,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            ChatToolPlan toolPlan = ResolveChatToolPlan(body, requestContext, runner, streaming);
             Conversation? conversation = String.IsNullOrWhiteSpace(body.ConversationId) ? null : await Database.GetConversationAsync(requestContext.TenantId!, body.ConversationId, ctx.Token).ConfigureAwait(false);
             if (conversation == null)
             {
@@ -561,6 +668,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             if (!streaming)
             {
+                if (toolPlan.Enabled)
+                {
+                    await ChatWithToolsAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan).ConfigureAwait(false);
+                    return;
+                }
+
                 Stopwatch inference = Stopwatch.StartNew();
                 string answer = await Inference.ChatAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false);
                 inference.Stop();
@@ -570,7 +683,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(assistantMessage, answer);
-                await SendJsonAsync(ctx, new { conversation, userMessage, assistantMessage, truncation }).ConfigureAwait(false);
+                await SendJsonAsync(ctx, new ChatResponse { Conversation = conversation, UserMessage = userMessage, AssistantMessage = assistantMessage, Truncation = truncation }).ConfigureAwait(false);
                 return;
             }
 
@@ -614,6 +727,256 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 SetRequestCapture(new ChatMessage { TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = InferenceService.EstimateTokens(prompt) }, ex.Message);
                 await SendSseAsync(ctx, "error", new { error = "The selected model could not generate a chat response. Confirm that it is a chat or completion model, not an embedding-only model.", detail = ex.Message }, true).ConfigureAwait(false);
             }
+        }
+
+        private async Task ChatWithToolsAsync(
+            HttpContextBase ctx,
+            RequestContext requestContext,
+            ChatRequest body,
+            ModelRunnerSettings runner,
+            Conversation conversation,
+            List<ChatMessage> previousMessages,
+            ChatMessage userMessage,
+            ChatTruncationNotice truncation,
+            ChatToolPlan toolPlan)
+        {
+            Stopwatch total = Stopwatch.StartNew();
+            ToolExecutionContext executionContext = new ToolExecutionContext
+            {
+                TenantId = requestContext.TenantId ?? String.Empty,
+                UserId = requestContext.UserId ?? String.Empty,
+                ConversationId = conversation.Id,
+                RunId = IdGenerator.ToolRun(),
+                WorkingDirectory = toolPlan.Settings.Tools.WorkingDirectory,
+                AllowedRoots = new List<string>(toolPlan.Settings.Tools.AllowedRoots),
+                Settings = toolPlan.Settings
+            };
+
+            ToolAgentService agent = new ToolAgentService(toolPlan.ToolService, Inference);
+            List<ModelChatMessage> modelMessages = previousMessages
+                .Select(message => new ModelChatMessage { Role = message.Role, Content = message.Content })
+                .ToList();
+            modelMessages.Add(new ModelChatMessage { Role = "user", Content = body.Prompt });
+
+            ToolAgentResponse agentResponse = await agent.RunAsync(runner, body.Model, modelMessages, body.Settings, executionContext, ctx.Token).ConfigureAwait(false);
+            total.Stop();
+
+            if (!agentResponse.Success)
+            {
+                throw new InvalidOperationException(agentResponse.ErrorMessage ?? "Tool-enabled chat failed before producing a final assistant response.");
+            }
+
+            string answer = agentResponse.Content ?? String.Empty;
+            int outputTokens = InferenceService.EstimateTokens(answer);
+            int inputTokens = modelMessages.Sum(message => InferenceService.EstimateTokens(message.Content ?? String.Empty));
+            ChatMessage assistantMessage = new ChatMessage
+            {
+                TenantId = requestContext.TenantId!,
+                ConversationId = conversation.Id,
+                Role = "assistant",
+                Content = answer,
+                RunnerId = body.RunnerId,
+                Model = body.Model,
+                TokenEstimate = outputTokens,
+                TimeToFirstTokenMs = total.Elapsed.TotalMilliseconds,
+                StreamingTimeMs = 0,
+                TotalTimeMs = total.Elapsed.TotalMilliseconds,
+                TokensUsed = inputTokens + outputTokens
+            };
+
+            await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
+            conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
+            SetRequestCapture(assistantMessage, answer);
+
+            ToolRun toolRun = new ToolRun
+            {
+                RunId = executionContext.RunId,
+                TenantId = requestContext.TenantId ?? String.Empty,
+                UserId = requestContext.UserId ?? String.Empty,
+                ConversationId = conversation.Id,
+                RunnerId = body.RunnerId,
+                Model = body.Model,
+                Status = ToolStatuses.Completed,
+                StartedUtc = DateTime.UtcNow.AddMilliseconds(-total.Elapsed.TotalMilliseconds),
+                CompletedUtc = DateTime.UtcNow,
+                ElapsedMs = total.Elapsed.TotalMilliseconds,
+                IterationCount = agentResponse.IterationCount,
+                ToolCallCount = agentResponse.ToolCallCount,
+                ErrorCount = agentResponse.ErrorCount
+            };
+
+            ChatToolMetrics metrics = new ChatToolMetrics
+            {
+                ToolsEnabled = true,
+                ToolCallCount = agentResponse.ToolCallCount,
+                ErrorCount = agentResponse.ErrorCount,
+                IterationCount = agentResponse.IterationCount,
+                TotalToolElapsedMs = agentResponse.ToolCalls.Sum(trace => trace.ElapsedMs)
+            };
+
+            await SendJsonAsync(ctx, new ChatResponse
+            {
+                Conversation = conversation,
+                UserMessage = userMessage,
+                AssistantMessage = assistantMessage,
+                Truncation = truncation,
+                ToolRun = toolRun,
+                ToolCalls = agentResponse.ToolCalls,
+                ToolMetrics = metrics
+            }).ConfigureAwait(false);
+        }
+
+        private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
+        {
+            if (streaming)
+            {
+                if (body.ToolsEnabled == true)
+                    throw new ArgumentException("Tool-enabled streaming chat is not implemented yet. Disable streaming for tool-enabled requests.");
+                return ChatToolPlan.Disabled();
+            }
+
+            bool requestedToolsEnabled = body.ToolsEnabled ?? Settings.Tools.Enabled;
+            if (!requestedToolsEnabled) return ChatToolPlan.Disabled();
+
+            ModelRunnerSettings runnerDefaults = new ModelRunnerSettings
+            {
+                Id = runner.Id,
+                Name = runner.Name,
+                ApiType = runner.ApiType,
+                Endpoint = runner.Endpoint,
+                ApiKey = runner.ApiKey,
+                Models = new List<string>(runner.Models),
+                ContextWindowTokens = runner.ContextWindowTokens,
+                ToolsEnabled = runner.ToolsEnabled,
+                SupportsTools = runner.SupportsTools,
+                ToolCallingApiFormat = runner.ToolCallingApiFormat,
+                SupportsParallelToolCalls = runner.SupportsParallelToolCalls,
+                SupportsStreamingToolCalls = runner.SupportsStreamingToolCalls,
+                ChatCompletionsPath = runner.ChatCompletionsPath
+            };
+            ModelRunnerSettings.ApplyToolDefaults(runnerDefaults);
+            if (!runnerDefaults.ToolsEnabled || !runnerDefaults.SupportsTools || String.IsNullOrWhiteSpace(runnerDefaults.ToolCallingApiFormat))
+            {
+                if (body.ToolsEnabled == true) throw new ArgumentException("The selected runner is not configured for tool-capable requests.");
+                return ChatToolPlan.Disabled();
+            }
+
+            ToolsSettings tools = CloneTools(Settings.Tools);
+            tools.Enabled = true;
+
+            if (!String.IsNullOrWhiteSpace(body.ApprovalPolicy))
+            {
+                string approvalPolicy = NormalizeApprovalPolicy(body.ApprovalPolicy!);
+                if (String.Equals(approvalPolicy, ToolApprovalPolicies.Auto, StringComparison.OrdinalIgnoreCase) && !requestContext.IsAdmin)
+                    throw new UnauthorizedAccessException("Only administrators may request automatic tool approval.");
+                tools.DefaultApprovalPolicy = approvalPolicy;
+            }
+
+            if (!String.IsNullOrWhiteSpace(body.WorkingDirectory))
+            {
+                RequireAdmin(requestContext);
+                tools.WorkingDirectory = body.WorkingDirectory!;
+            }
+
+            if (body.ToolNames != null && body.ToolNames.Count > 0)
+            {
+                List<string> requested = NormalizeToolNameList(body.ToolNames);
+                tools.EnabledToolNames = tools.EnabledToolNames.Count > 0
+                    ? tools.EnabledToolNames.Intersect(requested, StringComparer.OrdinalIgnoreCase).ToList()
+                    : requested;
+            }
+
+            NormalizeTools(tools);
+            if (String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Non-streaming tool approval is not implemented. Set approvalPolicy to 'auto' for safe tools, or disable tools for this request.");
+
+            Settings effectiveSettings = new Settings { Tools = tools };
+            ToolService effectiveToolService = new ToolService(effectiveSettings);
+            if (effectiveToolService.GetModelToolDefinitions().Count == 0)
+            {
+                if (body.ToolsEnabled == true) throw new ArgumentException("No executable tools are available for this request. Check tool working directory, allowed roots, and enabled tool names.");
+                return ChatToolPlan.Disabled();
+            }
+
+            return new ChatToolPlan
+            {
+                Enabled = true,
+                Settings = effectiveSettings,
+                ToolService = effectiveToolService
+            };
+        }
+
+        private static ToolsSettings CloneTools(ToolsSettings source)
+        {
+            return new ToolsSettings
+            {
+                Enabled = source.Enabled,
+                BuiltInsEnabled = source.BuiltInsEnabled,
+                DefaultApprovalPolicy = source.DefaultApprovalPolicy,
+                DestructiveToolsRequireApproval = source.DestructiveToolsRequireApproval,
+                BlockSecretPaths = source.BlockSecretPaths,
+                WorkingDirectory = source.WorkingDirectory,
+                AllowedRoots = new List<string>(source.AllowedRoots),
+                MaxAgentIterations = source.MaxAgentIterations,
+                MaxToolIterations = source.MaxToolIterations,
+                MaxToolCallsPerTurn = source.MaxToolCallsPerTurn,
+                ToolChoiceMode = source.ToolChoiceMode,
+                AllowParallelToolCalls = source.AllowParallelToolCalls,
+                MaxParallelToolCalls = source.MaxParallelToolCalls,
+                EmitProgressEvents = source.EmitProgressEvents,
+                ExposeToolTracesToUsers = source.ExposeToolTracesToUsers,
+                ToolTimeoutMs = source.ToolTimeoutMs,
+                ProcessTimeoutMs = source.ProcessTimeoutMs,
+                MaxReadFileBytes = source.MaxReadFileBytes,
+                MaxToolResultBytes = source.MaxToolResultBytes,
+                StoreToolResults = source.StoreToolResults,
+                StoreFullToolResults = source.StoreFullToolResults,
+                StoreToolArguments = source.StoreToolArguments,
+                MaxToolOutputChars = source.MaxToolOutputChars,
+                MaxToolOutputCharsPerTurn = source.MaxToolOutputCharsPerTurn,
+                MaxToolResultItems = source.MaxToolResultItems,
+                EnabledToolNames = new List<string>(source.EnabledToolNames),
+                DisabledToolNames = new List<string>(source.DisabledToolNames),
+                WebSearch = new WebSearchToolSettings
+                {
+                    Enabled = source.WebSearch.Enabled,
+                    AllowFallback = source.WebSearch.AllowFallback,
+                    Providers = source.WebSearch.Providers.Select(provider => new WebSearchProviderSettings
+                    {
+                        Name = provider.Name,
+                        ProviderType = provider.ProviderType,
+                        Endpoint = provider.Endpoint,
+                        ApiKey = provider.ApiKey,
+                        Enabled = provider.Enabled,
+                        IsDefault = provider.IsDefault,
+                        TimeoutMs = provider.TimeoutMs
+                    }).ToList()
+                },
+                Mcp = new McpToolSettings
+                {
+                    Enabled = source.Mcp.Enabled,
+                    Servers = source.Mcp.Servers.Select(server => new McpServerSettings
+                    {
+                        Name = server.Name,
+                        Transport = server.Transport,
+                        Command = server.Command,
+                        Args = new List<string>(server.Args),
+                        Env = new Dictionary<string, string>(server.Env, StringComparer.OrdinalIgnoreCase),
+                        Url = server.Url,
+                        McpPath = server.McpPath,
+                        Enabled = server.Enabled
+                    }).ToList()
+                }
+            };
+        }
+
+        private static string NormalizeApprovalPolicy(string approvalPolicy)
+        {
+            string normalized = NormalizeValue(approvalPolicy, ToolApprovalPolicies.Ask, ToolApprovalPolicies.Deny, ToolApprovalPolicies.Ask, ToolApprovalPolicies.Auto);
+            if (!String.Equals(normalized, approvalPolicy.Trim(), StringComparison.OrdinalIgnoreCase)
+                && !String.IsNullOrWhiteSpace(approvalPolicy))
+                throw new ArgumentException("Invalid approvalPolicy value. Use deny, ask, or auto.");
+            return normalized;
         }
 
         private async Task<RequestContext?> AuthenticateAsync(HttpContextBase ctx, string path)
@@ -833,6 +1196,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     new { name = "Authentication", description = "Token validation and current principal metadata." },
                     new { name = "Model Runners", description = "Configured model runner inventory, health, and Ollama model actions." },
                     new { name = "Administration", description = "Settings, tenants, users, and credentials." },
+                    new { name = "Tools", description = "Tool catalog and future tool diagnostics." },
                     new { name = "Chat", description = "Conversations, messages, and model chat requests." },
                     new { name = "Feedback", description = "User feedback capture and review." },
                     new { name = "Request History", description = "Captured request metadata, timing, and summaries." }
@@ -854,6 +1218,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "/v1.0/api/settings", Path(
                         Operation("get", "getSettings", "Administration", "Read settings", "Returns the active Wilson settings. Requires a global administrator bearer token.", "Settings", true),
                         Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
+                    { "/v1.0/api/tools", Path(Operation("get", "listTools", "Tools", "List effective tools", "Lists effective tool descriptors for the authenticated principal, including unavailable diagnostics when tools or prerequisites are disabled.", "ToolDescriptorArray", true)) },
+                    { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
                     { "/v1.0/api/tenants", Path(
                         Operation("get", "listTenants", "Administration", "List tenants", "Lists tenant records. Requires a global administrator bearer token.", "TenantEnumeration", true, parameters: WithPagination()),
                         Operation("post", "createTenant", "Administration", "Create tenant", "Creates a tenant record. Requires a global administrator bearer token.", "Tenant", true, requestSchema: "Tenant", successStatus: "201", successDescription: "Tenant created.")) },
@@ -1096,7 +1462,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Property("conversation", SchemaRef("Conversation")),
                         Property("userMessage", SchemaRef("ChatMessage")),
                         Property("assistantMessage", SchemaRef("ChatMessage")),
-                        Property("truncation", SchemaRef("ChatTruncationNotice")))
+                        Property("truncation", SchemaRef("ChatTruncationNotice")),
+                        Property("toolRun", SchemaRef("ToolRun")),
+                        Property("toolCalls", ArraySchema(SchemaRef("ToolTrace"))),
+                        Property("toolMetrics", SchemaRef("ChatToolMetrics")))
                 }
             };
 
@@ -1112,12 +1481,29 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ChatMessage));
             AddComponentSchema(schemas, typeof(ChatTruncationNotice));
             AddComponentSchema(schemas, typeof(ChatRequest));
+            AddComponentSchema(schemas, typeof(ChatToolMetrics));
             AddComponentSchema(schemas, typeof(ModelPullRequest));
             AddComponentSchema(schemas, typeof(Feedback));
             AddComponentSchema(schemas, typeof(RequestHistoryEntry));
             AddComponentSchema(schemas, typeof(RequestHistorySummary));
+            AddComponentSchema(schemas, typeof(ToolDefinition));
+            AddComponentSchema(schemas, typeof(ToolDescriptor));
+            AddComponentSchema(schemas, typeof(ModelToolDefinition));
+            AddComponentSchema(schemas, typeof(ModelToolFunctionDefinition));
+            AddComponentSchema(schemas, typeof(ModelToolCall));
+            AddComponentSchema(schemas, typeof(ModelToolFunctionCall));
+            AddComponentSchema(schemas, typeof(ToolCall));
+            AddComponentSchema(schemas, typeof(ToolResult));
+            AddComponentSchema(schemas, typeof(ToolExecutionRecord));
+            AddComponentSchema(schemas, typeof(ToolRun));
+            AddComponentSchema(schemas, typeof(ToolProgressEvent));
+            AddComponentSchema(schemas, typeof(ToolTrace));
+            AddComponentSchema(schemas, typeof(ToolCapableInferenceRequest));
+            AddComponentSchema(schemas, typeof(ToolCapableInferenceResponse));
+            AddComponentSchema(schemas, typeof(ModelChatMessage));
 
             schemas["EndpointHealthStatusArray"] = ArraySchema(SchemaRef("EndpointHealthStatus"));
+            schemas["ToolDescriptorArray"] = ArraySchema(SchemaRef("ToolDescriptor"));
             schemas["ModelRunnerStatusEnumeration"] = EnumerationSchema("ModelRunnerStatus");
             schemas["TenantEnumeration"] = EnumerationSchema("Tenant");
             schemas["UserEnumeration"] = EnumerationSchema("User");
@@ -1155,6 +1541,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         {
             Type? nullable = Nullable.GetUnderlyingType(type);
             if (nullable != null) return SchemaForType(nullable, schemas);
+            if (type == typeof(object)) return new Dictionary<string, object> { { "type", "object" } };
             if (type == typeof(string)) return StringSchema();
             if (type == typeof(bool)) return BooleanSchema();
             if (type == typeof(int)) return IntegerSchema();
@@ -1164,6 +1551,14 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (type.IsEnum) return EnumSchema(type);
             if (type.IsArray) return ArraySchema(SchemaForType(type.GetElementType()!, schemas));
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>)) return ArraySchema(SchemaForType(type.GetGenericArguments()[0], schemas));
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", "object" },
+                    { "additionalProperties", SchemaForType(type.GetGenericArguments()[1], schemas) }
+                };
+            }
 
             AddComponentSchema(schemas, type);
             return SchemaRef(OpenApiSchemaName(type));
@@ -1263,6 +1658,18 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public int TokensUsed { get; set; }
     }
 
+    internal sealed class ChatToolPlan
+    {
+        public bool Enabled { get; set; } = false;
+        public Settings Settings { get; set; } = new Settings();
+        public ToolService ToolService { get; set; } = new ToolService(new Settings());
+
+        public static ChatToolPlan Disabled()
+        {
+            return new ChatToolPlan();
+        }
+    }
+
     /// <summary>
     /// Chat request.
     /// </summary>
@@ -1278,6 +1685,52 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public string Prompt { get; set; } = String.Empty;
         /// <summary>Completion settings.</summary>
         public CompletionRequestSettings Settings { get; set; } = new CompletionRequestSettings();
+        /// <summary>Override whether tools are enabled for this request. Null uses server settings.</summary>
+        public bool? ToolsEnabled { get; set; } = null;
+        /// <summary>Override approval policy for this request. Accepted values: deny, ask, auto.</summary>
+        public string? ApprovalPolicy { get; set; } = null;
+        /// <summary>Optional tool allow-list for this request.</summary>
+        public List<string> ToolNames { get; set; } = new List<string>();
+        /// <summary>Optional working directory override. Requires administrator access.</summary>
+        public string? WorkingDirectory { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Chat response.
+    /// </summary>
+    public sealed class ChatResponse
+    {
+        /// <summary>Conversation.</summary>
+        public Conversation? Conversation { get; set; } = null;
+        /// <summary>User message.</summary>
+        public ChatMessage? UserMessage { get; set; } = null;
+        /// <summary>Assistant message.</summary>
+        public ChatMessage? AssistantMessage { get; set; } = null;
+        /// <summary>Truncation notice.</summary>
+        public ChatTruncationNotice? Truncation { get; set; } = null;
+        /// <summary>Tool run metadata, when tools were used.</summary>
+        public ToolRun? ToolRun { get; set; } = null;
+        /// <summary>Safe tool trace metadata, when tools were used.</summary>
+        public List<ToolTrace> ToolCalls { get; set; } = new List<ToolTrace>();
+        /// <summary>Aggregate tool metrics, when tools were used.</summary>
+        public ChatToolMetrics? ToolMetrics { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Aggregate chat tool metrics.
+    /// </summary>
+    public sealed class ChatToolMetrics
+    {
+        /// <summary>Whether tools were enabled for the response.</summary>
+        public bool ToolsEnabled { get; set; } = false;
+        /// <summary>Tool call count.</summary>
+        public int ToolCallCount { get; set; } = 0;
+        /// <summary>Tool error count.</summary>
+        public int ErrorCount { get; set; } = 0;
+        /// <summary>Tool loop iteration count.</summary>
+        public int IterationCount { get; set; } = 0;
+        /// <summary>Total elapsed milliseconds spent in tools.</summary>
+        public double TotalToolElapsedMs { get; set; } = 0;
     }
 
     /// <summary>

@@ -52,6 +52,7 @@ class ApiClient {
   deleteConversation(id) { return this.request('DELETE', `/v1.0/api/conversations/${id}`); }
   messages(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`, null, params); }
   chat(payload, options = {}) { return this.request('POST', '/v1.0/api/chat', payload, null, options); }
+  tools() { return this.request('GET', '/v1.0/api/tools'); }
   tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }

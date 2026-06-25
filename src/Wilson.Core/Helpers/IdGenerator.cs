@@ -67,6 +67,30 @@ namespace Wilson.Core.Helpers
         }
 
         /// <summary>
+        /// Generate a tool run identifier.
+        /// </summary>
+        public static string ToolRun()
+        {
+            return _Generator.GenerateKSortable("trn_", _Length);
+        }
+
+        /// <summary>
+        /// Generate a tool call identifier.
+        /// </summary>
+        public static string ToolCall()
+        {
+            return _Generator.GenerateKSortable("tcl_", _Length);
+        }
+
+        /// <summary>
+        /// Generate a tool execution record identifier.
+        /// </summary>
+        public static string ToolExecution()
+        {
+            return _Generator.GenerateKSortable("tex_", _Length);
+        }
+
+        /// <summary>
         /// Generate an auth session identifier.
         /// </summary>
         public static string Session()
