@@ -2,7 +2,7 @@
   "info": {
     "name": "Wilson",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Wilson API collection with model server health checks and tool metadata/history endpoints."
+    "description": "Wilson API collection with chat, model server health checks, and tool metadata/history endpoints."
   },
   "variable": [
     { "key": "baseUrl", "value": "http://127.0.0.1:9400" },
@@ -130,6 +130,29 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"{{modelName}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Non-Streaming Chat With Tools",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/chat",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "chat" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"runnerId\": \"{{runnerId}}\",\n  \"model\": \"{{modelName}}\",\n  \"prompt\": \"Read README.md\",\n  \"toolsEnabled\": true,\n  \"approvalPolicy\": \"auto\",\n  \"toolNames\": [\"read_file\"],\n  \"settings\": {\n    \"temperature\": 0,\n    \"topP\": 1,\n    \"maxTokens\": 512\n  }\n}"
             }
           }
         }

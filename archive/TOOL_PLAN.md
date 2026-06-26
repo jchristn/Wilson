@@ -1155,10 +1155,11 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [ ] Add folder `MCP`.
   - MCP Status.
   - Reload MCP.
-- [ ] Update Chat requests.
+- [x] Update Chat requests.
   - Non-streaming chat with tools disabled.
   - Non-streaming chat with tools auto/deny.
   - Streaming endpoint note that Postman may show raw SSE frames.
+  - Progress, 2026-06-27: added a Chat folder with `Non-Streaming Chat With Tools`, including `toolsEnabled`, `approvalPolicy`, `toolNames`, and completion settings. Postman JSON validation passed.
 - [x] Update collection description to mention tool calling.
 
 ## Phase 11: Tests
