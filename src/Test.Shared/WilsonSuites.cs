@@ -660,7 +660,7 @@ namespace Test.Shared
             }
             finally
             {
-                Directory.Delete(workspace, true);
+                TryDeleteDirectory(workspace);
             }
         }
 
@@ -1172,13 +1172,18 @@ namespace Test.Shared
 
         private static async Task<ToolResult> ExecuteToolAsync(ToolService service, string name, string json)
         {
+            return await ExecuteToolAsync(service, name, json, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        private static async Task<ToolResult> ExecuteToolAsync(ToolService service, string name, string json, CancellationToken token)
+        {
             using JsonDocument document = JsonDocument.Parse(json);
             return await service.ExecuteAsync(
                 Wilson.Core.Helpers.IdGenerator.ToolCall(),
                 name,
                 document.RootElement,
                 new ToolExecutionContext(),
-                CancellationToken.None).ConfigureAwait(false);
+                token).ConfigureAwait(false);
         }
 
         private static ToolExecutionContext GuardContext(string workspace, bool blockSecretPaths)
@@ -1430,12 +1435,18 @@ namespace Test.Shared
                 ToolResult timeout = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + timeoutArgs + ",\"timeout_ms\":1000}").ConfigureAwait(false);
                 if (!timeout.Success || !timeout.Content.Contains("\"timedOut\":true", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process timeout to be captured.");
 
+                using (CancellationTokenSource cancellation = new CancellationTokenSource(500))
+                {
+                    ToolResult cancelled = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + timeoutArgs + ",\"timeout_ms\":5000}", cancellation.Token).ConfigureAwait(false);
+                    if (!cancelled.Success || !cancelled.Content.Contains("\"cancelled\":true", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process cancellation to be captured.");
+                }
+
                 ToolResult outside = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + successArgs + ",\"working_directory\":\"..\"}").ConfigureAwait(false);
                 if (outside.Success || !String.Equals(outside.ErrorCode, "path_outside_allowed_roots", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process working directory guard to reject outside roots.");
             }
             finally
             {
-                Directory.Delete(workspace, true);
+                TryDeleteDirectory(workspace);
             }
         }
 

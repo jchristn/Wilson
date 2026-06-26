@@ -97,7 +97,14 @@ namespace Wilson.Core.Tools
             Task timeout = Task.Delay(Timeout.InfiniteTimeSpan, linkedSource.Token);
             Task completed = await Task.WhenAny(execution, timeout).ConfigureAwait(false);
             if (completed == execution) return await execution.ConfigureAwait(false);
-            if (token.IsCancellationRequested) token.ThrowIfCancellationRequested();
+            if (token.IsCancellationRequested)
+            {
+                Task cleanupTimeout = Task.Delay(TimeSpan.FromMilliseconds(5000), CancellationToken.None);
+                Task cleanupCompleted = await Task.WhenAny(execution, cleanupTimeout).ConfigureAwait(false);
+                if (cleanupCompleted == execution) return await execution.ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+            }
+
             return ToolResultFactory.Error(toolCallId, "tool_timed_out", "Tool execution exceeded the configured timeout.");
         }
     }

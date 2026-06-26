@@ -1227,8 +1227,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - success.
   - non-zero exit.
   - timeout kills process.
+  - cancellation returns a structured cancelled result.
   - output truncation.
   - working directory enforcement.
+  - Progress, 2026-06-27: added cancellation coverage to verify token cancellation is captured in the structured process result, and adjusted `ToolService` to allow a bounded cleanup wait for tools that translate cancellation into a result. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [ ] Test `web_retrieve` behind a local test HTTP server.
   - No external network dependency.
   - Include optional HTML test.
@@ -1403,7 +1405,8 @@ Each superset tool must have:
 - [ ] Tool calls are visible from request history/detail views with redacted arguments, result summaries, provider/model, byte counts, sequence numbers, and timings.
 - [ ] Approval mode `ask` blocks execution until the dashboard approval endpoint is called.
 - [ ] Approval denial is sent back to the model as a tool result.
-- [ ] `run_process` honors timeout and cancellation.
+- [x] `run_process` honors timeout and cancellation.
+  - Progress, 2026-06-27: automated coverage verifies timeout, cancellation, non-zero exit capture, stdout capture, and working-directory enforcement.
 - [ ] Tool output is truncated according to settings before persistence and model feedback.
 - [ ] Per-turn output limits and loop guards stop repeated tool cycles and produce a best-effort final answer.
 - [ ] Tool diagnostics catch non-tool-capable runners, unsupported wire formats, missing working directories, missing allowed roots, missing search providers, and disconnected MCP servers before chat.
