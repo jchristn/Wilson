@@ -770,6 +770,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            bool requestedTools = body.ToolsEnabled ?? Settings.Tools.Enabled;
+            if (requestedTools && !await Inference.IsToolCapableModelAsync(runner, body.Model, ctx.Token).ConfigureAwait(false))
+            {
+                body.ToolsEnabled = false;
+            }
+
             ChatToolPlan toolPlan = ResolveChatToolPlan(body, requestContext, runner, streaming);
             Conversation? conversation = String.IsNullOrWhiteSpace(body.ConversationId) ? null : await Database.GetConversationAsync(requestContext.TenantId!, body.ConversationId, ctx.Token).ConfigureAwait(false);
             if (conversation == null)

@@ -652,9 +652,17 @@ function Chat({ api }) {
   const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
   const modelLoading = loadingModelKey === selectedModelKey;
   const availableTools = toolCatalog.filter(item => item.available);
-  const toolRequestEnabled = toolsEnabled;
+  const runnerSupportsTools = selectedRunner?.toolsEnabled !== false && selectedRunner?.supportsTools !== false && !!selectedRunner?.toolCallingApiFormat;
+  const selectedToolModels = Array.isArray(selectedRunner?.toolModels) ? selectedRunner.toolModels : null;
+  const selectedModelSupportsTools = !!runnerSupportsTools && (!selectedToolModels || selectedToolModels.length < 1
+    ? selectedRunner?.apiType !== 'Ollama'
+    : selectedToolModels.some(item => sameModelName(item, model)));
+  const toolRequestEnabled = toolsEnabled && selectedModelSupportsTools;
   const effectiveToolInstructions = toolRequestEnabled ? toolInstructions : '';
-  const toolToggleDisabled = busy;
+  const toolToggleDisabled = busy || !selectedModelSupportsTools;
+  const toolsToggleTitle = selectedModelSupportsTools
+    ? availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'
+    : 'The selected model does not advertise native tool-call support';
   return (
     <div className="chat-layout">
       <aside className="conversation-list">
@@ -713,7 +721,7 @@ function Chat({ api }) {
             {canLoadModel && <button className="secondary toolbar-button model-load-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}<span className="button-label">Load Model</span></button>}
             <button className="secondary toolbar-button system-prompt-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} /><span className="button-label">System Prompt</span></button>
             <button className="secondary toolbar-button settings-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} /><span className="button-label">Settings</span></button>
-            <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
+            <label className="toggle" title={toolsToggleTitle}><input title={toolsToggleTitle} type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
             <button className="icon-button" title="Show available tool catalog" onClick={() => setToolCatalogOpen(true)}><ListFilter size={16} /></button>
             <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
               <option value="auto">Auto</option>
@@ -2935,7 +2943,7 @@ function ModelLoadingModal({ model, runnerName }) {
           <strong title={model}>{model}</strong>
           <span title={runnerName ? `Loading on ${runnerName}` : 'Loading model'}>{runnerName ? `Loading on ${runnerName}` : 'Loading model'}</span>
         </div>
-        <p>Model loading can take several minutes depending on model size. The chat controls will remain available when loading completes.</p>
+        <p>Model loading can take several minutes depending on model size. The chat controls will become available when loading completes.</p>
       </div>
     </Modal>
   );

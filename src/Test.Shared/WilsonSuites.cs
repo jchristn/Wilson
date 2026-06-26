@@ -49,6 +49,7 @@ namespace Test.Shared
                         CreateAsyncCase("tool-audit-redaction-persistence", "Tool audit redaction persistence", ToolAuditRedactionPersistenceAsync),
                         CreateSyncCase("id-length", "Identifier length", IdLength),
                         CreateSyncCase("tool-settings-defaults", "Tool settings defaults", ToolSettingsDefaults),
+                        CreateAsyncCase("ollama-tool-model-classification", "Ollama tool model classification", OllamaToolModelClassificationAsync),
                         CreateAsyncCase("tool-service-foundation", "Tool service foundation", ToolServiceFoundationAsync),
                         CreateAsyncCase("tool-diagnostics-api", "Tool diagnostics API", ToolDiagnosticsApiAsync),
                         CreateAsyncCase("public-chat-tool-trace-api", "Public chat tool trace API", PublicChatToolTraceApiAsync),
@@ -778,6 +779,52 @@ namespace Test.Shared
             if (unsupported.SupportsTools) throw new InvalidOperationException("Unsupported API types should not default to tool support.");
         }
 
+        private static async Task OllamaToolModelClassificationAsync()
+        {
+            int port = GetFreePort();
+            using CancellationTokenSource stop = new CancellationTokenSource();
+            Task serverTask = RunFakeOllamaCapabilityServerAsync(port, stop.Token);
+            try
+            {
+                Settings settings = new Settings
+                {
+                    ModelRunners = new List<ModelRunnerSettings>
+                    {
+                        new ModelRunnerSettings
+                        {
+                            Id = "ollama-tools",
+                            Name = "Ollama Tools",
+                            ApiType = "Ollama",
+                            Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            Models = new List<string>(),
+                            HealthCheckEnabled = false
+                        }
+                    }
+                };
+                InferenceService inference = new InferenceService(settings);
+                ModelRunnerSettings runner = inference.GetRunner("ollama-tools");
+                List<ModelRunnerStatus> statuses = await inference.GetRunnerStatusesAsync(true).ConfigureAwait(false);
+                ModelRunnerStatus status = statuses.Single(item => String.Equals(item.Id, "ollama-tools", StringComparison.OrdinalIgnoreCase));
+                if (!status.ChatModels.Contains("plain:latest", StringComparer.OrdinalIgnoreCase) || !status.ChatModels.Contains("tooly:latest", StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected completion models to be classified as chat-capable.");
+                if (!status.EmbeddingModels.Contains("embed:latest", StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected embedding model to be classified separately.");
+                if (!status.ToolModels.Contains("tooly:latest", StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected tools capability to populate toolModels.");
+                if (status.ToolModels.Contains("plain:latest", StringComparer.OrdinalIgnoreCase) || status.ToolModels.Contains("embed:latest", StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected only models advertising tools to populate toolModels.");
+                if (!await inference.IsToolCapableModelAsync(runner, "tooly:latest").ConfigureAwait(false))
+                    throw new InvalidOperationException("Expected tooly model to be tool-capable.");
+                if (await inference.IsToolCapableModelAsync(runner, "plain:latest").ConfigureAwait(false))
+                    throw new InvalidOperationException("Expected plain completion model to be non-tool-capable.");
+            }
+            finally
+            {
+                stop.Cancel();
+                try { await serverTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            }
+        }
+
         private static async Task ToolServiceFoundationAsync()
         {
             Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = false } };
@@ -1065,7 +1112,7 @@ namespace Test.Shared
                     finally
                     {
                         serverStop.Cancel();
-                        server.Server.Stop();
+                        StopServerIfRunning(server);
                         try
                         {
                             await serverTask.ConfigureAwait(false);
@@ -1162,7 +1209,7 @@ namespace Test.Shared
                     {
                         fakeModelStop.Cancel();
                         serverStop.Cancel();
-                        server.Server.Stop();
+                        StopServerIfRunning(server);
                         try
                         {
                             await serverTask.ConfigureAwait(false);
@@ -1228,6 +1275,57 @@ namespace Test.Shared
                         if (!request.Contains("\"role\":\"assistant\"", StringComparison.Ordinal) || !request.Contains("\"tool_calls\"", StringComparison.Ordinal) || !request.Contains("\"role\":\"tool\"", StringComparison.Ordinal) || !request.Contains(expectedToolOutput, StringComparison.Ordinal))
                             throw new InvalidOperationException("Expected second fake model request to include assistant tool_calls and matching tool result.");
                         body = """{"choices":[{"message":{"role":"assistant","content":"safe final answer"},"finish_reason":"stop"}]}""";
+                    }
+
+                    await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static void StopServerIfRunning(WilsonServer server)
+        {
+            try
+            {
+                server.Server.Stop();
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("already stopped", StringComparison.OrdinalIgnoreCase))
+            {
+            }
+        }
+
+        private static async Task RunFakeOllamaCapabilityServerAsync(int port, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    string body;
+                    if (request.StartsWith("GET /api/tags ", StringComparison.Ordinal))
+                    {
+                        body = """{"models":[{"model":"plain:latest","name":"plain:latest"},{"model":"tooly:latest","name":"tooly:latest"},{"model":"embed:latest","name":"embed:latest"}]}""";
+                    }
+                    else if (request.StartsWith("GET /api/ps ", StringComparison.Ordinal))
+                    {
+                        body = """{"models":[]}""";
+                    }
+                    else if (request.StartsWith("POST /api/show ", StringComparison.Ordinal))
+                    {
+                        if (request.Contains("\"tooly:latest\"", StringComparison.Ordinal)) body = """{"capabilities":["completion","tools"]}""";
+                        else if (request.Contains("\"embed:latest\"", StringComparison.Ordinal)) body = """{"capabilities":["embedding"]}""";
+                        else body = """{"capabilities":["completion"]}""";
+                    }
+                    else
+                    {
+                        body = """{"error":"unexpected fake Ollama request"}""";
                     }
 
                     await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);

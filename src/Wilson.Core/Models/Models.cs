@@ -501,6 +501,8 @@ namespace Wilson.Core.Models
         public List<string> ChatModels { get; set; } = new List<string>();
         /// <summary>Models suitable only for embedding requests.</summary>
         public List<string> EmbeddingModels { get; set; } = new List<string>();
+        /// <summary>Models that advertise native tool-call support.</summary>
+        public List<string> ToolModels { get; set; } = new List<string>();
         /// <summary>Currently loaded or running model list reported by the model server.</summary>
         public List<string> LoadedModels { get; set; } = new List<string>();
         /// <summary>Model list used by legacy dashboard chat selector.</summary>

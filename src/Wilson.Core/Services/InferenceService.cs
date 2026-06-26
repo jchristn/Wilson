@@ -120,6 +120,8 @@ namespace Wilson.Core.Services
                     ModelCapabilityClassification nameClassification = ClassifyModelsFromNames(status.AvailableModels);
                     status.ChatModels = nameClassification.ChatModels;
                     status.EmbeddingModels = nameClassification.EmbeddingModels;
+                    status.ToolModels = nameClassification.ToolModels;
+                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
                     status.Models = new List<string>(status.ChatModels);
                     status.Online = true;
                     status.StatusMessage = "Live model status not queried.";
@@ -128,7 +130,10 @@ namespace Wilson.Core.Services
                 }
 
                 using CancellationTokenSource statusTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                statusTimeout.CancelAfter(Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs));
+                int statusTimeoutMs = Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs);
+                if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools)
+                    statusTimeoutMs = Math.Max(statusTimeoutMs, 15000);
+                statusTimeout.CancelAfter(statusTimeoutMs);
                 CancellationToken statusToken = statusTimeout.Token;
 
                 try
@@ -150,6 +155,8 @@ namespace Wilson.Core.Services
                     ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, statusToken).ConfigureAwait(false);
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
+                    status.ToolModels = classification.ToolModels;
+                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
                     status.Models = new List<string>(status.ChatModels);
                     status.Online = true;
                     status.StatusMessage = "Connected";
@@ -159,6 +166,8 @@ namespace Wilson.Core.Services
                     ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
+                    status.ToolModels = classification.ToolModels;
+                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
                     status.Models = new List<string>(status.ChatModels);
                     status.Online = !runnerDefaults.HealthCheckEnabled;
                     status.StatusMessage = runnerDefaults.HealthCheckEnabled
@@ -170,6 +179,8 @@ namespace Wilson.Core.Services
                     ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
+                    status.ToolModels = classification.ToolModels;
+                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
                     status.Models = new List<string>(status.ChatModels);
                     status.Online = !runnerDefaults.HealthCheckEnabled;
                     status.StatusMessage = runnerDefaults.HealthCheckEnabled
@@ -191,6 +202,20 @@ namespace Wilson.Core.Services
             if (String.IsNullOrWhiteSpace(model)) return false;
             ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, new List<string> { model }, token).ConfigureAwait(false);
             return classification.ChatModels.Any(item => String.Equals(item, model, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Determine whether a model advertises native tool-call support.
+        /// </summary>
+        public async Task<bool> IsToolCapableModelAsync(ModelRunnerSettings runner, string model, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(model)) return false;
+            ModelRunnerSettings copy = CopyRunner(runner);
+            ModelRunnerSettings.ApplyToolDefaults(copy);
+            if (!copy.ToolsEnabled || !copy.SupportsTools) return false;
+            if (!String.Equals(copy.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)) return true;
+            ModelCapabilityClassification classification = await ClassifyModelsAsync(copy, new List<string> { model }, token).ConfigureAwait(false);
+            return classification.ToolModels.Any(item => String.Equals(item, model, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -790,11 +815,16 @@ namespace Wilson.Core.Services
                     : GetModelCapabilityFromName(model);
 
                 if (capability == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
-                else classification.ChatModels.Add(model);
+                else
+                {
+                    classification.ChatModels.Add(model);
+                    if (capability == ModelCapability.ToolChat) classification.ToolModels.Add(model);
+                }
             }
 
             classification.ChatModels = classification.ChatModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
             classification.EmbeddingModels = classification.EmbeddingModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            classification.ToolModels = classification.ToolModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
             return classification;
         }
 
@@ -809,6 +839,7 @@ namespace Wilson.Core.Services
 
             classification.ChatModels = classification.ChatModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
             classification.EmbeddingModels = classification.EmbeddingModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
+            classification.ToolModels = classification.ToolModels.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).ToList();
             return classification;
         }
 
@@ -824,6 +855,7 @@ namespace Wilson.Core.Services
                 response.EnsureSuccessStatusCode();
                 string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
                 using JsonDocument document = JsonDocument.Parse(json);
+                if (HasOllamaCapability(document.RootElement, "tools") && (HasOllamaCapability(document.RootElement, "completion") || HasOllamaCapability(document.RootElement, "chat") || HasOllamaCapability(document.RootElement, "generate"))) return ModelCapability.ToolChat;
                 if (HasOllamaCapability(document.RootElement, "completion") || HasOllamaCapability(document.RootElement, "chat") || HasOllamaCapability(document.RootElement, "generate")) return ModelCapability.Chat;
                 if (HasOllamaCapability(document.RootElement, "embedding") || HasOllamaCapability(document.RootElement, "embeddings")) return ModelCapability.Embedding;
             }
@@ -872,11 +904,13 @@ namespace Wilson.Core.Services
         {
             public List<string> ChatModels { get; set; } = new List<string>();
             public List<string> EmbeddingModels { get; set; } = new List<string>();
+            public List<string> ToolModels { get; set; } = new List<string>();
         }
 
         private enum ModelCapability
         {
             Chat,
+            ToolChat,
             Embedding
         }
 
