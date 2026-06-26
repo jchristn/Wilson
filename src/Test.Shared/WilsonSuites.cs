@@ -40,6 +40,7 @@ namespace Test.Shared
             ToolSettingsDefaults();
             await ToolServiceFoundationAsync().ConfigureAwait(false);
             await ToolDiagnosticsApiAsync().ConfigureAwait(false);
+            await PublicChatToolTraceApiAsync().ConfigureAwait(false);
             await WorkingDirectoryGuardAsync().ConfigureAwait(false);
             await ToolArgumentValidationAndOutputLimiterAsync().ConfigureAwait(false);
             await FilesystemDiscoveryToolsAsync().ConfigureAwait(false);
@@ -896,6 +897,201 @@ namespace Test.Shared
                 SqliteConnection.ClearAllPools();
                 if (Directory.Exists(workspace)) Directory.Delete(workspace, true);
             }
+        }
+
+        private static async Task PublicChatToolTraceApiAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-chat-tools-api-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            string settingsFile = Path.Combine(workspace, "wilson.json");
+            string databaseFile = Path.Combine(workspace, "wilson.db");
+            string toolOutputSecret = "result-secret-should-not-be-public";
+            await File.WriteAllTextAsync(Path.Combine(workspace, "sample.txt"), toolOutputSecret).ConfigureAwait(false);
+            int serverPort = GetFreePort();
+            int modelPort = GetFreePort();
+
+            try
+            {
+                Settings settings = new Settings
+                {
+                    Rest = new RestSettings { Hostname = "127.0.0.1", Port = serverPort, Ssl = false },
+                    Database = new DatabaseSettings { Type = "Sqlite", Filename = databaseFile },
+                    Auth = new AuthSettings { AdminBearerTokens = new List<string> { "test-admin-token" } },
+                    RequestHistory = new RequestHistorySettings { Enabled = false },
+                    Seed = new SeedSettings { AccessKey = "test-user-token", UserEmail = "trace-user@example.com" },
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace }
+                    },
+                    ModelRunners = new List<ModelRunnerSettings>
+                    {
+                        new ModelRunnerSettings
+                        {
+                            Id = "tool-runner",
+                            Name = "Tool Runner",
+                            ApiType = "OpenAI",
+                            Endpoint = "http://127.0.0.1:" + modelPort,
+                            Models = new List<string> { "test-model" },
+                            HealthCheckEnabled = false
+                        }
+                    }
+                };
+
+                File.WriteAllText(settingsFile, JsonSerializer.Serialize(settings, TestJson()));
+                WilsonServer server = await WilsonServer.CreateAsync(new[] { settingsFile }).ConfigureAwait(false);
+
+                using (CancellationTokenSource fakeModelStop = new CancellationTokenSource())
+                using (CancellationTokenSource serverStop = new CancellationTokenSource())
+                using (HttpClient userClient = new HttpClient())
+                {
+                    Task fakeModelTask = RunFakeOpenAiToolServerAsync(modelPort, toolOutputSecret, fakeModelStop.Token);
+                    Task serverTask = Task.Run(() => server.Server.StartAsync(serverStop.Token), serverStop.Token);
+                    userClient.BaseAddress = new Uri("http://127.0.0.1:" + serverPort);
+                    userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-user-token");
+
+                    try
+                    {
+                        await WaitForHttpAsync(userClient).ConfigureAwait(false);
+                        string requestJson = JsonSerializer.Serialize(new
+                        {
+                            runnerId = "tool-runner",
+                            model = "test-model",
+                            prompt = "Read sample.txt",
+                            toolsEnabled = true,
+                            approvalPolicy = ToolApprovalPolicies.Auto,
+                            settings = new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 }
+                        }, TestJson());
+                        using (StringContent content = new StringContent(requestJson, Encoding.UTF8, "application/json"))
+                        using (HttpResponseMessage response = await userClient.PostAsync("/v1.0/api/chat", content).ConfigureAwait(false))
+                        {
+                            string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Expected tool chat success but received " + (int)response.StatusCode + ": " + payload);
+                            AssertPublicToolTracePayload(payload, toolOutputSecret);
+                        }
+
+                        await fakeModelTask.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        fakeModelStop.Cancel();
+                        serverStop.Cancel();
+                        server.Server.Stop();
+                        try
+                        {
+                            await serverTask.ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static void AssertPublicToolTracePayload(string payload, string toolOutputSecret)
+        {
+            if (payload.Contains(toolOutputSecret, StringComparison.Ordinal)) throw new InvalidOperationException("Public chat response leaked raw tool output.");
+            if (payload.Contains("provider-secret-call-id", StringComparison.Ordinal)) throw new InvalidOperationException("Public chat response leaked provider tool-call ID.");
+            if (payload.Contains("argumentsJson", StringComparison.Ordinal) || payload.Contains("resultJson", StringComparison.Ordinal) || payload.Contains("providerToolCallId", StringComparison.Ordinal) || payload.Contains("approvedByUserId", StringComparison.Ordinal))
+                throw new InvalidOperationException("Public chat response leaked audit-only tool fields.");
+
+            using JsonDocument document = JsonDocument.Parse(payload);
+            JsonElement root = document.RootElement;
+            if (!root.TryGetProperty("toolCalls", out JsonElement toolCalls) || toolCalls.ValueKind != JsonValueKind.Array || toolCalls.GetArrayLength() != 1)
+                throw new InvalidOperationException("Expected one public tool trace in chat response.");
+            JsonElement trace = toolCalls[0];
+            string[] forbidden = new[] { "argumentsJson", "resultJson", "resultPreview", "providerToolCallId", "provider", "model", "approvalPolicy", "approvedByUserId" };
+            foreach (string property in forbidden)
+            {
+                if (trace.TryGetProperty(property, out JsonElement _)) throw new InvalidOperationException("Public tool trace exposed audit-only field: " + property + ".");
+            }
+
+            if (!trace.TryGetProperty("toolCallId", out JsonElement toolCallId) || !toolCallId.GetString()!.StartsWith("tcl_", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected public tool trace to use a Wilson-generated tool call ID.");
+            if (!trace.TryGetProperty("toolName", out JsonElement toolName) || !String.Equals(toolName.GetString(), "read_file", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected read_file public trace.");
+            if (!trace.TryGetProperty("summary", out JsonElement summary) || !String.Equals(summary.GetString(), "Completed.", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected safe public tool summary.");
+        }
+
+        private static async Task RunFakeOpenAiToolServerAsync(int port, string expectedToolOutput, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                for (int requestIndex = 1; requestIndex <= 2; requestIndex++)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    string body;
+                    if (requestIndex == 1)
+                    {
+                        if (!request.Contains("\"tools\"", StringComparison.Ordinal) || !request.Contains("read_file", StringComparison.Ordinal) || !request.Contains("\"tool_choice\"", StringComparison.Ordinal))
+                            throw new InvalidOperationException("Expected first fake model request to include tool definitions and tool choice.");
+                        body = """{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"provider-secret-call-id","type":"function","function":{"name":"read_file","arguments":"{\"file_path\":\"sample.txt\"}"}}]},"finish_reason":"tool_calls"}]}""";
+                    }
+                    else
+                    {
+                        if (!request.Contains("\"role\":\"assistant\"", StringComparison.Ordinal) || !request.Contains("\"tool_calls\"", StringComparison.Ordinal) || !request.Contains("\"role\":\"tool\"", StringComparison.Ordinal) || !request.Contains(expectedToolOutput, StringComparison.Ordinal))
+                            throw new InvalidOperationException("Expected second fake model request to include assistant tool_calls and matching tool result.");
+                        body = """{"choices":[{"message":{"role":"assistant","content":"safe final answer"},"finish_reason":"stop"}]}""";
+                    }
+
+                    await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static async Task<string> ReadHttpRequestAsync(NetworkStream stream, CancellationToken token)
+        {
+            byte[] buffer = new byte[4096];
+            using MemoryStream memory = new MemoryStream();
+            int contentLength = 0;
+            while (true)
+            {
+                int read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), token).ConfigureAwait(false);
+                if (read <= 0) break;
+                memory.Write(buffer, 0, read);
+                string text = Encoding.UTF8.GetString(memory.ToArray());
+                int headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+                if (headerEnd < 0) continue;
+                if (contentLength == 0)
+                {
+                    foreach (string line in text.Substring(0, headerEnd).Split(new[] { "\r\n" }, StringSplitOptions.None))
+                    {
+                        int separator = line.IndexOf(':');
+                        if (separator > 0 && String.Equals(line.Substring(0, separator), "Content-Length", StringComparison.OrdinalIgnoreCase))
+                            contentLength = Int32.Parse(line.Substring(separator + 1).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                }
+
+                int bodyBytes = memory.ToArray().Length - Encoding.UTF8.GetByteCount(text.Substring(0, headerEnd + 4));
+                if (bodyBytes >= contentLength) return text;
+            }
+
+            return Encoding.UTF8.GetString(memory.ToArray());
+        }
+
+        private static async Task WriteHttpResponseAsync(NetworkStream stream, string body, CancellationToken token)
+        {
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+            string headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + bodyBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\nConnection: close\r\n\r\n";
+            byte[] headerBytes = Encoding.UTF8.GetBytes(headers);
+            await stream.WriteAsync(headerBytes.AsMemory(0, headerBytes.Length), token).ConfigureAwait(false);
+            await stream.WriteAsync(bodyBytes.AsMemory(0, bodyBytes.Length), token).ConfigureAwait(false);
         }
 
         private static async Task SeedAndVerifyToolCallApiAuthorizationAsync(WilsonServer server, HttpClient userClient, HttpClient adminClient, HttpClient anonymousClient)

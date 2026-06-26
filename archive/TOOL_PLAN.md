@@ -1300,7 +1300,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add API tests for request-history tool calls authorization.
   - Progress, 2026-06-27: `ToolDiagnosticsApiAsync` seeds a conversation, tool run, tool call, and request-history row in the live server database, then verifies conversation owner access, tenant/global admin request-history access, tenant scoping via `tenantId`, and unauthenticated denial for conversation/request-history tool-call routes. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [ ] Add streaming SSE parser tests for tool events.
-- [ ] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
+- [x] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
+  - Progress, 2026-06-27: `PublicChatToolTraceApiAsync` uses a local fake OpenAI-compatible tool-call endpoint and a real Wilson chat request to verify the model receives the raw tool result internally while the public chat response omits raw output, provider tool-call IDs, raw argument/result fields, provider/model fields, and hidden approval fields. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [x] Add OpenAPI generation test proving schemas and paths are present.
   - Progress, 2026-06-26: live `/openapi.json` test verifies tool validate/test paths and request/result schemas.
 
@@ -1408,7 +1409,8 @@ Each superset tool must have:
 - [ ] With tools enabled and a safe working directory configured, a tool-capable model can call `read_file` and receive the file result in a follow-up model turn.
 - [ ] The dashboard shows an active tool call while it is running.
 - [ ] The expanded chat view shows tool arguments, result preview, success/failure, timestamps, and runtime.
-- [ ] Public expanded chat details are safe by default; audit-only arguments/results are available only through authorized redacted audit views.
+- [x] Public expanded chat details are safe by default; audit-only arguments/results are available only through authorized redacted audit views.
+  - Progress, 2026-06-27: live chat API regression verifies public `toolCalls` are safe traces only; prior audit API tests verify redacted tenant/admin reads for persisted tool records.
 - [ ] Tool calls remain visible after reloading the conversation.
 - [ ] Tool calls are visible from request history/detail views with redacted arguments, result summaries, provider/model, byte counts, sequence numbers, and timings.
 - [ ] Approval mode `ask` blocks execution until the dashboard approval endpoint is called.
