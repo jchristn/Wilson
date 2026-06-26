@@ -24,7 +24,7 @@ namespace Test.Nunit
         [Test]
         public async Task SharedTouchstoneSuitesPass()
         {
-            await RunAllAsync();
+            await TouchstoneSuiteCatalog.RunWithSharedSuiteLockAsync(() => RunAllAsync());
         }
     }
 }

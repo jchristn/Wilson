@@ -649,7 +649,7 @@ namespace Test.Shared
         private static void ToolSettingsDefaults()
         {
             ToolsSettings tools = new ToolsSettings();
-            if (tools.Enabled) throw new InvalidOperationException("Tools should be disabled by default.");
+            if (!tools.Enabled) throw new InvalidOperationException("Tools should be enabled by default.");
             if (!tools.BuiltInsEnabled) throw new InvalidOperationException("Built-in tools should be enabled for catalog resolution by default.");
             if (!String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected default tool approval policy.");
             if (tools.MaxAgentIterations != 25 || tools.MaxToolCallsPerTurn != 12) throw new InvalidOperationException("Unexpected default tool limits.");
@@ -672,7 +672,7 @@ namespace Test.Shared
 
         private static async Task ToolServiceFoundationAsync()
         {
-            Settings disabled = new Settings();
+            Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = false } };
             ToolService disabledService = new ToolService(disabled);
             if (disabledService.ListTools(false).Count != 0) throw new InvalidOperationException("Disabled tool service should not expose model tools.");
             List<ToolDescriptor> disabledDiagnostics = disabledService.ListTools(true);
@@ -983,7 +983,7 @@ namespace Test.Shared
                     Seed = new SeedSettings { AccessKey = "test-user-token", UserEmail = "trace-user@example.com" },
                     Tools = new ToolsSettings
                     {
-                        Enabled = true,
+                        Enabled = false,
                         DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
                         WorkingDirectory = workspace,
                         AllowedRoots = new List<string> { workspace }

@@ -9,7 +9,7 @@ namespace Wilson.Core.Settings
     public class ToolsSettings
     {
         /// <summary>Enable model-directed tools globally.</summary>
-        public bool Enabled { get; set; } = false;
+        public bool Enabled { get; set; } = true;
         /// <summary>Enable Wilson built-in tools.</summary>
         public bool BuiltInsEnabled { get; set; } = true;
         /// <summary>Default approval policy.</summary>

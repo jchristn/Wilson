@@ -24,7 +24,7 @@ namespace Test.Xunit
         [Fact]
         public async Task SharedTouchstoneSuitesPass()
         {
-            await RunAllAsync();
+            await TouchstoneSuiteCatalog.RunWithSharedSuiteLockAsync(() => RunAllAsync());
         }
     }
 }

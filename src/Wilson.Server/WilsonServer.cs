@@ -1033,13 +1033,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
         private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
         {
-            if (!Settings.Tools.Enabled)
-            {
-                if (body.ToolsEnabled == true)
-                    throw new ArgumentException("Tools are disabled by server settings.");
-                return ChatToolPlan.Disabled();
-            }
-
             bool requestedToolsEnabled = body.ToolsEnabled ?? Settings.Tools.Enabled;
             if (!requestedToolsEnabled) return ChatToolPlan.Disabled();
 
@@ -1067,7 +1060,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
 
             ToolsSettings tools = CloneTools(Settings.Tools);
-            tools.Enabled = true;
+            tools.Enabled = requestedToolsEnabled;
 
             if (!String.IsNullOrWhiteSpace(body.ApprovalPolicy))
             {

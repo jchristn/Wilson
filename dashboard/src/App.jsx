@@ -1020,7 +1020,7 @@ function defaultRunnerToolSettings(apiType = 'Ollama') {
 
 function defaultToolsSettings() {
   return {
-    enabled: false,
+    enabled: true,
     builtInsEnabled: true,
     defaultApprovalPolicy: 'ask',
     destructiveToolsRequireApproval: true,
@@ -2292,7 +2292,7 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
   const setNumber = (key, value) => onChange(key, Number(value));
   return (
     <>
-      <FormCheck label="Tools enabled" tooltip="Global server-side switch for model-directed tools. When off, explicit tool requests are rejected." checked={!!tools.enabled} onChange={v => onChange('enabled', v)} />
+      <FormCheck label="Tools enabled" tooltip="Default server-side switch for model-directed tools. Chat requests can still explicitly enable or disable tools." checked={tools.enabled !== false} onChange={v => onChange('enabled', v)} />
       <FormCheck label="Built-ins enabled" tooltip="Expose Wilson built-in tools when global tools are enabled." checked={tools.builtInsEnabled !== false} onChange={v => onChange('builtInsEnabled', v)} />
       <FormSelect label="Default approval" tooltip="Default approval policy for tool calls." value={tools.defaultApprovalPolicy || 'ask'} options={['ask', 'auto', 'deny']} onChange={v => onChange('defaultApprovalPolicy', v)} />
       <FormSelect label="Tool choice mode" tooltip="Model-facing tool-choice mode for tool-enabled chat requests." value={tools.toolChoiceMode || 'auto'} options={['auto', 'required', 'none', 'allowed_only']} onChange={v => onChange('toolChoiceMode', v)} />
