@@ -546,11 +546,12 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - Track model-visible output characters for both per-call and per-turn limits.
   - Track output bytes separately from output characters for audit and analytics.
   - Add provider-specific telemetry to tool results where available, such as web-search provider latency or credits.
-  - Progress: JSON argument parsing, unknown/unavailable rejection via `ToolService`, elapsed timing, timestamps, tool-result message append, and safe trace creation are implemented for the non-streaming core loop. Approval and audit-grade redaction remain pending.
-- [ ] Approval behavior:
+  - Progress: JSON argument parsing, unknown/unavailable rejection via `ToolService`, elapsed timing, timestamps, tool-result message append, and safe trace creation are implemented for the non-streaming core loop. Audit-grade persistence redaction is implemented through `ToolAuditWriter`; live approval events remain pending.
+- [~] Approval behavior:
   - `deny`: do not run; append tool result explaining denial.
   - `auto`: run without user intervention unless dangerous tool requires approval by settings.
   - `ask`: pause the agent loop and wait for dashboard/API approval.
+  - Progress, 2026-06-27: non-streaming approval enforcement is implemented and tested for deny policy and approval-required destructive tools. Denied calls are appended as structured tool results and sent back to the model for a final answer. Interactive `ask` remains pending with streaming/approval endpoints. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [ ] Approval timeout:
   - Add setting `Tools.ApprovalTimeoutMs`, default `300000`.
   - If timeout expires, mark denied and append a denial result.
@@ -1259,7 +1260,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [ ] Test parallel tool-call support is serialized or parallelized according to implementation decision.
 - [ ] Test unknown tool result.
 - [ ] Test disabled tool result.
-- [ ] Test approval deny.
+- [x] Test approval deny.
+  - Progress, 2026-06-27: `ToolAgentApprovalPolicyAsync` verifies deny policy returns a denied tool result without exposing read content, approval-required `write_file` does not write the file, denial is sent back to the model for a final answer, and disabling destructive approval clears the descriptor approval requirement.
 - [ ] Test approval ask approved.
 - [ ] Test approval ask timeout.
 - [ ] Test max iterations reached.
@@ -1370,8 +1372,10 @@ Each superset tool must have:
   - Progress: server chat resolution now rejects explicit tool requests while global tools are disabled; dashboard chat sends `toolsEnabled: false` when the user toggle is off. Validated with solution build and automated tests.
 - [x] All filesystem paths must resolve inside allowed roots.
   - Progress: `WorkingDirectoryGuard` checks normalized paths and resolved physical paths, including symlink/junction segments, against allowed roots before returning a path to file/process tools.
-- [ ] Process execution must be disabled independently by default or marked approval-required by default.
-- [ ] Destructive tools must require approval unless an admin explicitly disables `DestructiveToolsRequireApproval`.
+- [x] Process execution must be disabled independently by default or marked approval-required by default.
+  - Progress, 2026-06-27: `run_process` remains dangerous and approval-required under default settings; non-streaming agent execution denies approval-required tools instead of running them.
+- [x] Destructive tools must require approval unless an admin explicitly disables `DestructiveToolsRequireApproval`.
+  - Progress, 2026-06-27: `ToolPolicyResolver` now derives dangerous-tool approval from `DestructiveToolsRequireApproval`; automated coverage verifies the default requirement and the explicit disable override.
 - [~] Secrets must be redacted before API responses, request history, logs, and dashboard display.
   - Progress: tool audit arguments/results/summaries/previews/error fields are redacted before persistence and API reads; chat traces are safe. Structured logging remains minimal and should be rechecked when tool lifecycle logging is added.
 - [x] Public chat traces must be generated from safe `ToolTrace`/`ToolProgressEvent` payloads, not from persisted audit rows.

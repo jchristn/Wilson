@@ -51,7 +51,7 @@ namespace Wilson.Core.Tools
                     EnabledByPolicy = enabledByPolicy,
                     Available = available,
                     UnavailableReason = available ? null : unavailableReason,
-                    RequiresApproval = executor.RequiresApproval || (executor.Dangerous && tools.DestructiveToolsRequireApproval),
+                    RequiresApproval = executor.Dangerous ? tools.DestructiveToolsRequireApproval : executor.RequiresApproval,
                     Dangerous = executor.Dangerous
                 };
 

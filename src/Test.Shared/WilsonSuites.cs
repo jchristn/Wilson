@@ -47,6 +47,7 @@ namespace Test.Shared
             await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
             await ToolAgentLoopAsync().ConfigureAwait(false);
+            await ToolAgentApprovalPolicyAsync().ConfigureAwait(false);
             await ToolAgentPerTurnOutputLimitAsync().ConfigureAwait(false);
             ContextTruncationAsync();
             HealthCheckDefaults();
@@ -1562,6 +1563,7 @@ namespace Test.Shared
                         Enabled = true,
                         WorkingDirectory = workspace,
                         AllowedRoots = new List<string> { workspace },
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
                         MaxToolIterations = 4,
                         MaxToolCallsPerTurn = 4
                     }
@@ -1624,6 +1626,118 @@ namespace Test.Shared
             }
         }
 
+        private static async Task ToolAgentApprovalPolicyAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-agent-approval-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                string sourceFile = Path.Combine(workspace, "sample.txt");
+                string deniedFile = Path.Combine(workspace, "created.txt");
+                await File.WriteAllTextAsync(sourceFile, "approval policy content").ConfigureAwait(false);
+
+                Settings denySettings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Deny,
+                        MaxToolIterations = 2,
+                        MaxToolCallsPerTurn = 2
+                    }
+                };
+                ToolAgentResponse denyResponse = await RunSingleToolThenFinalAsync(denySettings, "read_file", """{"file_path":"sample.txt"}""", message =>
+                {
+                    string content = message.Content ?? String.Empty;
+                    if (!content.Contains("tool_call_denied", StringComparison.Ordinal) || content.Contains("approval policy content", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected deny approval policy to return a denial result without reading file content.");
+                }).ConfigureAwait(false);
+                if (!denyResponse.Success || denyResponse.ToolCalls.Count != 1 || !denyResponse.ToolCalls[0].Denied || denyResponse.ToolCalls[0].Success) throw new InvalidOperationException("Expected deny approval policy to produce a denied trace.");
+
+                Settings approvalRequiredSettings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                        DestructiveToolsRequireApproval = true,
+                        MaxToolIterations = 2,
+                        MaxToolCallsPerTurn = 2
+                    }
+                };
+                ToolDescriptor? writeDescriptor = new ToolService(approvalRequiredSettings).GetTool("write_file");
+                if (writeDescriptor == null || !writeDescriptor.RequiresApproval) throw new InvalidOperationException("Expected destructive tool to require approval when configured.");
+
+                ToolAgentResponse approvalRequiredResponse = await RunSingleToolThenFinalAsync(approvalRequiredSettings, "write_file", """{"file_path":"created.txt","content":"denied"}""", message =>
+                {
+                    string content = message.Content ?? String.Empty;
+                    if (!content.Contains("tool_call_denied", StringComparison.Ordinal)) throw new InvalidOperationException("Expected approval-required tool to return a denial result.");
+                }).ConfigureAwait(false);
+                if (!approvalRequiredResponse.Success || approvalRequiredResponse.ToolCalls.Count != 1 || !approvalRequiredResponse.ToolCalls[0].Denied || approvalRequiredResponse.ToolCalls[0].Success) throw new InvalidOperationException("Expected approval-required tool to produce a denied trace.");
+                if (File.Exists(deniedFile)) throw new InvalidOperationException("Approval-required write_file should not execute in the non-streaming tool loop.");
+
+                approvalRequiredSettings.Tools.DestructiveToolsRequireApproval = false;
+                ToolDescriptor? noApprovalWriteDescriptor = new ToolService(approvalRequiredSettings).GetTool("write_file");
+                if (noApprovalWriteDescriptor == null || noApprovalWriteDescriptor.RequiresApproval) throw new InvalidOperationException("Expected destructive approval override to clear approval requirement.");
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static async Task<ToolAgentResponse> RunSingleToolThenFinalAsync(Settings settings, string toolName, string arguments, Action<ModelChatMessage> assertToolMessage)
+        {
+            ToolService toolService = new ToolService(settings);
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(
+                toolService,
+                (runner, request, token) =>
+                {
+                    modelCalls++;
+                    if (modelCalls == 1)
+                    {
+                        return Task.FromResult(new ToolCapableInferenceResponse
+                        {
+                            Success = true,
+                            FinishReason = "tool_calls",
+                            ToolCalls = new List<ModelToolCall>
+                            {
+                                new ModelToolCall
+                                {
+                                    Id = "call_policy",
+                                    Function = new ModelToolFunctionCall
+                                    {
+                                        Name = toolName,
+                                        Arguments = arguments
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    ModelChatMessage? toolMessage = request.Messages.FirstOrDefault(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase));
+                    if (toolMessage == null) throw new InvalidOperationException("Expected tool result message before final model call.");
+                    assertToolMessage(toolMessage);
+                    return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "approval checked", FinishReason = "stop" });
+                });
+
+            ToolAgentResponse response = await agent.RunAsync(
+                new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "http://localhost", Models = new List<string> { "test-model" } },
+                "test-model",
+                new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "Run policy test." } },
+                new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
+                new ToolExecutionContext { Settings = settings },
+                CancellationToken.None).ConfigureAwait(false);
+
+            if (modelCalls != 2) throw new InvalidOperationException("Expected denial result to be sent back to the model for a final answer.");
+            return response;
+        }
+
         private static async Task ToolAgentPerTurnOutputLimitAsync()
         {
             string workspace = Path.Combine(Path.GetTempPath(), "wilson-agent-budget-" + Guid.NewGuid().ToString("N"));
@@ -1639,6 +1753,7 @@ namespace Test.Shared
                         Enabled = true,
                         WorkingDirectory = workspace,
                         AllowedRoots = new List<string> { workspace },
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
                         MaxToolIterations = 2,
                         MaxToolCallsPerTurn = 4,
                         MaxToolOutputChars = 1024,

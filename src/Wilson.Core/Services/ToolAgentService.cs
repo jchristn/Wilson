@@ -225,6 +225,8 @@ namespace Wilson.Core.Services
             string toolCallId = String.IsNullOrWhiteSpace(call.Id) ? IdGenerator.ToolCall() : call.Id!;
             string toolName = call.Function?.Name ?? String.Empty;
             string argumentsJson = call.Function?.Arguments ?? "{}";
+            ToolResult? approvalResult = ApprovalDeniedResult(toolCallId, toolName, context);
+            if (approvalResult != null) return approvalResult;
 
             try
             {
@@ -235,6 +237,22 @@ namespace Wilson.Core.Services
             {
                 return ToolResultFactory.Error(toolCallId, "invalid_arguments", "Tool arguments were not valid JSON: " + ex.Message);
             }
+        }
+
+        private ToolResult? ApprovalDeniedResult(string toolCallId, string toolName, ToolExecutionContext context)
+        {
+            string approvalPolicy = context.Settings.Tools.DefaultApprovalPolicy;
+            if (String.Equals(approvalPolicy, ToolApprovalPolicies.Deny, StringComparison.OrdinalIgnoreCase))
+                return ToolResultFactory.Error(toolCallId, "tool_call_denied", "Tool execution was denied by the active approval policy.");
+
+            ToolDescriptor? descriptor = _ToolService.GetTool(toolName);
+            if (descriptor != null && descriptor.RequiresApproval)
+                return ToolResultFactory.Error(toolCallId, "tool_call_denied", "Tool execution requires approval and cannot run in the non-streaming tool loop.");
+
+            if (String.Equals(approvalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
+                return ToolResultFactory.Error(toolCallId, "tool_call_denied", "Interactive tool approval is not available in the non-streaming tool loop.");
+
+            return null;
         }
 
         private static List<ModelChatMessage> BuildInitialConversation(List<ModelChatMessage> messages, CompletionRequestSettings settings)
@@ -288,7 +306,7 @@ namespace Wilson.Core.Services
                 Iteration = iteration,
                 SequenceNumber = sequenceNumber,
                 Success = result.Success,
-                Denied = String.Equals(result.ErrorCode, "tool_call_limit_reached", StringComparison.OrdinalIgnoreCase),
+                Denied = IsDenied(result),
                 Truncated = result.Truncated,
                 OutputCharacters = result.Content?.Length ?? 0,
                 ElapsedMs = elapsedMs,
@@ -312,7 +330,7 @@ namespace Wilson.Core.Services
                 ArgumentsJson = call.Function?.Arguments ?? "{}",
                 ResultJson = String.IsNullOrWhiteSpace(resultJson) ? "{}" : resultJson,
                 Success = result.Success,
-                Denied = String.Equals(result.ErrorCode, "tool_call_limit_reached", StringComparison.OrdinalIgnoreCase),
+                Denied = IsDenied(result),
                 Truncated = result.Truncated,
                 OutputCharacters = result.Content?.Length ?? 0,
                 ErrorCode = result.ErrorCode,
@@ -328,6 +346,12 @@ namespace Wilson.Core.Services
             if (String.IsNullOrWhiteSpace(name)) return String.Empty;
             string[] parts = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
             return String.Join(" ", parts.Select(part => Char.ToUpperInvariant(part[0]) + part.Substring(1)));
+        }
+
+        private static bool IsDenied(ToolResult result)
+        {
+            return String.Equals(result.ErrorCode, "tool_call_limit_reached", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(result.ErrorCode, "tool_call_denied", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
