@@ -183,7 +183,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
         private static void NormalizeTools(ToolsSettings tools, bool applyWorkspaceDefaults = false)
         {
-            tools.DefaultApprovalPolicy = NormalizeValue(tools.DefaultApprovalPolicy, "ask", "deny", "ask", "auto");
+            tools.DefaultApprovalPolicy = NormalizeValue(tools.DefaultApprovalPolicy, "auto", "deny", "ask", "auto");
             tools.ToolChoiceMode = NormalizeValue(tools.ToolChoiceMode, "auto", "auto", "required", "none", "allowed_only");
             tools.WorkingDirectory = tools.WorkingDirectory?.Trim() ?? String.Empty;
             tools.AllowedRoots = NormalizeList(tools.AllowedRoots);

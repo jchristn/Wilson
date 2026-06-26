@@ -13,7 +13,7 @@ namespace Wilson.Core.Settings
         /// <summary>Enable Wilson built-in tools.</summary>
         public bool BuiltInsEnabled { get; set; } = true;
         /// <summary>Default approval policy.</summary>
-        public string DefaultApprovalPolicy { get; set; } = "ask";
+        public string DefaultApprovalPolicy { get; set; } = "auto";
         /// <summary>Require approval for destructive tools.</summary>
         public bool DestructiveToolsRequireApproval { get; set; } = true;
         /// <summary>Block known secret-bearing paths.</summary>

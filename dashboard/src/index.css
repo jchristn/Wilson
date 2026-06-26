@@ -130,6 +130,13 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .tool-call-main { grid-template-columns: auto minmax(0, 1fr) auto auto auto; background: var(--panel-2); }
 .tool-call-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-call-details { max-width: 100%; overflow: auto; }
+.tool-catalog-modal { display: grid; gap: 12px; }
+.tool-catalog-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.tool-catalog-list { display: grid; gap: 8px; }
+.tool-catalog-row { min-width: 0; display: grid; grid-template-columns: minmax(180px, 1.2fr) auto auto auto minmax(180px, 1fr); gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); padding: 9px; }
+.tool-catalog-main { min-width: 0; display: grid; gap: 3px; }
+.tool-catalog-main strong, .tool-catalog-main code, .tool-catalog-row span { min-width: 0; overflow-wrap: anywhere; }
+.tool-catalog-main code { width: fit-content; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); padding: 2px 5px; }
 .context-truncation-notice { max-width: 820px; margin: 8px auto 12px; border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 13px; text-align: center; }
 .rating { display: flex; gap: 4px; margin-top: 5px; }
 .rating button { width: 30px; height: 30px; border-radius: 6px; background: transparent; color: var(--muted); }
@@ -350,6 +357,10 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .tool-diagnostics-message { min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; align-items: start; font-size: 12px; overflow-wrap: anywhere; }
 .tool-diagnostics-message.error { color: var(--danger); }
 .tool-diagnostics-message.warning { color: var(--warn); }
+.web-search-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.web-search-editor-block .runner-editor-header { grid-column: 1 / -1; }
+.web-search-provider-row { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.web-search-provider-row .runner-editor-header { grid-column: 1 / -1; }
 .mcp-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .mcp-editor-block .runner-editor-header { grid-column: 1 / -1; }
 .mcp-status-summary, .mcp-server-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
@@ -508,7 +519,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .modal-full { height: calc(100dvh - 16px); }
   .modal header { padding: 12px; }
   .modal > :not(header) { margin: 12px; }
-  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-diagnostics-panel, .mcp-editor-block, .mcp-server-row, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
+  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-diagnostics-panel, .web-search-editor-block, .web-search-provider-row, .mcp-editor-block, .mcp-server-row, .tool-descriptor-row, .tool-catalog-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
   .entity-hero, .detail-hero { grid-template-columns: 1fr; align-items: start; }
   .key-value-table th, .key-value-table td, .timing-table th, .timing-table td { display: block; width: 100%; }
   .key-value-table th, .timing-table th { border-bottom: 0; }

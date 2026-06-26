@@ -27,7 +27,7 @@
   "tools": {
     "enabled": true,
     "builtInsEnabled": true,
-    "defaultApprovalPolicy": "ask",
+    "defaultApprovalPolicy": "auto",
     "destructiveToolsRequireApproval": true,
     "blockSecretPaths": true,
     "workingDirectory": "/workspace",

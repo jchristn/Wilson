@@ -69,7 +69,7 @@ namespace Wilson.Core.Tools
                     Iteration = trace.Iteration,
                     SequenceNumber = trace.SequenceNumber,
                     Status = trace.Success ? ToolStatuses.Completed : trace.Denied ? ToolStatuses.Denied : ToolStatuses.Failed,
-                    ApprovalPolicy = String.IsNullOrWhiteSpace(approvalPolicy) ? ToolApprovalPolicies.Ask : approvalPolicy,
+                    ApprovalPolicy = String.IsNullOrWhiteSpace(approvalPolicy) ? ToolApprovalPolicies.Auto : approvalPolicy,
                     ArgumentsJson = argumentsJson,
                     ResultJson = resultJson,
                     ResultSummaryJson = summaryJson,

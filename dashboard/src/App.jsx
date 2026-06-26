@@ -407,6 +407,7 @@ function Chat({ api }) {
   });
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [completionSettingsOpen, setCompletionSettingsOpen] = useState(false);
+  const [toolCatalogOpen, setToolCatalogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [modelError, setModelError] = useState('');
   const [loadingModels, setLoadingModels] = useState(false);
@@ -732,6 +733,7 @@ function Chat({ api }) {
           <button className="secondary toolbar-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} />System Prompt</button>
           <button className="secondary toolbar-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} />Settings</button>
           <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
+          <button className="icon-button" title="Show available tool catalog" onClick={() => setToolCatalogOpen(true)}><ListFilter size={16} /></button>
           <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
             <option value="auto">Auto</option>
             <option value="deny">Deny</option>
@@ -759,6 +761,7 @@ function Chat({ api }) {
       </section>
       {systemPromptOpen && <SystemPromptModal value={systemPrompt} onChange={setSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
       {completionSettingsOpen && <CompletionSettingsModal settings={completionSettings} runner={selectedRunner} onChange={setCompletionSettings} onClose={() => setCompletionSettingsOpen(false)} />}
+      {toolCatalogOpen && <ToolCatalogModal tools={toolCatalog} onClose={() => setToolCatalogOpen(false)} />}
     </div>
   );
 }
@@ -960,6 +963,36 @@ function CompletionSettingsModal({ settings, runner, onChange, onClose }) {
   );
 }
 
+function ToolCatalogModal({ tools, onClose }) {
+  const sortedTools = [...(tools || [])].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')));
+  const availableCount = sortedTools.filter(tool => tool.available).length;
+  return (
+    <Modal title="Tool Catalog" onClose={onClose} wide>
+      <div className="tool-catalog-modal">
+        <div className="tool-catalog-summary" title="Available tool count">
+          <span className="tool-status complete">{availableCount} available</span>
+          <span>{sortedTools.length} configured</span>
+        </div>
+        {sortedTools.length < 1 && <div className="empty-cell" title="No tool descriptors were returned">No tool descriptors returned.</div>}
+        <div className="tool-catalog-list">
+          {sortedTools.map(tool => (
+            <div key={tool.name} className={tool.available ? 'tool-catalog-row available' : 'tool-catalog-row unavailable'} title={tool.unavailableReason || tool.description || tool.name}>
+              <div className="tool-catalog-main">
+                <strong>{tool.displayName || tool.name}</strong>
+                <code>{tool.name}</code>
+              </div>
+              <span className={tool.available ? 'tool-status complete' : 'tool-status failed'}>{tool.available ? 'available' : 'blocked'}</span>
+              <span className="tool-descriptor-meta">{tool.category || 'tool'}</span>
+              <span className="tool-descriptor-meta">{tool.requiresApproval ? 'approval' : 'auto-safe'}</span>
+              <span className="tool-descriptor-reason">{tool.unavailableReason || tool.description || 'Ready'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function RenameConversationModal({ conversation, onClose, onSave }) {
   const [title, setTitle] = useState(conversation.title || '');
   const [saving, setSaving] = useState(false);
@@ -1022,7 +1055,7 @@ function defaultToolsSettings() {
   return {
     enabled: true,
     builtInsEnabled: true,
-    defaultApprovalPolicy: 'ask',
+    defaultApprovalPolicy: 'auto',
     destructiveToolsRequireApproval: true,
     blockSecretPaths: true,
     workingDirectory: '',
@@ -2342,7 +2375,7 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
     <>
       <FormCheck label="Tools enabled" tooltip="Default server-side switch for model-directed tools. Chat requests can still explicitly enable or disable tools." checked={tools.enabled !== false} onChange={v => onChange('enabled', v)} />
       <FormCheck label="Built-ins enabled" tooltip="Expose Wilson built-in tools when global tools are enabled." checked={tools.builtInsEnabled !== false} onChange={v => onChange('builtInsEnabled', v)} />
-      <FormSelect label="Default approval" tooltip="Default approval policy for tool calls." value={tools.defaultApprovalPolicy || 'ask'} options={['ask', 'auto', 'deny']} onChange={v => onChange('defaultApprovalPolicy', v)} />
+      <FormSelect label="Default approval" tooltip="Default approval policy for tool calls." value={tools.defaultApprovalPolicy || 'auto'} options={['auto', 'ask', 'deny']} onChange={v => onChange('defaultApprovalPolicy', v)} />
       <FormSelect label="Tool choice mode" tooltip="Model-facing tool-choice mode for tool-enabled chat requests." value={tools.toolChoiceMode || 'auto'} options={['auto', 'required', 'none', 'allowed_only']} onChange={v => onChange('toolChoiceMode', v)} />
       <FormCheck label="Require approval for destructive tools" tooltip="Force approval for tools marked destructive even if the default approval policy is more permissive." checked={tools.destructiveToolsRequireApproval !== false} onChange={v => onChange('destructiveToolsRequireApproval', v)} />
       <FormCheck label="Block secret paths" tooltip="Block known secret-bearing files such as .env and key files." checked={tools.blockSecretPaths !== false} onChange={v => onChange('blockSecretPaths', v)} />
@@ -2352,6 +2385,10 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
       <FormList label="Allowed roots" tooltip="Filesystem roots that tools may access. File and process tools are unavailable without at least one allowed root." value={tools.allowedRoots || []} onChange={v => onChange('allowedRoots', v)} />
       <FormList label="Enabled tool names" tooltip="Optional allow-list of tool names. Leave empty to allow every eligible tool not explicitly disabled." value={tools.enabledToolNames || []} onChange={v => onChange('enabledToolNames', v)} />
       <FormList label="Disabled tool names" tooltip="Tool names that must never be exposed or executed." value={tools.disabledToolNames || []} onChange={v => onChange('disabledToolNames', v)} />
+      <WebSearchSettingsEditor
+        webSearch={tools.webSearch || { enabled: true, allowFallback: true, providers: [] }}
+        onChange={v => onChange('webSearch', v)}
+      />
       <McpSettingsEditor
         mcp={tools.mcp || { enabled: false, servers: [] }}
         status={mcpStatus}
@@ -2406,6 +2443,50 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
         ))}
       </div>
     </>
+  );
+}
+
+function WebSearchSettingsEditor({ webSearch, onChange }) {
+  const providers = Array.isArray(webSearch.providers) ? webSearch.providers : [];
+  const setWebSearch = (key, value) => onChange({ ...webSearch, providers, [key]: value });
+  const setProvider = (index, key, value) => {
+    const next = providers.map((provider, itemIndex) => itemIndex === index ? { ...provider, [key]: value } : provider);
+    onChange({ ...webSearch, providers: next });
+  };
+  const addProvider = () => onChange({
+    ...webSearch,
+    providers: [
+      ...providers,
+      { name: '', providerType: 'tavily', endpoint: '', apiKey: '', enabled: true, isDefault: providers.length < 1, timeoutMs: 30000 }
+    ]
+  });
+  const removeProvider = (index) => onChange({ ...webSearch, providers: providers.filter((_, itemIndex) => itemIndex !== index) });
+
+  return (
+    <div className="web-search-editor-block">
+      <div className="runner-editor-header">
+        <strong>Web Search</strong>
+        <button className="secondary" title="Add a web search provider" onClick={addProvider}><Plus size={16} />Add Provider</button>
+      </div>
+      <FormCheck label="Web search enabled" tooltip="Expose web_search when an enabled provider is configured." checked={webSearch.enabled !== false} onChange={v => setWebSearch('enabled', v)} />
+      <FormCheck label="Provider fallback" tooltip="Try another enabled provider when the selected/default provider fails." checked={webSearch.allowFallback !== false} onChange={v => setWebSearch('allowFallback', v)} />
+      {providers.length < 1 && <div className="empty-cell" title="No web search providers configured">No web search providers configured.</div>}
+      {providers.map((provider, index) => (
+        <div key={index} className="web-search-provider-row" title={provider.name || `Web search provider ${index + 1}`}>
+          <div className="runner-editor-header">
+            <strong>{provider.name || `Provider ${index + 1}`}</strong>
+            <button className="icon-button" title="Remove this web search provider" onClick={() => removeProvider(index)}><Trash2 size={16} /></button>
+          </div>
+          <FormCheck label="Enabled" tooltip="Enable this search provider." checked={provider.enabled !== false} onChange={v => setProvider(index, 'enabled', v)} />
+          <FormCheck label="Default" tooltip="Prefer this provider when a request does not specify one." checked={!!provider.isDefault} onChange={v => setProvider(index, 'isDefault', v)} />
+          <FormInput label="Name" tooltip="Provider name used in search diagnostics and results." value={provider.name || ''} onChange={v => setProvider(index, 'name', v)} />
+          <FormSelect label="Provider type" tooltip="Web search provider compatibility mode." value={provider.providerType || 'duckduckgo'} options={['duckduckgo', 'tavily', 'you', 'generic']} onChange={v => setProvider(index, 'providerType', v)} />
+          <FormInput label="Endpoint" tooltip="Provider endpoint URL. DuckDuckGo defaults to its HTML endpoint when blank." value={provider.endpoint || ''} onChange={v => setProvider(index, 'endpoint', v)} />
+          <FormInput label="API key/env ref" tooltip="Provider API key or environment reference. Secrets are redacted from audit surfaces." value={provider.apiKey || ''} onChange={v => setProvider(index, 'apiKey', v)} />
+          <FormInput label="Timeout (ms)" tooltip="Provider request timeout in milliseconds." type="number" value={provider.timeoutMs ?? 30000} onChange={v => setProvider(index, 'timeoutMs', Number(v))} />
+        </div>
+      ))}
+    </div>
   );
 }
 

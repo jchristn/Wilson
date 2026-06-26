@@ -653,7 +653,7 @@ namespace Test.Shared
             ToolsSettings tools = new ToolsSettings();
             if (!tools.Enabled) throw new InvalidOperationException("Tools should be enabled by default.");
             if (!tools.BuiltInsEnabled) throw new InvalidOperationException("Built-in tools should be enabled for catalog resolution by default.");
-            if (!String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected default tool approval policy.");
+            if (!String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Auto, StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected default tool approval policy.");
             if (tools.MaxAgentIterations != 25 || tools.MaxToolCallsPerTurn != 12) throw new InvalidOperationException("Unexpected default tool limits.");
             if (tools.WebSearch == null || !tools.WebSearch.Enabled || tools.WebSearch.Providers.Count == 0)
                 throw new InvalidOperationException("Web search should have an enabled no-key provider by default.");

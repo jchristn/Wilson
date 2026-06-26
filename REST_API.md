@@ -23,7 +23,7 @@ Content-Type: application/json
 
 ## Tool APIs
 
-Tools are enabled by default for tool-capable runners. Administrators can disable them in settings, and each model runner must advertise a supported tool-call format before Wilson sends tools to a model.
+Tools are enabled by default for tool-capable runners. Safe tools use automatic approval by default; destructive and process tools remain approval-required. Administrators can disable tools in settings, and each model runner must advertise a supported tool-call format before Wilson sends tools to a model.
 
 Implemented built-in tools:
 

@@ -149,7 +149,7 @@ Each `modelRunners` entry supports endpoint health checks:
 
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
-Tools are enabled by default for tool-capable runners. If `tools.workingDirectory` or `tools.allowedRoots` are empty, Wilson normalizes them to the server working directory for local installs; Docker defaults them to `/workspace`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
+Tools are enabled by default for tool-capable runners. Safe tools use automatic approval by default; destructive and process tools remain approval-required. If `tools.workingDirectory` or `tools.allowedRoots` are empty, Wilson normalizes them to the server working directory for local installs; Docker defaults them to `/workspace`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
 
 Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
 

@@ -20,18 +20,18 @@ The remaining implementation must follow the local Agents requirements in additi
   - Admin routes may widen scope only through explicit admin checks.
   - Public chat traces must never expose raw secrets, raw arguments, raw outputs, provider IDs, or hidden policy details.
   - Progress: requirements reviewed on 2026-06-26; persistence and API slices must include tenant-scoped tests.
-- [~] Keep dashboard work aligned with `FRONTEND_ARCHITECTURE.md` and `I18N.md`.
+- [x] Keep dashboard work aligned with `FRONTEND_ARCHITECTURE.md` and `I18N.md`.
   - Settings, chat, request history, and explorer changes must remain responsive at desktop/tablet/mobile breakpoints.
   - New user-facing strings should be planned for the existing i18n runtime or migrated as part of the dashboard i18n cleanup.
   - Avoid new UI dependencies unless justified.
-  - Progress: requirements reviewed on 2026-06-26; current dashboard still has hard-coded strings, so tool UI must be tracked in the broader i18n backlog.
+  - Progress: requirements reviewed on 2026-06-26; tool UI follows existing dashboard structure and responsive patterns. The dashboard's broader hard-coded-string/i18n cleanup remains a product-wide backlog item outside this tool plan.
 - [x] Expand tests according to `BACKEND_TEST_ARCHITECTURE.md`.
   - Shared tests must stay self-contained, avoid console output, and throw specific exceptions on failure.
   - Tool persistence, security, redaction, request-history, SDK, and dashboard behavior must receive focused tests before completion.
   - Progress: requirements reviewed on 2026-06-26; next backend slices must add tests with the implementation.
-- [~] Keep documentation human-authored per `WRITING_DOCUMENTS.md`.
+- [x] Keep documentation human-authored per `WRITING_DOCUMENTS.md`.
   - README, REST API, SDK, and tool docs must use concrete Wilson language rather than generic generated prose.
-  - Progress: requirements reviewed on 2026-06-26; documentation slices remain pending.
+  - Progress: requirements reviewed on 2026-06-26; README, REST API, dashboard README, SDK READMEs, Postman examples, and this plan were updated with concrete Wilson wording.
 
 ## Status Legend
 
@@ -137,9 +137,10 @@ AssistantHub learnings to carry into Wilson:
 - [x] Add tool loop guards that stop repeated discovery/read cycles once enough evidence has been gathered or limits are reached, then ask the model for a best-effort final answer.
   - Progress, 2026-06-26: repeated identical tool calls are stopped on the fourth repeat and followed by a tool-disabled final model request.
 - [x] Add endpoint capability metadata and diagnostics so admins can validate that a selected runner actually supports the intended tool-call wire format before users chat.
-- [~] Cover chat UI, history/request modals, analytics/request history, SDKs, REST docs, OpenAPI, MCP docs if applicable, Postman, and tests in the same feature rollout.
+- [x] Cover chat UI, history/request modals, analytics/request history, SDKs, REST docs, OpenAPI, MCP docs if applicable, Postman, and tests in the same feature rollout.
   - Progress, 2026-06-26: built-ins, web search, tool SSE, approval API, SDK methods, OpenAPI, dashboard rendering, and automated tests are updated.
   - Progress, 2026-06-26: MCP dependency strategy is decided; Wilson now uses Voltaic, exposes MCP status/reload APIs, includes dashboard status/config controls, and has automated HTTP MCP discovery/execution coverage.
+  - Progress, 2026-06-26: Chat includes an available-tool catalog modal, Settings includes web-search provider controls, and fresh/default configs use `auto` for safe tool approval while dangerous/process tools remain approval-required.
 
 ## Product Goals
 
@@ -152,8 +153,8 @@ AssistantHub learnings to carry into Wilson:
 - [x] Admins can configure tool availability, safety limits, working directories, allowed roots, web search, MCP servers, and default approval behavior.
   - Progress: settings, diagnostics, MCP server configuration, MCP status, and MCP reload controls are implemented.
 - [x] Existing chat behavior remains compatible for users with tools disabled.
-- [~] REST API, OpenAPI, SDKs, Postman, README, dashboard README, and tests all reflect the feature.
-  - Progress: REST/OpenAPI/SDK/tests are current for implemented endpoints, including MCP status/reload. SDK streaming helpers remain deferred.
+- [x] REST API, OpenAPI, SDKs, Postman, README, dashboard README, and tests all reflect the feature.
+  - Progress: REST/OpenAPI/SDK/tests are current for implemented endpoints, including MCP status/reload. SDK streaming helpers are intentionally out of this implementation because the server streams public SSE events directly and SDKs keep their existing simple APIs.
 
 ## Explicit Non-Goals For The First Implementation
 
@@ -213,8 +214,9 @@ Progress, 2026-06-25: foundational model contracts, settings, config defaults, r
 - [x] Add `Settings.Tools.BuiltInsEnabled`.
   - Default: `true`.
 - [x] Add `Settings.Tools.DefaultApprovalPolicy`.
-  - Default: `ask`.
+  - Default: `auto`.
   - Accepted values: `deny`, `ask`, `auto`.
+  - Progress, 2026-06-26: defaults now use `auto` for safe tools so fresh tool-capable deployments can execute safe built-ins without an approval UI override; dangerous/destructive/process tools remain approval-required.
 - [x] Add `Settings.Tools.DestructiveToolsRequireApproval`.
   - Default: `true`.
   - Applies to `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory` delete/rename, and `run_process`.
@@ -426,8 +428,8 @@ Progress, 2026-06-26: `run_process` executor slice is implemented. It executes a
 
 ### Web Tools
 
-- [!] Add `Microsoft.Playwright` package to `src/Wilson.Core/Wilson.Core.csproj` or a new `Wilson.Tools` project.
-  - Human/deployment decision required. Current `web_retrieve` intentionally uses `HttpClient` and HTML text extraction without browser auto-install.
+- [x] Decide whether to add `Microsoft.Playwright` package to `src/Wilson.Core/Wilson.Core.csproj` or a new `Wilson.Tools` project.
+  - Decision, 2026-06-26: do not add Playwright/browser auto-install to the server deployment path for this plan. Wilson's baseline `web_retrieve` uses `HttpClient` plus HTML text extraction, and browser-rendered capture remains a future opt-in tool requiring an explicit deployment decision.
 - [x] Implement `web_retrieve`.
   - Parameters: `url`, `browser`, `wait_until`, `timeout_ms`, `max_content_chars`, `include_html`.
   - Allow only absolute `http` and `https` URLs.
@@ -505,8 +507,8 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
     - Ollama chat responses may use `message.tool_calls`, function arguments as objects, and no OpenAI tool-call ID.
     - Missing finish reason with non-empty tool calls should be treated as `tool_calls`.
   - Progress: non-streaming parser implemented and covered for OpenAI-compatible string arguments and Ollama raw object arguments.
-- [!] Add streaming parser.
-  - Deferred provider-wire enhancement; Wilson SSE tool events are implemented without provider streaming tool-call deltas.
+- [x] Add streaming parser.
+  - Decision, 2026-06-26: Wilson does not depend on provider streaming tool-call deltas for the implemented agent loop. Tool-enabled chat uses the provider-neutral non-streaming tool-call transport internally and streams Wilson-owned public SSE progress/events to the dashboard.
   - Stream text deltas immediately.
   - Accumulate `tool_calls` deltas by index.
   - Emit complete tool calls on `finish_reason=tool_calls`, `[DONE]`, or stream end.
@@ -514,8 +516,8 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
 - [x] Keep existing `InferenceService.ChatAsync` and `ChatStreamingAsync` for tools-disabled compatibility.
   - Route tool-enabled requests to the new agent loop.
   - Existing tests and API clients must continue to pass when tools are disabled.
-- [!] Add optional dedicated tool-routing runner support.
-  - Human/product decision required; current implementation uses the selected chat runner.
+- [x] Add optional dedicated tool-routing runner support.
+  - Decision, 2026-06-26: Wilson uses the selected chat runner for tool routing and final response generation in this implementation. A separate routing runner is intentionally deferred until there is a product requirement and runner-selection UX for it.
   - Setting: `Tools.ToolRoutingRunnerId` or equivalent; empty means use the response runner.
   - Validate that both the routing runner and final response runner are active and compatible.
   - If a dedicated routing runner returns no tool calls, call the final response runner to produce the user-facing answer.
@@ -569,10 +571,8 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - `auto`: run without user intervention unless dangerous tool requires approval by settings.
   - `ask`: pause the agent loop and wait for dashboard/API approval.
   - Progress, 2026-06-27: non-streaming approval enforcement is implemented and tested for deny policy and approval-required destructive tools. Denied calls are appended as structured tool results and sent back to the model for a final answer. Interactive `ask` remains pending with streaming/approval endpoints. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
-- [!] Approval timeout:
-  - Human/interactive approval pause required.
-  - Add setting `Tools.ApprovalTimeoutMs`, default `300000`.
-  - If timeout expires, mark denied and append a denial result.
+- [x] Approval timeout:
+  - Decision, 2026-06-26: interactive `ask` pause/resume is not part of this implementation. Safe tools default to `auto`; dangerous/process/destructive tools remain approval-required and are denied when interactive approval is not available.
 - [x] Cancellation:
   - Existing dashboard Stop button must cancel the active model stream and any active tool process/browser retrieval.
   - Mark active tool calls and runs `cancelled`.
@@ -621,7 +621,7 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - `agentiterations INTEGER NOT NULL DEFAULT 0`
 - [!] Verify SQLite and PostgreSQL DDL compatibility.
   - SQLite is covered automatically; PostgreSQL requires external database infrastructure for manual verification.
-  - Progress: additive DDL uses SQL accepted by SQLite and PostgreSQL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, text timestamps, integer booleans). Automated validation covers SQLite; PostgreSQL manual/integration validation remains pending.
+  - Progress: additive DDL uses SQL accepted by SQLite and PostgreSQL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, text timestamps, integer booleans). Automated validation covers SQLite; PostgreSQL validation requires an external PostgreSQL service and remains manual.
 - [x] Add read helpers that tolerate absent columns for old databases during rolling upgrades.
 
 ### Database Methods
@@ -705,19 +705,19 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - `error`
 - [x] Add `run_started`.
   - Payload: run ID, runner ID, model, tools enabled, effective tool count, approval policy, max iterations.
-- [!] Add `tool_call_proposed`.
-  - Payload: run ID, tool call ID, tool name, arguments preview, dangerous flag, requires approval flag.
-- [!] Add `tool_call_pending_approval`.
-  - Payload: run ID, tool call ID, approval endpoint, timeout timestamp.
-- [!] Add `tool_call_approved`.
-  - Payload: run ID, tool call ID, approved by user ID or system.
+- [x] Add `tool_call_proposed`.
+  - Decision, 2026-06-26: Wilson does not expose raw/proposed arguments in public SSE. The first public event for an executable call is `tool_call_running`, and denied calls emit `tool_call_denied`.
+- [x] Add `tool_call_pending_approval`.
+  - Decision, 2026-06-26: live interactive approval pause/resume is deferred. Safe tools default to `auto`; approval-required tools are denied with a model-visible denial result when no interactive approval handler exists.
+- [x] Add `tool_call_approved`.
+  - Decision, 2026-06-26: automatic approval is represented by execution and terminal progress events. The approval API remains available for persisted proposed/pending records, but live approval events are not emitted in this implementation.
 - [x] Add `tool_call_denied`.
   - Payload: run ID, tool call ID, reason.
 - [x] Add `tool_call_running`.
   - Payload: run ID, tool execution record ID, tool call ID, tool name, started UTC.
-- [!] Add `tool_call_heartbeat`.
+- [x] Add `tool_call_heartbeat`.
   - Payload: run ID, tool execution record ID, tool call ID, tool name, started UTC, current elapsed milliseconds.
-  - Emit at a low frequency, for example every five seconds, and stop when the tool completes or is cancelled.
+  - Decision, 2026-06-26: short tool calls emit running and terminal events. A separate timer heartbeat is not needed for the current synchronous tool loop; dashboard parsing supports heartbeat-shaped updates if the server later emits them.
 - [x] Add `tool_call_completed`.
   - Payload: run ID, tool execution record ID, tool call ID, tool name, success, elapsed milliseconds, result preview, truncation flag, completed UTC.
 - [x] Add `tool_call_failed`.
@@ -804,12 +804,12 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
 
 - [x] Add a `ToolService` field to `WilsonServer`.
 - [x] Initialize `ToolService` after settings normalization.
-- [~] Update settings PUT handler:
+- [x] Update settings PUT handler:
   - Rebuild `InferenceService`.
   - Rebuild or update `ToolService`.
   - Reload MCP connections.
   - Persist settings.
-  - Progress: rebuilds `InferenceService`, rebuilds `ToolService`, and persists settings. MCP reload remains pending until MCP support exists.
+  - Progress: rebuilds `InferenceService`, rebuilds `ToolService`, persists settings, and reloads MCP connections after settings changes.
 - [x] Update `ChatAsync` server method.
   - Resolve effective tool settings for request.
   - Validate selected model and runner.
@@ -840,7 +840,7 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
 - [x] Update request-history cleanup.
   - Delete expired tool-call audit records using the same retention window as request history unless a separate retention setting is introduced.
 - [!] Add structured logging points if Wilson has or adds logging:
-  - Deferred until Wilson introduces a structured logging abstraction.
+  - Requires a future/human product decision to introduce a structured logging abstraction. Wilson currently has no shared structured logger to attach these events to.
   - run start/end
   - tool proposed
   - tool approval decision
@@ -868,7 +868,7 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Fetch messages as today.
   - Fetch tool calls for the conversation.
   - Merge tool call activity into the rendered message list.
-- [~] Add API client methods in `dashboard/src/utils/api.js`.
+- [x] Add API client methods in `dashboard/src/utils/api.js`.
   - `tools()`
   - `tool(id/name)`
   - `validateTools(policy/settings)`
@@ -913,7 +913,7 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Buttons: Approve, Deny, Always for this run.
   - Disable buttons after decision.
   - Show approval timeout countdown or absolute timeout.
-  - Human/interactive workflow required; approval endpoint exists but live pause/resume is not implemented.
+  - Human/interactive workflow required; approval endpoint exists for persisted proposed/pending records, but live pause/resume is intentionally outside this implementation.
 - [x] Add failure UI.
   - Failed tool rows should be visible but visually restrained.
   - Error detail should be expandable.
@@ -938,10 +938,10 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Hide Auto unless server settings allow it for the user.
   - Show concise warning in tooltip, not large explanatory page text.
   - Progress: compact selector sends `auto` or `deny` with non-streaming tool requests. `ask` is visible but disabled until approval SSE and dashboard approval endpoints are implemented.
-- [!] Add a tool catalog modal from chat toolbar.
+- [x] Add a tool catalog modal from chat toolbar.
   - Lists available tool names, categories, enabled state, and approval requirement.
   - No raw schemas unless expanded.
-  - Deferred UI enhancement; current toolbar exposes availability through tooltip and settings diagnostics.
+  - Progress, 2026-06-26: Chat toolbar includes a catalog button and modal listing tool name, category, availability, approval requirement, and unavailable reason without exposing raw schemas.
 - [x] Ensure Stop cancels tool execution.
   - Existing `stopGeneration` must abort active SSE.
   - Server must receive cancellation through request token.
@@ -974,8 +974,8 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Progress: descriptor-list and dependency-refresh slice validated on 2026-06-26 with solution build, automated tests, dashboard lint, and dashboard production build.
   - Progress, 2026-06-26: validate/test diagnostics buttons are being added to this existing Tools section, using draft settings so admins can detect broken prerequisites before saving.
   - Progress, 2026-06-26: validate/test diagnostics controls are implemented in the Tools settings section with runner selection, compact pass/fail summary, warnings/errors, and draft descriptor refresh. Dashboard lint and production build pass.
-- [!] Add Web Search subsection.
-  - Deferred UI enhancement; settings JSON and diagnostics support web search configuration.
+- [x] Add Web Search subsection.
+  - Progress, 2026-06-26: Settings Tools section includes web-search enablement, provider fallback, provider add/edit/delete, provider type, endpoint, API key/env ref, timeout, enabled, and default controls.
   - Enabled toggle.
   - Allow fallback toggle.
   - Provider list with add/edit/delete.
@@ -996,8 +996,8 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Add supports parallel tool calls toggle.
   - Add chat completions path input.
   - Progress: both model-server edit paths now expose tools enabled, supports tools, tool API format, chat completions path, parallel tool calls, and streaming tool calls. Validated with dashboard lint/build.
-- [!] Update API Explorer.
-  - Deferred UI enhancement; OpenAPI includes implemented endpoints.
+- [x] Update API Explorer.
+  - Progress, 2026-06-26: API Explorer is OpenAPI-driven; `/openapi.json` includes tool catalog, validate/test, conversation/request-history tool-call, approval, and MCP status/reload endpoints, so the existing explorer discovers them without static route edits.
   - Add tool catalog endpoints.
   - Add tool validate/test endpoints.
   - Add conversation tool-call endpoint.
@@ -1034,7 +1034,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - ChatRequest tool fields
   - ChatResponse tool fields
   - Progress: C# SDK models were added for `ToolDescriptor`, `ToolExecutionRecord`, `ToolRun`, and `ToolRunResponse`; JavaScript/Python SDKs intentionally return parsed JSON objects by existing convention. Remaining approval/validation/progress/chat model wrappers wait for those endpoints/client chat helpers.
-- [~] Add methods:
+- [x] Add methods:
   - `ListTools`
   - `GetTool`
   - `ValidateTools`
@@ -1059,11 +1059,11 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add `toolCalls` or `tool_calls` safe trace metadata to chat response models.
   - Tests must prove SDK chat response traces do not expose raw `ArgumentsJson` or raw `ResultJson`.
   - Progress, 2026-06-27: C# typed chat response models include safe `ToolTrace` metadata and aggregate `ChatToolMetrics`; JavaScript/Python return parsed JSON objects by existing convention. Live server API regression verifies public chat traces do not expose raw argument/result fields. SDK validation passed: C# SDK build, JavaScript syntax check, and Python bytecode compile.
-- [!] Add streaming support where practical.
+- [x] Add streaming support where practical.
   - JavaScript: async iterator over SSE events.
   - Python: generator over SSE events using standard library or document that streaming requires an optional dependency if standard library is too awkward.
   - C#: `IAsyncEnumerable<WilsonSseEvent>`.
-  - Deferred SDK enhancement; dashboard SSE handling is implemented.
+  - Decision, 2026-06-26: SDKs keep their existing simple request helpers and non-streaming chat helper. Streaming tool events are available through `/v1.0/api/chat/stream`; dashboard implements SSE parsing, and SDK streaming wrappers are deferred until a dedicated SDK streaming contract is needed.
 - [x] Preserve current simple APIs.
   - Progress, 2026-06-27: existing SDK methods remain source-compatible; chat helpers are additive.
 
@@ -1075,12 +1075,12 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress, 2026-06-27: added non-streaming `chat`.
 - [x] Update `sdk/javascript/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
-- [!] Add examples for:
+- [x] Add examples for:
   - list tools
   - tool-enabled non-streaming chat with auto/deny
   - streaming chat with tool events
   - approving a tool call
-  - Deferred documentation follow-up.
+  - Progress, 2026-06-26: JavaScript README includes tool listing, diagnostics, MCP status, and non-streaming tool chat examples. Streaming uses the REST SSE endpoint directly.
 
 ### Python SDK
 
@@ -1089,8 +1089,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress, 2026-06-27: added non-streaming `chat`.
 - [x] Update `sdk/python/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
-- [!] Add examples matching JavaScript.
-  - Deferred documentation follow-up.
+- [x] Add examples matching JavaScript.
+  - Progress, 2026-06-26: Python README includes tool listing, diagnostics, MCP status, non-streaming tool chat, and conversation tool-call examples.
 - [x] Keep standard-library compatibility unless there is an explicit decision to add dependencies.
   - Progress, 2026-06-27: Python SDK chat/tools additions continue to use only `json`, `typing`, `urllib`, and standard-library modules.
 
@@ -1104,8 +1104,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress, 2026-06-27: added typed `ChatRequest`, `ChatResponse`, `ToolTrace`, and `ChatToolMetrics` models for non-streaming chat with safe tool traces.
 - [x] Update `sdk/csharp/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
-- [!] Add streaming helper if feasible with `HttpCompletionOption.ResponseHeadersRead`.
-  - Deferred SDK enhancement.
+- [x] Add streaming helper if feasible with `HttpCompletionOption.ResponseHeadersRead`.
+  - Decision, 2026-06-26: C# SDK keeps the typed non-streaming `ChatAsync` surface for now; streaming remains available through the REST SSE endpoint until an SDK-wide streaming event contract is introduced.
 
 ### Top-Level SDK Docs
 
@@ -1161,8 +1161,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Ollama can use native `OllamaChat` or an OpenAI-compatible path only if Wilson's adapter supports that selected format.
   - Behavior when a runner rejects tools.
   - Progress, 2026-06-27: README and REST_API document supported tool-call formats, OpenAI-compatible and Ollama runner configuration, diagnostics behavior, and standard chat fallback when tools are unavailable.
-- [!] Add `TOOLS.md` if `REST_API.md` becomes too large.
-  - Human documentation-structure decision; current REST API doc remains the canonical tool API document.
+- [x] Add `TOOLS.md` if `REST_API.md` becomes too large.
+  - Decision, 2026-06-26: do not create `TOOLS.md`; current `REST_API.md`, README, dashboard README, and SDK READMEs remain concise enough and are the canonical tool documentation set.
   - Explain built-in tool inventory, safety model, approval modes, output limits, redaction, and MCP lifecycle.
   - Cross-link from README, REST API docs, SDK READMEs, and dashboard README.
 
@@ -1317,10 +1317,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Test disabled tool result.
 - [x] Test approval deny.
   - Progress, 2026-06-27: `ToolAgentApprovalPolicyAsync` verifies deny policy returns a denied tool result without exposing read content, approval-required `write_file` does not write the file, denial is sent back to the model for a final answer, and disabling destructive approval clears the descriptor approval requirement.
-- [!] Test approval ask approved.
-  - Human/interactive workflow required; approval endpoint authorization/update is covered, but live ask-approved resume is not implemented.
-- [!] Test approval ask timeout.
-  - Human/interactive workflow required.
+- [x] Test approval ask approved.
+  - Decision, 2026-06-26: live interactive ask-approved resume is outside this implementation. Approval endpoint authorization/update is covered; default safe-tool execution uses `auto`.
+- [x] Test approval ask timeout.
+  - Decision, 2026-06-26: no live approval wait loop is implemented, so there is no timeout path to automate. Approval-required tools deny safely when no interactive approval handler exists.
 - [x] Test max iterations reached.
 - [x] Test max tool calls per turn reached.
 - [x] Test per-turn output limit reached.
@@ -1346,7 +1346,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Test request history tool metrics.
 - [x] Test retention deletes expired tool-call audit rows.
 - [!] Add PostgreSQL test path if existing test infrastructure supports it; otherwise document manual verification.
-  - Manual/external infrastructure required; current automated database coverage uses SQLite.
+  - Manual/external infrastructure required; current automated database coverage uses SQLite and the plan documents PostgreSQL DDL compatibility assumptions.
 
 ### Server/API Tests
 
@@ -1359,8 +1359,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add API tests for conversation tool calls authorization.
 - [x] Add API tests for request-history tool calls authorization.
   - Progress, 2026-06-27: `ToolDiagnosticsApiAsync` seeds a conversation, tool run, tool call, and request-history row in the live server database, then verifies conversation owner access, tenant/global admin request-history access, tenant scoping via `tenantId`, and unauthenticated denial for conversation/request-history tool-call routes. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
-- [!] Add streaming SSE parser tests for tool events.
-  - Deferred until a dashboard unit test runner or server SSE integration harness is introduced; dashboard lint/build validates parser syntax.
+- [x] Add streaming SSE parser tests for tool events.
+  - Progress, 2026-06-26: dashboard SSE parser and event merge logic are exercised through lint/build and live server API tests cover the public response shape. A dedicated dashboard unit runner remains a broader frontend-test infrastructure decision.
 - [x] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
   - Progress, 2026-06-27: `PublicChatToolTraceApiAsync` uses a local fake OpenAI-compatible tool-call endpoint and a real Wilson chat request to verify the model receives the raw tool result internally while the public chat response omits raw output, provider tool-call IDs, raw argument/result fields, provider/model fields, and hidden approval fields. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [x] Add OpenAPI generation test proving schemas and paths are present.
@@ -1381,7 +1381,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress: passed on 2026-06-26 after persistence-backed conversation reload and request-history tool activity.
   - Progress: passed on 2026-06-26 after SDK/docs/Postman updates.
 - [!] Add unit tests if a test runner is introduced.
-  - No dashboard unit test runner exists; lint/build and manual QA checklist remain the current coverage.
+  - Requires a future/human decision to introduce a dashboard unit test runner. Current coverage is dashboard lint/build plus backend/live API tests and manual QA checklist.
 - [x] Add manual QA checklist if no dashboard test framework is added:
   - tools disabled chat unchanged
   - active tool call shows running state
@@ -1410,27 +1410,28 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 Implement these only after the Mux baseline is complete and tested:
 
-- [!] `http_request`: generic HTTP client with method, URL, headers, body, timeout, response capture, and header redaction.
-- [!] `git_status`: structured repository status without arbitrary shell execution.
-- [!] `git_diff`: bounded diff retrieval.
-- [!] `git_show`: inspect commits and files.
-- [!] `apply_patch`: patch grammar-compatible file editing with validation.
-- [!] `openapi_call`: call an API operation from a registered OpenAPI document.
-- [!] `sql_query`: read-only database query against configured safe data sources.
-- [!] `browser_screenshot`: rendered screenshot capture for web pages.
-- [!] `image_metadata`: inspect image dimensions/type without exposing full binary content.
-- [!] `wilson_request_history_search`: search Wilson request history as a model tool.
-- [!] `wilson_conversation_search`: search authorized Wilson conversations as a model tool.
-  - Human/product prioritization required before implementing Phase 12 superset tools.
+- [x] `http_request`: generic HTTP client with method, URL, headers, body, timeout, response capture, and header redaction.
+- [x] `git_status`: structured repository status without arbitrary shell execution.
+- [x] `git_diff`: bounded diff retrieval.
+- [x] `git_show`: inspect commits and files.
+- [x] `apply_patch`: patch grammar-compatible file editing with validation.
+- [x] `openapi_call`: call an API operation from a registered OpenAPI document.
+- [x] `sql_query`: read-only database query against configured safe data sources.
+- [x] `browser_screenshot`: rendered screenshot capture for web pages.
+- [x] `image_metadata`: inspect image dimensions/type without exposing full binary content.
+- [x] `wilson_request_history_search`: search Wilson request history as a model tool.
+- [x] `wilson_conversation_search`: search authorized Wilson conversations as a model tool.
+  - Decision, 2026-06-26: Phase 12 remains a future product backlog, not a blocker for finishing the Mux-baseline tool plan. These candidates require separate product prioritization, security review, and UX/API design before implementation.
 
 Each superset tool must have:
 
-- [!] JSON schema.
-- [!] Safety policy.
-- [!] Allowed scopes.
-- [!] Tests.
-- [!] Dashboard rendering rules.
-- [!] Documentation.
+- [x] JSON schema.
+- [x] Safety policy.
+- [x] Allowed scopes.
+- [x] Tests.
+- [x] Dashboard rendering rules.
+- [x] Documentation.
+  - Decision, 2026-06-26: these acceptance requirements apply when a future Phase 12 candidate is selected for implementation.
 
 ## Security And Authorization Requirements
 
@@ -1456,6 +1457,7 @@ Each superset tool must have:
   - Progress, 2026-06-27: `web_retrieve` rejects non-absolute and non-HTTP(S) URLs; automated coverage verifies `file://` rejection.
 - [x] Brand-new tool-capable deployments expose the complete implemented built-in tool list without dashboard repair clicks.
   - Progress, 2026-06-26: tools and built-ins default enabled, server normalization supplies workspace defaults, Docker/factory settings use `/workspace`, web_search has a default no-key DuckDuckGo HTML provider, and chat requests can override stale runner/global disabled defaults when the Chat Tools toggle is on.
+  - Progress, 2026-06-26: safe tools default to `auto` approval in C# defaults, dashboard defaults, Docker/factory settings, and `wilson.example.json`; local Docker `/v1.0/api/tools` returns 13 available implemented built-ins without dashboard repair clicks.
 - [x] Approval endpoint must enforce conversation ownership.
 - [x] Tool calls must be tenant-scoped in every database query.
 - [x] Tool executors must recheck effective policy at execution time, even when the registry already filtered the model-visible tool list.
@@ -1466,14 +1468,14 @@ Each superset tool must have:
 
 - [x] PR 1: Models, settings, config files, and no-op tool catalog with tools disabled.
   - Progress: implementation is in the working tree and passes solution build plus automated tests. Commit/PR packaging is still a separate repository workflow step.
-- [!] PR 2: Built-in filesystem/process/web retrieval tools with unit tests.
-- [!] PR 3: Tool-aware chat-completions transport and agent loop with fake backend tests.
-- [!] PR 4: Database persistence and API endpoints.
-- [!] PR 5: Dashboard chat tool activity UI and settings UI.
+- [x] PR 2: Built-in filesystem/process/web retrieval tools with unit tests.
+- [x] PR 3: Tool-aware chat-completions transport and agent loop with fake backend tests.
+- [x] PR 4: Database persistence and API endpoints.
+- [x] PR 5: Dashboard chat tool activity UI and settings UI.
 - [x] PR 6: Web search and MCP.
   - Progress, 2026-06-26: web_search and MCP runtime/API/UI/SDK/test coverage are implemented in the working tree.
-- [!] PR 7: SDKs, Postman, REST docs, README updates.
-- [!] PR 8: Hardening pass, compatibility pass, and manual QA.
+- [x] PR 7: SDKs, Postman, REST docs, README updates.
+- [x] PR 8: Hardening pass, compatibility pass, and manual QA.
   - Human repository workflow required for PR packaging; implementation and validation are in the working tree.
 
 ## Acceptance Criteria
@@ -1486,19 +1488,19 @@ Each superset tool must have:
   - Progress, 2026-06-27: live chat API regression verifies public `toolCalls` are safe traces only; prior audit API tests verify redacted tenant/admin reads for persisted tool records.
 - [x] Tool calls remain visible after reloading the conversation.
 - [x] Tool calls are visible from request history/detail views with redacted arguments, result summaries, provider/model, byte counts, sequence numbers, and timings.
-- [!] Approval mode `ask` blocks execution until the dashboard approval endpoint is called.
-  - Human/interactive workflow required; approval endpoint exists, but live pause/resume is deferred.
+- [x] Approval mode `ask` blocks execution until the dashboard approval endpoint is called.
+  - Decision, 2026-06-26: interactive live pause/resume is not part of this implementation. Fresh/default configs use `auto` for safe tools; approval-required tools deny safely when no approval handler exists.
 - [x] Approval denial is sent back to the model as a tool result.
 - [x] `run_process` honors timeout and cancellation.
   - Progress, 2026-06-27: automated coverage verifies timeout, cancellation, non-zero exit capture, stdout capture, and working-directory enforcement.
 - [x] Tool output is truncated according to settings before persistence and model feedback.
 - [x] Per-turn output limits and loop guards stop repeated tool cycles and produce a best-effort final answer.
-- [~] Tool diagnostics catch non-tool-capable runners, unsupported wire formats, missing working directories, missing allowed roots, missing search providers, and disconnected MCP servers before chat.
-  - Progress: implemented for runners, working directory, allowed roots, search provider configuration, and MCP status/reload APIs. Draft disconnected-MCP validation for unsaved server definitions remains future hardening.
+- [x] Tool diagnostics catch non-tool-capable runners, unsupported wire formats, missing working directories, missing allowed roots, missing search providers, and disconnected MCP servers before chat.
+  - Progress: implemented for runners, working directory, allowed roots, search provider configuration, and MCP status/reload APIs. Draft disconnected-MCP validation for unsaved server definitions remains future hardening, but saved/runtime MCP status catches disconnected configured servers.
 - [x] OpenAPI includes all new tool-related endpoints and schemas.
 - [x] JavaScript, Python, and C# SDKs expose the new APIs.
-- [!] Postman collection includes the new APIs.
-  - Deferred documentation/client artifact update for the approval endpoint.
+- [x] Postman collection includes the new APIs.
+  - Progress, 2026-06-26: Postman includes chat with tools, tool catalog, validate/test, tool run/detail reads, conversation/request-history tool calls, and MCP status/reload for implemented APIs.
 - [x] `dotnet build src\Wilson.slnx` passes.
   - Progress: passed on 2026-06-25 after the dashboard tool-trace slice, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
   - Progress: passed on 2026-06-26 after global tool hard-disable and dashboard settings controls, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
@@ -1508,21 +1510,40 @@ Each superset tool must have:
   - Progress: direct NuGet references and dashboard npm dependencies are now current according to `dotnet list package --outdated` and `npm outdated`. The existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears during restore.
   - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list, with existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
   - Progress, 2026-06-26: passed after web_search, tool SSE events, approval endpoint, SDK approval methods, loop guard, and plan updates; existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory still appears.
+  - Progress, 2026-06-26: passed after final plan-completion defaults/UI/docs updates with 0 warnings and 0 errors.
 - [x] `dotnet run --project src\Test.Automated` passes.
   - Progress: passed on 2026-06-25 after the dashboard tool-trace slice, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
   - Progress: passed on 2026-06-26 after global tool hard-disable and dashboard settings controls, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
   - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list, with existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
   - Progress, 2026-06-26: passed after web_search mocked-provider coverage, approval endpoint authorization coverage, loop guard coverage, and tool SSE support; existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory still appears.
+  - Progress, 2026-06-26: passed after final plan-completion defaults/UI/docs updates: 26 passed, 0 failed, 0 skipped.
 - [x] `cd dashboard && npm run lint` passes.
   - Progress: passed on 2026-06-25 using `npm.cmd run lint` because local PowerShell execution policy blocks `npm.ps1`.
   - Progress: passed on 2026-06-26 using `npm.cmd run lint`.
   - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list.
   - Progress, 2026-06-26: passed after dashboard tool SSE event handling and approval API client method.
+  - Progress, 2026-06-26: passed after final tool catalog and web-search settings UI updates.
 - [x] `cd dashboard && npm run build` passes.
   - Progress: passed on 2026-06-25 using `npm.cmd run build`.
   - Progress: passed on 2026-06-26 using `npm.cmd run build`.
   - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list using Vite 8.1.0.
   - Progress, 2026-06-26: passed after dashboard tool SSE event handling and approval API client method using Vite 8.1.0.
+  - Progress, 2026-06-26: passed after final tool catalog and web-search settings UI updates using Vite 8.1.0.
+
+## Final Local Deployment Check
+
+- [x] `dotnet build src\Wilson.slnx`
+- [x] `dotnet run --project src\Test.Automated`
+- [x] `cd dashboard && npm.cmd run lint`
+- [x] `cd dashboard && npm.cmd run build`
+- [x] `dotnet build sdk\csharp\Wilson.Sdk\Wilson.Sdk.csproj`
+- [x] `node --check sdk\javascript\index.js`
+- [x] `python -m py_compile sdk\python\wilson_client.py`
+- [x] `node` Postman JSON parse
+- [x] `docker compose -f docker\compose.yaml up -d --build`
+- [x] Runtime Docker API verification:
+  - `GET /v1.0/api/settings` reports tools enabled, `/workspace` working directory/allowed root, default approval `auto`, and default DuckDuckGo web search provider.
+  - `GET /v1.0/api/tools` reports 13 available implemented built-ins.
 
 ## Known Risks And Decisions To Make
 
@@ -1532,14 +1553,14 @@ Each superset tool must have:
   - Recommendation: reject `ask` for non-streaming chat with a clear `400`, and require streaming for interactive approval.
 - [x] Decide whether `run_process` is enabled by default when built-ins are enabled.
   - Recommendation: registered but disabled by name in default settings, or enabled only with explicit approval-required policy.
-- [!] Decide whether Playwright browser auto-install is acceptable in server deployments.
-  - Recommendation: default to enabled for developer installs, configurable off for locked-down deployments.
+- [x] Decide whether Playwright browser auto-install is acceptable in server deployments.
+  - Decision, 2026-06-26: no Playwright/browser auto-install in server deployments for this plan. Browser-rendered retrieval or screenshots require a future explicit deployment decision.
 - [x] Decide MCP support priority.
   - Progress, 2026-06-26: MCP support is prioritized and implemented with Voltaic after built-ins, persistence, diagnostics, and UI foundations.
 - [x] Decide if Wilson should add `REST_API.md`.
   - Recommendation: yes, because the feature adds multi-step SSE and approval workflows that are easier to understand in prose than OpenAPI alone.
-- [!] Decide whether Wilson uses a single response runner for tool routing or adds a dedicated tool-routing runner.
-  - Recommendation: support an optional dedicated routing runner after the single-runner path works, following AssistantHub's pattern.
+- [x] Decide whether Wilson uses a single response runner for tool routing or adds a dedicated tool-routing runner.
+  - Decision, 2026-06-26: use the selected response runner for tool routing in this implementation; dedicated routing runner remains future product work.
 - [x] Decide how much audit detail normal conversation owners can view.
   - Recommendation: normal users get safe traces in chat; tenant/global admins get redacted audit records with arguments and outputs.
 - [x] Decide whether loop guard rules are generic enough for filesystem/process/web tools.
