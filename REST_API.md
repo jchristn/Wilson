@@ -129,6 +129,10 @@ Non-streaming chat accepts these tool fields:
 
 Only administrators may override `workingDirectory` per request. `approvalPolicy` accepts `deny`, `ask`, or `auto`; non-streaming chat rejects interactive `ask` approval until streaming approval events are implemented.
 
+Tool-capable runners must advertise a supported tool-call format before Wilson sends tool definitions. Use `OpenAIChatCompletions` for OpenAI/OpenAI-compatible chat-completions endpoints. Use `OllamaChat` for Ollama `/api/chat` when the selected Ollama model supports tools. If a runner is disabled for tools, lacks a supported wire format, or rejects tool calls, Wilson leaves standard chat behavior available and tool diagnostics report the compatibility problem.
+
+For container deployments, configure `workingDirectory` and `allowedRoots` with container paths. If a host workspace is mounted to `/workspace`, use `/workspace` in Wilson settings rather than the host path.
+
 When tools run, `ChatResponse` includes:
 
 - `toolRun`: run metadata such as run ID, status, elapsed time, iteration count, call count, and error count.

@@ -1109,7 +1109,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Document history/request detail tool-call trace views.
 - [x] Update `CHANGELOG.md`.
   - Add an unreleased entry after implementation.
-- [ ] Update Docker docs in `README.md` or `docker` docs if new volume mounts are needed for tool working directories.
+- [x] Update Docker docs in `README.md` or `docker` docs if new volume mounts are needed for tool working directories.
+  - Progress, 2026-06-27: README documents mounting an explicit workspace volume, using container paths such as `/workspace` for `tools.workingDirectory` and `tools.allowedRoots`, and avoiding broad host mounts.
 - [~] Add security guidance.
   - Recommended defaults.
   - Allowed roots.
@@ -1117,11 +1118,12 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Process execution risks.
   - Secret redaction limitations.
   - Progress, 2026-06-26: README and REST API docs now describe audit redaction, default full-result suppression, safe chat traces, and database parameterization. Docker volume guidance, model compatibility detail, and full operational hardening guidance remain pending.
-- [ ] Document model compatibility.
+- [x] Document model compatibility.
   - OpenAI-compatible tool calling required.
   - OpenAI-compatible providers should use `OpenAIChatCompletions`.
   - Ollama can use native `OllamaChat` or an OpenAI-compatible path only if Wilson's adapter supports that selected format.
   - Behavior when a runner rejects tools.
+  - Progress, 2026-06-27: README and REST_API document supported tool-call formats, OpenAI-compatible and Ollama runner configuration, diagnostics behavior, and standard chat fallback when tools are unavailable.
 - [ ] Add `TOOLS.md` if `REST_API.md` becomes too large.
   - Explain built-in tool inventory, safety model, approval modes, output limits, redaction, and MCP lifecycle.
   - Cross-link from README, REST API docs, SDK READMEs, and dashboard README.

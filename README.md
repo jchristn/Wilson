@@ -120,6 +120,8 @@ Factory reset scripts:
 
 These reset Docker data and restore Docker settings from `docker/factory`.
 
+When enabling file or process tools in Docker, mount an explicit workspace volume and point Wilson tools at the container path, not the host path. For example, mount a host directory to `/workspace`, then set `tools.workingDirectory` to `/workspace` and include `/workspace` in `tools.allowedRoots`. Do not mount broad host paths such as a home directory or source-drive root unless the deployment is isolated and trusted.
+
 ## Configuration
 
 Wilson reads settings from `wilson.json`.
@@ -148,6 +150,8 @@ Each `modelRunners` entry supports endpoint health checks:
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
 Tools are disabled by default. To use built-in file tools, enable `tools.enabled`, configure `tools.workingDirectory`, and include at least one path in `tools.allowedRoots`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
+
+Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
 
 The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, and Test adds selected-runner readiness checks without calling a model or executing tools.
 
