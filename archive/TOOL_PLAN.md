@@ -1022,20 +1022,24 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - `GetToolCall`
   - `DeleteToolCalls`
   - `DeleteToolCall`
-- [ ] Add chat request options for tools.
-- [ ] Add `toolCalls` or `tool_calls` safe trace metadata to chat response models.
+- [x] Add chat request options for tools.
+  - Progress, 2026-06-27: non-streaming chat helpers with tool request options are implemented in JavaScript, Python, and C# SDKs.
+- [x] Add `toolCalls` or `tool_calls` safe trace metadata to chat response models.
   - Tests must prove SDK chat response traces do not expose raw `ArgumentsJson` or raw `ResultJson`.
+  - Progress, 2026-06-27: C# typed chat response models include safe `ToolTrace` metadata and aggregate `ChatToolMetrics`; JavaScript/Python return parsed JSON objects by existing convention. Live server API regression verifies public chat traces do not expose raw argument/result fields. SDK validation passed: C# SDK build, JavaScript syntax check, and Python bytecode compile.
 - [ ] Add streaming support where practical.
   - JavaScript: async iterator over SSE events.
   - Python: generator over SSE events using standard library or document that streaming requires an optional dependency if standard library is too awkward.
   - C#: `IAsyncEnumerable<WilsonSseEvent>`.
-- [ ] Preserve current simple APIs.
+- [x] Preserve current simple APIs.
+  - Progress, 2026-06-27: existing SDK methods remain source-compatible; chat helpers are additive.
 
 ### JavaScript SDK
 
 - [x] Update `sdk/javascript/index.js`.
   - Progress: added `tools`, `tool`, `toolRun`, `conversationToolCalls`, and `requestHistoryToolCalls`.
   - Progress, 2026-06-26: added `validateTools` and `testTools`.
+  - Progress, 2026-06-27: added non-streaming `chat`.
 - [x] Update `sdk/javascript/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add examples for:
@@ -1048,6 +1052,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 - [x] Update `sdk/python/wilson_client.py`.
   - Progress: added `tools`, `tool`, `tool_run`, `conversation_tool_calls`, and `request_history_tool_calls`.
+  - Progress, 2026-06-27: added non-streaming `chat`.
 - [x] Update `sdk/python/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add examples matching JavaScript.
@@ -1057,8 +1062,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 - [x] Update `sdk/csharp/Wilson.Sdk/WilsonClient.cs`.
   - Progress: added `GetToolsAsync`, `GetToolAsync`, `GetToolRunAsync`, `GetConversationToolCallsAsync`, and `GetRequestHistoryToolCallsAsync` with cancellation tokens.
+  - Progress, 2026-06-27: added non-streaming `ChatAsync`.
 - [x] Add model classes under `sdk/csharp/Wilson.Sdk/Models`.
   - Progress: added typed models for tool descriptors, runs, records, and run responses.
+  - Progress, 2026-06-27: added typed `ChatRequest`, `ChatResponse`, `ToolTrace`, and `ChatToolMetrics` models for non-streaming chat with safe tool traces.
 - [x] Update `sdk/csharp/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add streaming helper if feasible with `HttpCompletionOption.ResponseHeadersRead`.
@@ -1067,6 +1074,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 - [x] Update `sdk/README.md`.
   - Document new tool methods.
+  - Progress, 2026-06-27: documented non-streaming chat helpers, tool request options, safe `toolCalls`, and `toolMetrics`.
   - Explain that server settings control whether tools are available.
   - Link to REST API docs/OpenAPI.
 

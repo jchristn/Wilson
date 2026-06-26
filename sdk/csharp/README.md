@@ -16,12 +16,13 @@ EndpointHealthStatus local = await client.GetModelRunnerHealthAsync("local-ollam
 List<ToolDescriptor> tools = await client.GetToolsAsync();
 ToolPolicyValidationResult validation = await client.ValidateToolsAsync(new { enabled = true, workingDirectory = "C:/Code/Wilson", allowedRoots = new[] { "C:/Code/Wilson" }, defaultApprovalPolicy = "auto" });
 ToolPolicyTestResult readiness = await client.TestToolsAsync(new { enabled = true, workingDirectory = "C:/Code/Wilson", allowedRoots = new[] { "C:/Code/Wilson" }, defaultApprovalPolicy = "auto" }, "local-ollama");
+ChatResponse chat = await client.ChatAsync(new ChatRequest { RunnerId = "local-ollama", Model = "llama3.1", Prompt = "Read README.md", ToolsEnabled = true, ApprovalPolicy = "auto", ToolNames = new List<string> { "read_file" } });
 ToolDescriptor readFile = await client.GetToolAsync("read_file");
 EnumerationResult<ToolExecutionRecord> conversationTools = await client.GetConversationToolCallsAsync("conversation-id");
 ```
 
 Health responses are exposed as `EndpointHealthStatus` with `EndpointId`, `EndpointName`, `IsHealthy`, `LastCheckUtc`, `UptimePercentage`, `ConsecutiveSuccesses`, `ConsecutiveFailures`, `LastError`, and `History`.
 
-Tool-call history methods return redacted Wilson records. Normal chat traces and history reads do not expose raw model arguments, raw tool output, or provider request IDs.
+Tool-call history methods return redacted Wilson records. `ChatResponse.ToolCalls` contains safe trace metadata only and does not expose raw model arguments, raw tool output, or provider request IDs.
 
 Tool diagnostics methods require an admin token. `ValidateToolsAsync` checks draft tool settings without saving them. `TestToolsAsync` adds runner capability checks when `runnerId` is supplied.

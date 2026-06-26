@@ -14,12 +14,13 @@ const local = await client.modelRunnerHealthById('local-ollama');
 const tools = await client.tools();
 const validation = await client.validateTools({ tools: { enabled: true, workingDirectory: 'C:/Code/Wilson', allowedRoots: ['C:/Code/Wilson'], defaultApprovalPolicy: 'auto' } });
 const readiness = await client.testTools({ tools: { enabled: true, workingDirectory: 'C:/Code/Wilson', allowedRoots: ['C:/Code/Wilson'], defaultApprovalPolicy: 'auto' }, runnerId: 'local-ollama' });
+const chat = await client.chat({ runnerId: 'local-ollama', model: 'llama3.1', prompt: 'Read README.md', toolsEnabled: true, approvalPolicy: 'auto', toolNames: ['read_file'] });
 const readFile = await client.tool('read_file');
 const conversationTools = await client.conversationToolCalls('conversation-id', { pageNumber: 1, pageSize: 100 });
 ```
 
 Health responses match the Wilson API contract: `endpointId`, `endpointName`, `isHealthy`, `lastCheckUtc`, `uptimePercentage`, `consecutiveSuccesses`, `consecutiveFailures`, `lastError`, and `history`.
 
-Tool-call history methods return redacted Wilson records. Normal chat traces and history reads do not expose raw model arguments, raw tool output, or provider request IDs.
+Tool-call history methods return redacted Wilson records. `chat.toolCalls` contains safe trace metadata only and does not expose raw model arguments, raw tool output, or provider request IDs.
 
 Tool diagnostics methods require an admin token. `validateTools` checks draft tool settings without saving them. `testTools` adds runner capability checks when `runnerId` is supplied.

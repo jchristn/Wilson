@@ -57,6 +57,10 @@ export class WilsonClient {
     return this.request('GET', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/health`);
   }
 
+  chat(payload = {}) {
+    return this.request('POST', '/v1.0/api/chat', payload);
+  }
+
   tools() {
     return this.request('GET', '/v1.0/api/tools');
   }

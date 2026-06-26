@@ -61,6 +61,18 @@ namespace Wilson.Sdk
         }
 
         /// <summary>
+        /// Send a non-streaming chat request.
+        /// </summary>
+        /// <param name="request">Chat request.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Chat response including safe tool traces when tools are used.</returns>
+        public Task<ChatResponse> ChatAsync(ChatRequest request, CancellationToken token = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            return SendAsync<ChatResponse>(HttpMethod.Post, "/v1.0/api/chat", request, token);
+        }
+
+        /// <summary>
         /// Get the effective Wilson tool catalog.
         /// </summary>
         /// <param name="token">Cancellation token.</param>
