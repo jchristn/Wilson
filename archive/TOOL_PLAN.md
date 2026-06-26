@@ -1174,15 +1174,17 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - final enabled/disabled allow-list filtering is applied.
   - Progress, 2026-06-26: diagnostics endpoint tests are being added for policy validation and runner readiness. Web-search provider diagnostics remain pending until that executor is implemented.
   - Progress, 2026-06-26: route-level diagnostics tests now cover disabled global policy, valid filesystem policy, missing allowed roots, unknown enabled tool names, successful runner readiness, disabled runner, unsupported runner, missing runner, admin-only access, and OpenAPI path/schema presence. Web-search provider diagnostics remain pending until that executor is implemented.
-- [ ] Test tool argument validation:
+- [x] Test tool argument validation:
   - arguments must be a JSON object.
   - unknown properties are rejected.
   - malformed number/bool/list values are rejected.
   - permitted numeric strings are normalized only for tools that explicitly support them.
-- [ ] Test output limiter:
+  - Progress, 2026-06-26: added `ToolArgumentValidationAndOutputLimiterAsync` coverage for non-object arguments, unknown properties, missing required arguments, malformed numeric strings, malformed list arguments, and accepted numeric strings for `read_file` offset/limit. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
+- [x] Test output limiter:
   - per-call truncation returns valid JSON.
   - per-turn truncation returns valid JSON.
   - truncation flags and original character counts are set.
+  - Progress, 2026-06-26: added per-call truncation JSON parsing/assertions and tightened the existing per-turn truncation test to parse `truncated`, `originalCharacters`, and `content` from valid JSON. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [~] Test audit writer:
   - persisted arguments can be suppressed by policy.
   - persisted outputs can be summarized by policy.

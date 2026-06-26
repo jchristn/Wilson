@@ -41,6 +41,7 @@ namespace Test.Shared
             await ToolServiceFoundationAsync().ConfigureAwait(false);
             await ToolDiagnosticsApiAsync().ConfigureAwait(false);
             await WorkingDirectoryGuardAsync().ConfigureAwait(false);
+            await ToolArgumentValidationAndOutputLimiterAsync().ConfigureAwait(false);
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
@@ -881,6 +882,57 @@ namespace Test.Shared
             }
         }
 
+        private static async Task ToolArgumentValidationAndOutputLimiterAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-tool-validation-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                string bigFile = Path.Combine(workspace, "big.txt");
+                await File.WriteAllTextAsync(bigFile, new String('x', 2000)).ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "small.txt"), "small").ConfigureAwait(false);
+                Settings settings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        MaxToolOutputChars = 1024
+                    }
+                };
+                ToolService service = new ToolService(settings);
+
+                ToolResult nonObject = await ExecuteToolAsync(service, "read_file", "[]").ConfigureAwait(false);
+                if (nonObject.Success || !String.Equals(nonObject.ErrorCode, "invalid_arguments", StringComparison.Ordinal)) throw new InvalidOperationException("Expected non-object arguments to be rejected.");
+
+                ToolResult unknown = await ExecuteToolAsync(service, "read_file", """{"file_path":"small.txt","unexpected":true}""").ConfigureAwait(false);
+                if (unknown.Success || !String.Equals(unknown.ErrorCode, "invalid_arguments", StringComparison.Ordinal)) throw new InvalidOperationException("Expected unknown tool arguments to be rejected.");
+
+                ToolResult missing = await ExecuteToolAsync(service, "read_file", """{"offset":1}""").ConfigureAwait(false);
+                if (missing.Success || !String.Equals(missing.ErrorCode, "invalid_arguments", StringComparison.Ordinal)) throw new InvalidOperationException("Expected missing required arguments to be rejected.");
+
+                ToolResult malformedNumber = await ExecuteToolAsync(service, "read_file", """{"file_path":"small.txt","offset":"not-a-number"}""").ConfigureAwait(false);
+                if (malformedNumber.Success || !String.Equals(malformedNumber.ErrorCode, "invalid_arguments", StringComparison.Ordinal)) throw new InvalidOperationException("Expected malformed numeric arguments to be rejected.");
+
+                ToolResult numericString = await ExecuteToolAsync(service, "read_file", """{"file_path":"small.txt","offset":"1","limit":"1"}""").ConfigureAwait(false);
+                if (!numericString.Success || !numericString.Content.Contains("small", StringComparison.Ordinal)) throw new InvalidOperationException("Expected read_file to accept explicit numeric strings for offset and limit.");
+
+                ToolResult malformedList = await ExecuteToolAsync(service, "run_process", """{"command":"cmd.exe","args":"not-an-array"}""").ConfigureAwait(false);
+                if (malformedList.Success || !String.Equals(malformedList.ErrorCode, "invalid_arguments", StringComparison.Ordinal)) throw new InvalidOperationException("Expected malformed list arguments to be rejected.");
+
+                ToolResult truncated = await ExecuteToolAsync(service, "read_file", """{"file_path":"big.txt"}""").ConfigureAwait(false);
+                if (!truncated.Success || !truncated.Truncated || !truncated.Content.Contains("[truncated]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected per-call output truncation.");
+                using JsonDocument contentJson = JsonDocument.Parse(truncated.ContentJson);
+                if (!contentJson.RootElement.TryGetProperty("truncated", out JsonElement truncatedElement) || !truncatedElement.GetBoolean()) throw new InvalidOperationException("Expected per-call truncation JSON flag.");
+                if (!contentJson.RootElement.TryGetProperty("content", out JsonElement contentElement) || String.IsNullOrWhiteSpace(contentElement.GetString())) throw new InvalidOperationException("Expected per-call truncation JSON content.");
+            }
+            finally
+            {
+                Directory.Delete(workspace, true);
+            }
+        }
+
         private static async Task FilesystemMutationToolsAsync()
         {
             string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-write-" + Guid.NewGuid().ToString("N"));
@@ -1370,7 +1422,17 @@ namespace Test.Shared
 
                         List<ModelChatMessage> toolMessages = request.Messages.Where(message => String.Equals(message.Role, "tool", StringComparison.Ordinal)).ToList();
                         string secondToolContent = toolMessages.Count > 1 ? toolMessages[1].Content ?? String.Empty : String.Empty;
-                        sawTurnTruncation = toolMessages.Count == 2 && secondToolContent.Contains("originalCharacters", StringComparison.Ordinal);
+                        if (toolMessages.Count == 2)
+                        {
+                            using JsonDocument truncation = JsonDocument.Parse(secondToolContent);
+                            sawTurnTruncation = truncation.RootElement.TryGetProperty("truncated", out JsonElement truncatedElement)
+                                && truncatedElement.GetBoolean()
+                                && truncation.RootElement.TryGetProperty("originalCharacters", out JsonElement originalCharactersElement)
+                                && originalCharactersElement.GetInt32() > 0
+                                && truncation.RootElement.TryGetProperty("content", out JsonElement contentElement)
+                                && contentElement.ValueKind == JsonValueKind.String;
+                        }
+
                         return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "budgeted", FinishReason = "stop" });
                     });
 
