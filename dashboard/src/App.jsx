@@ -1046,7 +1046,26 @@ function defaultToolsSettings() {
     maxToolOutputCharsPerTurn: 50000,
     maxToolResultItems: 20,
     enabledToolNames: [],
-    disabledToolNames: []
+    disabledToolNames: [],
+    webSearch: {
+      enabled: true,
+      allowFallback: true,
+      providers: [
+        {
+          name: 'duckduckgo',
+          providerType: 'duckduckgo',
+          endpoint: 'https://html.duckduckgo.com/html/',
+          apiKey: '',
+          enabled: true,
+          isDefault: true,
+          timeoutMs: 30000
+        }
+      ]
+    },
+    mcp: {
+      enabled: false,
+      servers: []
+    }
   };
 }
 

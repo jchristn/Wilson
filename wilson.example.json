@@ -25,13 +25,13 @@
     "retentionDays": 30
   },
   "tools": {
-    "enabled": false,
+    "enabled": true,
     "builtInsEnabled": true,
     "defaultApprovalPolicy": "ask",
     "destructiveToolsRequireApproval": true,
     "blockSecretPaths": true,
-    "workingDirectory": "",
-    "allowedRoots": [],
+    "workingDirectory": "/workspace",
+    "allowedRoots": [ "/workspace" ],
     "maxAgentIterations": 25,
     "maxToolIterations": 20,
     "maxToolCallsPerTurn": 12,
@@ -53,9 +53,19 @@
     "enabledToolNames": [],
     "disabledToolNames": [],
     "webSearch": {
-      "enabled": false,
+      "enabled": true,
       "allowFallback": true,
-      "providers": []
+      "providers": [
+        {
+          "name": "duckduckgo",
+          "providerType": "duckduckgo",
+          "endpoint": "https://html.duckduckgo.com/html/",
+          "apiKey": "",
+          "enabled": true,
+          "isDefault": true,
+          "timeoutMs": 30000
+        }
+      ]
     },
     "mcp": {
       "enabled": false,
@@ -74,8 +84,8 @@
       "toolsEnabled": true,
       "supportsTools": true,
       "toolCallingApiFormat": "OllamaChat",
-      "supportsParallelToolCalls": false,
-      "supportsStreamingToolCalls": false,
+      "supportsParallelToolCalls": true,
+      "supportsStreamingToolCalls": true,
       "chatCompletionsPath": "",
       "healthCheckEnabled": true,
       "healthCheckUrl": "http://host.docker.internal:11434/api/tags",
@@ -98,8 +108,8 @@
       "toolsEnabled": true,
       "supportsTools": true,
       "toolCallingApiFormat": "OpenAIChatCompletions",
-      "supportsParallelToolCalls": false,
-      "supportsStreamingToolCalls": false,
+      "supportsParallelToolCalls": true,
+      "supportsStreamingToolCalls": true,
       "chatCompletionsPath": "/v1/chat/completions",
       "healthCheckEnabled": true,
       "healthCheckUrl": "https://api.openai.com/v1/models",

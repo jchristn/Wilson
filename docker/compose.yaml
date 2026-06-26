@@ -7,6 +7,7 @@ services:
       - "9400:9400"
     volumes:
       - wilson-data:/app/data
+      - wilson-workspace:/workspace
       - ./wilson.json:/app/wilson.json
 
   wilson-dashboard:
@@ -34,4 +35,5 @@ services:
 
 volumes:
   wilson-data:
+  wilson-workspace:
   wilson-postgres:

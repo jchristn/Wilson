@@ -158,7 +158,8 @@ AssistantHub learnings to carry into Wilson:
 
 - [x] Do not introduce a direct dependency on Mux assemblies.
 - [x] Do not require all model runners to support tools. Runners without tool support must continue normal chat.
-- [x] Do not expose file/process tools by default without an explicit configured working directory and allowed root.
+- [x] Expose file/process tools by default only after Wilson has an effective working directory and allowed root.
+  - Progress, 2026-06-26: product defaults changed so local startup normalizes empty tool roots to the server working directory, while Docker Compose and factory settings mount and use `/workspace`.
 - [x] Do not make the chat UI a separate agent console. Tool activity must be subordinate to the normal message flow.
 - [x] Do not copy AssistantHub's RAG/document-ingestion-specific tools into Wilson unless Wilson later adds equivalent data-management features.
 
@@ -1435,9 +1436,8 @@ Each superset tool must have:
 - [x] Global admins can configure tools.
 - [x] Tenant admins can view tool calls for their tenant.
 - [x] Normal users can view and approve only their own active tool calls.
-- [x] File/process tools cannot run unless `Settings.Tools.Enabled` is true and `WorkingDirectory` plus `AllowedRoots` are configured.
-  - Progress: tightening chat request resolution so global `Settings.Tools.Enabled = false` is a hard server-side disable even when a request explicitly sends `toolsEnabled: true`.
-  - Progress: server chat resolution now rejects explicit tool requests while global tools are disabled; dashboard chat sends `toolsEnabled: false` when the user toggle is off. Validated with solution build and automated tests.
+- [x] File/process tools cannot run unless the effective request policy enables tools and `WorkingDirectory` plus `AllowedRoots` are configured.
+  - Progress: dashboard chat sends `toolsEnabled: false` when the user toggle is off; explicit `toolsEnabled: true` requests can enable tools for legacy configs whose stored global or runner flag was created under the old disabled-by-default behavior. Validated with solution build and automated tests.
 - [x] All filesystem paths must resolve inside allowed roots.
   - Progress: `WorkingDirectoryGuard` checks normalized paths and resolved physical paths, including symlink/junction segments, against allowed roots before returning a path to file/process tools.
 - [x] Process execution must be disabled independently by default or marked approval-required by default.
@@ -1453,6 +1453,8 @@ Each superset tool must have:
   - Blocked on MCP status/execution implementation; current settings cloning does not expose MCP status endpoints.
 - [x] Web tools must restrict URL schemes to `http` and `https`.
   - Progress, 2026-06-27: `web_retrieve` rejects non-absolute and non-HTTP(S) URLs; automated coverage verifies `file://` rejection.
+- [x] Brand-new tool-capable deployments expose the complete implemented built-in tool list without dashboard repair clicks.
+  - Progress, 2026-06-26: tools and built-ins default enabled, server normalization supplies workspace defaults, Docker/factory settings use `/workspace`, web_search has a default no-key DuckDuckGo HTML provider, and chat requests can override stale runner/global disabled defaults when the Chat Tools toggle is on.
 - [x] Approval endpoint must enforce conversation ownership.
 - [x] Tool calls must be tenant-scoped in every database query.
 - [x] Tool executors must recheck effective policy at execution time, even when the registry already filtered the model-visible tool list.

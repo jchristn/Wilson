@@ -74,11 +74,31 @@ namespace Wilson.Core.Settings
     public class WebSearchToolSettings
     {
         /// <summary>Enable web_search.</summary>
-        public bool Enabled { get; set; } = false;
+        public bool Enabled { get; set; } = true;
         /// <summary>Allow provider fallback.</summary>
         public bool AllowFallback { get; set; } = true;
         /// <summary>Search providers.</summary>
-        public List<WebSearchProviderSettings> Providers { get; set; } = new List<WebSearchProviderSettings>();
+        public List<WebSearchProviderSettings> Providers { get; set; } = DefaultProviders();
+
+        /// <summary>
+        /// Create the default no-key provider list.
+        /// </summary>
+        /// <returns>Default web search providers.</returns>
+        public static List<WebSearchProviderSettings> DefaultProviders()
+        {
+            return new List<WebSearchProviderSettings>
+            {
+                new WebSearchProviderSettings
+                {
+                    Name = "duckduckgo",
+                    ProviderType = "duckduckgo",
+                    Endpoint = "https://html.duckduckgo.com/html/",
+                    Enabled = true,
+                    IsDefault = true,
+                    TimeoutMs = 30000
+                }
+            };
+        }
     }
 
     /// <summary>

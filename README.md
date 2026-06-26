@@ -120,7 +120,7 @@ Factory reset scripts:
 
 These reset Docker data and restore Docker settings from `docker/factory`.
 
-When enabling file or process tools in Docker, mount an explicit workspace volume and point Wilson tools at the container path, not the host path. For example, mount a host directory to `/workspace`, then set `tools.workingDirectory` to `/workspace` and include `/workspace` in `tools.allowedRoots`. Do not mount broad host paths such as a home directory or source-drive root unless the deployment is isolated and trusted.
+Docker Compose mounts a named `/workspace` volume and the Docker settings expose that path to Wilson file and process tools by default. To use a host directory instead, mount that directory to `/workspace` and keep `tools.workingDirectory` plus `tools.allowedRoots` pointed at the container path, not the host path. Do not mount broad host paths such as a home directory or source-drive root unless the deployment is isolated and trusted.
 
 ## Configuration
 
@@ -149,7 +149,7 @@ Each `modelRunners` entry supports endpoint health checks:
 
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
-Tools are disabled by default. To use built-in file tools, enable `tools.enabled`, configure `tools.workingDirectory`, and include at least one path in `tools.allowedRoots`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
+Tools are enabled by default for tool-capable runners. If `tools.workingDirectory` or `tools.allowedRoots` are empty, Wilson normalizes them to the server working directory for local installs; Docker defaults them to `/workspace`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
 
 Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
 
@@ -160,7 +160,7 @@ Implemented built-in tools:
 - Read/discover: `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
 - Modify files/directories: `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - Process execution: `run_process`
-- Web retrieval: `web_retrieve` for absolute `http` and `https` URLs
+- Web retrieval/search: `web_retrieve` for absolute `http` and `https` URLs, and `web_search` through the default DuckDuckGo HTML provider or configured Tavily/You.com-compatible providers
 
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 

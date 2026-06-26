@@ -3,11 +3,13 @@ namespace Wilson.Core.Tools.Tools
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using System.Net;
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
     using Wilson.Core.Models;
@@ -116,6 +118,8 @@ namespace Wilson.Core.Tools.Tools
                 return await SearchTavilyAsync(provider, query, maxResults, token).ConfigureAwait(false);
             if (String.Equals(providerType, "you", StringComparison.OrdinalIgnoreCase) || String.Equals(providerType, "you.com", StringComparison.OrdinalIgnoreCase))
                 return await SearchYouAsync(provider, query, maxResults, token).ConfigureAwait(false);
+            if (String.Equals(providerType, "duckduckgo", StringComparison.OrdinalIgnoreCase) || String.Equals(providerType, "duckduckgo_html", StringComparison.OrdinalIgnoreCase))
+                return await SearchDuckDuckGoHtmlAsync(provider, query, maxResults, token).ConfigureAwait(false);
 
             return await SearchGenericJsonAsync(provider, query, maxResults, token).ConfigureAwait(false);
         }
@@ -136,7 +140,7 @@ namespace Wilson.Core.Tools.Tools
             }), Encoding.UTF8, "application/json");
 
             using HttpResponseMessage response = await client.SendAsync(request, token).ConfigureAwait(false);
-            string json = await ReadSuccessJsonAsync(response, token).ConfigureAwait(false);
+            string json = await ReadSuccessBodyAsync(response, token).ConfigureAwait(false);
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             JsonElement results = root.TryGetProperty("results", out JsonElement value) && value.ValueKind == JsonValueKind.Array ? value : default;
@@ -156,7 +160,7 @@ namespace Wilson.Core.Tools.Tools
             if (!String.IsNullOrWhiteSpace(apiKey)) request.Headers.Add("X-API-Key", apiKey);
 
             using HttpResponseMessage response = await client.SendAsync(request, token).ConfigureAwait(false);
-            string json = await ReadSuccessJsonAsync(response, token).ConfigureAwait(false);
+            string json = await ReadSuccessBodyAsync(response, token).ConfigureAwait(false);
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             JsonElement results = TryArray(root, "hits");
@@ -179,13 +183,29 @@ namespace Wilson.Core.Tools.Tools
             if (!String.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
             using HttpResponseMessage response = await client.SendAsync(request, token).ConfigureAwait(false);
-            string json = await ReadSuccessJsonAsync(response, token).ConfigureAwait(false);
+            string json = await ReadSuccessBodyAsync(response, token).ConfigureAwait(false);
             using JsonDocument document = JsonDocument.Parse(json);
             JsonElement root = document.RootElement;
             JsonElement results = TryArray(root, "results");
             if (results.ValueKind != JsonValueKind.Array) results = TryArray(root, "items");
             if (results.ValueKind != JsonValueKind.Array) results = TryArray(root, "webPages", "value");
             return ParseResultArray(results, maxResults, "title", "url", "snippet");
+        }
+
+        private static async Task<List<WebSearchResultItem>> SearchDuckDuckGoHtmlAsync(WebSearchProviderSettings provider, string query, int maxResults, CancellationToken token)
+        {
+            string endpoint = String.IsNullOrWhiteSpace(provider.Endpoint) ? "https://html.duckduckgo.com/html/" : provider.Endpoint;
+            UriBuilder builder = new UriBuilder(endpoint);
+            string prefix = String.IsNullOrWhiteSpace(builder.Query) ? String.Empty : builder.Query.TrimStart('&', '?') + "&";
+            builder.Query = prefix + "q=" + Uri.EscapeDataString(query);
+
+            using HttpClient client = CreateClient(provider);
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
+            request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml");
+
+            using HttpResponseMessage response = await client.SendAsync(request, token).ConfigureAwait(false);
+            string html = await ReadSuccessBodyAsync(response, token).ConfigureAwait(false);
+            return ParseDuckDuckGoHtml(html, maxResults);
         }
 
         private static HttpClient CreateClient(WebSearchProviderSettings provider)
@@ -196,7 +216,7 @@ namespace Wilson.Core.Tools.Tools
             return client;
         }
 
-        private static async Task<string> ReadSuccessJsonAsync(HttpResponseMessage response, CancellationToken token)
+        private static async Task<string> ReadSuccessBodyAsync(HttpResponseMessage response, CancellationToken token)
         {
             string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
@@ -215,6 +235,88 @@ namespace Wilson.Core.Tools.Tools
             }
 
             return value;
+        }
+
+        private static List<WebSearchResultItem> ParseDuckDuckGoHtml(string html, int maxResults)
+        {
+            List<WebSearchResultItem> items = new List<WebSearchResultItem>();
+            if (String.IsNullOrWhiteSpace(html)) return items;
+
+            MatchCollection matches = Regex.Matches(html, "<a[^>]+class=[\"'][^\"']*result__a[^\"']*[\"'][^>]+href=[\"'](?<href>[^\"']+)[\"'][^>]*>(?<title>.*?)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromSeconds(1));
+            foreach (Match match in matches)
+            {
+                string url = DecodeDuckDuckGoUrl(match.Groups["href"].Value);
+                if (String.IsNullOrWhiteSpace(url)) continue;
+
+                string title = HtmlToText(match.Groups["title"].Value);
+                string trailingHtml = html.Substring(match.Index, Math.Min(1200, html.Length - match.Index));
+                string snippet = ExtractDuckDuckGoSnippet(trailingHtml);
+                AddResult(items, title, url, snippet, maxResults);
+                if (items.Count >= maxResults) break;
+            }
+
+            return items;
+        }
+
+        private static string ExtractDuckDuckGoSnippet(string html)
+        {
+            Match match = Regex.Match(html, "<a[^>]+class=[\"'][^\"']*result__snippet[^\"']*[\"'][^>]*>(?<snippet>.*?)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromSeconds(1));
+            if (!match.Success)
+                match = Regex.Match(html, "<div[^>]+class=[\"'][^\"']*result__snippet[^\"']*[\"'][^>]*>(?<snippet>.*?)</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromSeconds(1));
+            return match.Success ? HtmlToText(match.Groups["snippet"].Value) : String.Empty;
+        }
+
+        private static string DecodeDuckDuckGoUrl(string value)
+        {
+            string decoded = WebUtility.HtmlDecode(value ?? String.Empty).Trim();
+            if (String.IsNullOrWhiteSpace(decoded)) return String.Empty;
+            if (decoded.StartsWith("//", StringComparison.Ordinal)) decoded = "https:" + decoded;
+
+            if (!Uri.TryCreate(decoded, UriKind.Absolute, out Uri? uri)) return String.Empty;
+            if (String.Equals(uri.Host, "duckduckgo.com", StringComparison.OrdinalIgnoreCase)
+                && uri.AbsolutePath.StartsWith("/l/", StringComparison.OrdinalIgnoreCase))
+            {
+                string? redirected = QueryValue(uri.Query, "uddg");
+                if (!String.IsNullOrWhiteSpace(redirected)) decoded = redirected;
+            }
+
+            return Uri.TryCreate(decoded, UriKind.Absolute, out Uri? finalUri)
+                && (String.Equals(finalUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) || String.Equals(finalUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                ? finalUri.ToString()
+                : String.Empty;
+        }
+
+        private static string? QueryValue(string query, string name)
+        {
+            string trimmed = (query ?? String.Empty).TrimStart('?');
+            foreach (string part in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] pieces = part.Split('=', 2);
+                string key = Uri.UnescapeDataString(pieces[0].Replace("+", " "));
+                if (!String.Equals(key, name, StringComparison.OrdinalIgnoreCase)) continue;
+                return pieces.Length > 1 ? Uri.UnescapeDataString(pieces[1].Replace("+", " ")) : String.Empty;
+            }
+
+            return null;
+        }
+
+        private static string HtmlToText(string html)
+        {
+            string withoutTags = Regex.Replace(html ?? String.Empty, "<[^>]+>", " ", RegexOptions.Singleline, TimeSpan.FromSeconds(1));
+            string decoded = WebUtility.HtmlDecode(withoutTags);
+            return Regex.Replace(decoded, "[\\t\\r\\n ]+", " ", RegexOptions.None, TimeSpan.FromSeconds(1)).Trim();
+        }
+
+        private static void AddResult(List<WebSearchResultItem> items, string title, string url, string snippet, int maxResults)
+        {
+            if (items.Count >= maxResults) return;
+            if (items.Any(item => String.Equals(item.Url, url, StringComparison.OrdinalIgnoreCase))) return;
+            items.Add(new WebSearchResultItem
+            {
+                Title = title,
+                Url = url,
+                Snippet = snippet
+            });
         }
 
         private static JsonElement TryArray(JsonElement root, string property)

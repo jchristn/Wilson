@@ -9,6 +9,7 @@ namespace Test.Shared
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Net.Sockets;
+    using System.Reflection;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
@@ -653,6 +654,17 @@ namespace Test.Shared
             if (!tools.BuiltInsEnabled) throw new InvalidOperationException("Built-in tools should be enabled for catalog resolution by default.");
             if (!String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected default tool approval policy.");
             if (tools.MaxAgentIterations != 25 || tools.MaxToolCallsPerTurn != 12) throw new InvalidOperationException("Unexpected default tool limits.");
+            if (tools.WebSearch == null || !tools.WebSearch.Enabled || tools.WebSearch.Providers.Count == 0)
+                throw new InvalidOperationException("Web search should have an enabled no-key provider by default.");
+
+            Settings normalizedDefaults = new Settings { Tools = new ToolsSettings { Enabled = true } };
+            typeof(WilsonServer).GetMethod("NormalizeSettings", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, new object[] { normalizedDefaults });
+            if (String.IsNullOrWhiteSpace(normalizedDefaults.Tools.WorkingDirectory) || normalizedDefaults.Tools.AllowedRoots.Count == 0)
+                throw new InvalidOperationException("Enabled server tools should receive default workspace settings.");
+            if (!new ToolService(normalizedDefaults).ListTools(false).Any(tool => String.Equals(tool.Name, "list_directory", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Enabled server tools should expose filesystem discovery tools by default.");
+            if (!new ToolService(normalizedDefaults).ListTools(false).Any(tool => String.Equals(tool.Name, "web_search", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Enabled server tools should expose web_search by default.");
 
             ModelRunnerSettings ollama = new ModelRunnerSettings { ApiType = "Ollama", Endpoint = "http://localhost:11434" };
             ModelRunnerSettings.ApplyToolDefaults(ollama);
@@ -1878,7 +1890,44 @@ namespace Test.Shared
                 if (!String.Equals(results[0].GetProperty("url").GetString(), "https://example.com/tools", StringComparison.Ordinal)) throw new InvalidOperationException("Expected web_search result URL.");
             }
 
-            Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = true } };
+            int duckPort = GetFreePort();
+            Settings duckSettings = new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                    WebSearch = new WebSearchToolSettings
+                    {
+                        Enabled = true,
+                        Providers = new List<WebSearchProviderSettings>
+                        {
+                            new WebSearchProviderSettings
+                            {
+                                Name = "duck",
+                                ProviderType = "duckduckgo",
+                                Endpoint = "http://127.0.0.1:" + duckPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/html/",
+                                Enabled = true,
+                                IsDefault = true,
+                                TimeoutMs = 5000
+                            }
+                        }
+                    }
+                }
+            };
+            string duckBody = """
+<html><body>
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fduck">Duck Result</a>
+<a class="result__snippet">Duck snippet.</a>
+</body></html>
+""";
+            Task duckServerTask = RunSingleHttpResponseServerAsync(duckPort, "text/html", duckBody, CancellationToken.None);
+            ToolResult duckResult = await ExecuteToolAsync(new ToolService(duckSettings), "web_search", """{"query":"duck","max_results":2}""").ConfigureAwait(false);
+            await duckServerTask.ConfigureAwait(false);
+            if (!duckResult.Success || !duckResult.Content.Contains("https://example.com/duck", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected duckduckgo web_search provider to parse HTML results.");
+
+            Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = true, WebSearch = new WebSearchToolSettings { Enabled = false } } };
             ToolDescriptor? disabledDescriptor = new ToolService(disabled).GetTool("web_search");
             if (disabledDescriptor == null || disabledDescriptor.Available || !String.Equals(disabledDescriptor.UnavailableReason, "Web search is disabled.", StringComparison.Ordinal))
                 throw new InvalidOperationException("Expected web_search to explain disabled settings.");

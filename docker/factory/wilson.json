@@ -1,8 +1,126 @@
 {
-  "type": "container",
-  "name": "wilson",
-  "description": "Wilson chat dashboard and Watson 7 backend",
-  "compose": "../compose.yaml",
-  "settings": "../wilson.json",
-  "ports": [ 9400, 9401 ]
+  "createdUtc": "2026-05-30T15:51:01.1612734Z",
+  "rest": {
+    "hostname": "0.0.0.0",
+    "port": 9400,
+    "ssl": false
+  },
+  "database": {
+    "type": "Sqlite",
+    "filename": "data/wilson.db",
+    "connectionString": "Host=postgres;Port=5432;Database=wilson;Username=wilson;Password=wilson"
+  },
+  "cors": {
+    "enabled": true,
+    "allowedOrigins": [
+      "*"
+    ],
+    "allowedMethods": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "OPTIONS",
+      "HEAD"
+    ],
+    "allowedHeaders": [
+      "Content-Type",
+      "Authorization",
+      "X-Api-Key",
+      "X-Tenant-Guid"
+    ]
+  },
+  "auth": {
+    "adminBearerTokens": [
+      "wilson-admin-dev-token"
+    ],
+    "sessionHours": 24
+  },
+  "requestHistory": {
+    "enabled": true,
+    "retentionDays": 30
+  },
+  "tools": {
+    "enabled": true,
+    "builtInsEnabled": true,
+    "defaultApprovalPolicy": "ask",
+    "destructiveToolsRequireApproval": true,
+    "blockSecretPaths": true,
+    "workingDirectory": "/workspace",
+    "allowedRoots": [
+      "/workspace"
+    ],
+    "maxAgentIterations": 25,
+    "maxToolIterations": 20,
+    "maxToolCallsPerTurn": 12,
+    "toolChoiceMode": "auto",
+    "allowParallelToolCalls": false,
+    "maxParallelToolCalls": 1,
+    "emitProgressEvents": true,
+    "exposeToolTracesToUsers": true,
+    "toolTimeoutMs": 30000,
+    "processTimeoutMs": 120000,
+    "maxReadFileBytes": 1048576,
+    "maxToolResultBytes": 102400,
+    "storeToolResults": true,
+    "storeFullToolResults": false,
+    "storeToolArguments": true,
+    "maxToolOutputChars": 12000,
+    "maxToolOutputCharsPerTurn": 50000,
+    "maxToolResultItems": 20,
+    "enabledToolNames": [],
+    "disabledToolNames": [],
+    "webSearch": {
+      "enabled": true,
+      "allowFallback": true,
+      "providers": [
+        {
+          "name": "duckduckgo",
+          "providerType": "duckduckgo",
+          "endpoint": "https://html.duckduckgo.com/html/",
+          "apiKey": "",
+          "enabled": true,
+          "isDefault": true,
+          "timeoutMs": 30000
+        }
+      ]
+    },
+    "mcp": {
+      "enabled": false,
+      "servers": []
+    }
+  },
+  "modelRunners": [
+    {
+      "id": "local-ollama",
+      "name": "Local Ollama",
+      "apiType": "Ollama",
+      "endpoint": "http://192.168.86.250:11434",
+      "apiKey": null,
+      "models": [],
+      "contextWindowTokens": 63556,
+      "toolsEnabled": true,
+      "supportsTools": true,
+      "toolCallingApiFormat": "OllamaChat",
+      "supportsParallelToolCalls": true,
+      "supportsStreamingToolCalls": true,
+      "chatCompletionsPath": "",
+      "healthCheckEnabled": true,
+      "healthCheckUrl": "http://192.168.86.250:11434/api/tags",
+      "healthCheckMethod": "GET",
+      "healthCheckIntervalMs": 5000,
+      "healthCheckTimeoutMs": 2000,
+      "healthCheckExpectedStatusCode": 200,
+      "healthyThreshold": 2,
+      "unhealthyThreshold": 2,
+      "healthCheckUseAuth": false
+    }
+  ],
+  "seed": {
+    "tenantName": "Default Tenant",
+    "userEmail": "admin@wilson.local",
+    "firstName": "Admin",
+    "lastName": "User",
+    "accessKey": "wilsonadmin"
+  }
 }

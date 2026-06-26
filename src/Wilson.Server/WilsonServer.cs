@@ -165,7 +165,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private static void NormalizeSettings(Settings settings)
         {
             settings.Tools ??= new ToolsSettings();
-            NormalizeTools(settings.Tools);
+            NormalizeTools(settings.Tools, true);
             settings.ModelRunners ??= new List<ModelRunnerSettings>();
             foreach (ModelRunnerSettings runner in settings.ModelRunners)
             {
@@ -174,12 +174,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
         }
 
-        private static void NormalizeTools(ToolsSettings tools)
+        private static void NormalizeTools(ToolsSettings tools, bool applyWorkspaceDefaults = false)
         {
             tools.DefaultApprovalPolicy = NormalizeValue(tools.DefaultApprovalPolicy, "ask", "deny", "ask", "auto");
             tools.ToolChoiceMode = NormalizeValue(tools.ToolChoiceMode, "auto", "auto", "required", "none", "allowed_only");
             tools.WorkingDirectory = tools.WorkingDirectory?.Trim() ?? String.Empty;
             tools.AllowedRoots = NormalizeList(tools.AllowedRoots);
+            if (applyWorkspaceDefaults) ApplyToolWorkspaceDefaults(tools);
             tools.EnabledToolNames = NormalizeToolNameList(tools.EnabledToolNames);
             tools.DisabledToolNames = NormalizeToolNameList(tools.DisabledToolNames);
             tools.MaxAgentIterations = Math.Clamp(tools.MaxAgentIterations, 1, 100);
@@ -195,7 +196,19 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             tools.MaxToolResultItems = Math.Clamp(tools.MaxToolResultItems, 1, 1000);
 
             tools.WebSearch ??= new WebSearchToolSettings();
+            bool legacyUnconfiguredWebSearch = !tools.WebSearch.Enabled
+                && (tools.WebSearch.Providers == null || tools.WebSearch.Providers.Count == 0);
+            if (legacyUnconfiguredWebSearch)
+            {
+                tools.WebSearch.Enabled = true;
+            }
+
             tools.WebSearch.Providers ??= new List<WebSearchProviderSettings>();
+            if (tools.WebSearch.Enabled && tools.WebSearch.Providers.Count == 0)
+            {
+                tools.WebSearch.Providers = WebSearchToolSettings.DefaultProviders();
+            }
+
             tools.WebSearch.Providers = tools.WebSearch.Providers
                 .Where(provider => provider != null)
                 .Select(provider =>
@@ -225,6 +238,21 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     return server;
                 })
                 .ToList();
+        }
+
+        private static void ApplyToolWorkspaceDefaults(ToolsSettings tools)
+        {
+            if (String.IsNullOrWhiteSpace(tools.WorkingDirectory))
+            {
+                tools.WorkingDirectory = tools.AllowedRoots.Count > 0
+                    ? tools.AllowedRoots[0]
+                    : Directory.GetCurrentDirectory();
+            }
+
+            if (tools.AllowedRoots.Count == 0)
+            {
+                tools.AllowedRoots.Add(tools.WorkingDirectory);
+            }
         }
 
         private static string NormalizeValue(string? value, string fallback, params string[] allowed)
@@ -1053,6 +1081,11 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ChatCompletionsPath = runner.ChatCompletionsPath
             };
             ModelRunnerSettings.ApplyToolDefaults(runnerDefaults);
+            if (body.ToolsEnabled == true)
+            {
+                runnerDefaults.ToolsEnabled = true;
+            }
+
             if (!runnerDefaults.ToolsEnabled || !runnerDefaults.SupportsTools || String.IsNullOrWhiteSpace(runnerDefaults.ToolCallingApiFormat))
             {
                 if (body.ToolsEnabled == true) throw new ArgumentException("The selected runner is not configured for tool-capable requests.");
@@ -1084,7 +1117,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     : requested;
             }
 
-            NormalizeTools(tools);
+            NormalizeTools(tools, true);
             if (!streaming && String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Non-streaming tool approval is not implemented. Set approvalPolicy to 'auto' for safe tools, or disable tools for this request.");
 
