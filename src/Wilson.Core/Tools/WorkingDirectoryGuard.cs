@@ -38,14 +38,14 @@ namespace Wilson.Core.Tools
             if (!Directory.Exists(workingDirectory))
                 throw new ToolExecutionException("working_directory_not_found", "Configured tool working directory does not exist.");
 
-            if (!IsInsideAnyRoot(workingDirectory, roots))
+            if (!IsInsideAnyRoot(workingDirectory, roots) || !IsInsideAnyRoot(ResolvePhysicalPath(workingDirectory), PhysicalRoots(roots)))
                 throw new ToolExecutionException("working_directory_outside_allowed_roots", "Configured tool working directory is outside the allowed roots.");
 
             string resolved = Path.IsPathRooted(path)
                 ? Path.GetFullPath(path)
                 : Path.GetFullPath(Path.Combine(workingDirectory, path));
 
-            if (!IsInsideAnyRoot(resolved, roots))
+            if (!IsInsideAnyRoot(resolved, roots) || !IsInsideAnyRoot(ResolvePhysicalPath(resolved), PhysicalRoots(roots)))
                 throw new ToolExecutionException("path_outside_allowed_roots", "Resolved path is outside the allowed roots.");
 
             if (ShouldBlockSecretPaths(context) && IsSecretPath(resolved, roots))
@@ -64,7 +64,7 @@ namespace Wilson.Core.Tools
             List<string> roots = EffectiveAllowedRoots(context);
             if (!Directory.Exists(workingDirectory))
                 throw new ToolExecutionException("working_directory_not_found", "Configured tool working directory does not exist.");
-            if (!IsInsideAnyRoot(workingDirectory, roots))
+            if (!IsInsideAnyRoot(workingDirectory, roots) || !IsInsideAnyRoot(ResolvePhysicalPath(workingDirectory), PhysicalRoots(roots)))
                 throw new ToolExecutionException("working_directory_outside_allowed_roots", "Configured tool working directory is outside the allowed roots.");
         }
 
@@ -112,6 +112,56 @@ namespace Wilson.Core.Tools
             return String.Equals(fullPath, fullRoot, comparison)
                 || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison)
                 || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, comparison);
+        }
+
+        private static List<string> PhysicalRoots(List<string> roots)
+        {
+            return roots.Select(ResolvePhysicalPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static string ResolvePhysicalPath(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+            string? root = Path.GetPathRoot(fullPath);
+            if (String.IsNullOrWhiteSpace(root)) return fullPath;
+
+            string current = root;
+            string relative = fullPath.Substring(root.Length);
+            string[] segments = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string segment in segments)
+            {
+                current = Path.GetFullPath(Path.Combine(current, segment));
+                FileSystemInfo? info = ExistingInfo(current);
+                if (info == null) continue;
+
+                FileSystemInfo? target = ResolveLinkTarget(info);
+                if (target != null) current = Path.GetFullPath(target.FullName);
+            }
+
+            return Path.GetFullPath(current);
+        }
+
+        private static FileSystemInfo? ExistingInfo(string path)
+        {
+            if (Directory.Exists(path)) return new DirectoryInfo(path);
+            if (File.Exists(path)) return new FileInfo(path);
+            return null;
+        }
+
+        private static FileSystemInfo? ResolveLinkTarget(FileSystemInfo info)
+        {
+            try
+            {
+                return info.ResolveLinkTarget(true);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
         }
 
         private static bool IsSecretPath(string path, List<string> roots)

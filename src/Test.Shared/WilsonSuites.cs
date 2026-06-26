@@ -2,6 +2,7 @@ namespace Test.Shared
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Net;
@@ -39,6 +40,7 @@ namespace Test.Shared
             ToolSettingsDefaults();
             await ToolServiceFoundationAsync().ConfigureAwait(false);
             await ToolDiagnosticsApiAsync().ConfigureAwait(false);
+            await WorkingDirectoryGuardAsync().ConfigureAwait(false);
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
@@ -833,6 +835,52 @@ namespace Test.Shared
             }
         }
 
+        private static async Task WorkingDirectoryGuardAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-guard-" + Guid.NewGuid().ToString("N"));
+            string outside = Path.Combine(Path.GetTempPath(), "wilson-guard-outside-" + Guid.NewGuid().ToString("N"));
+            string linkPath = Path.Combine(workspace, "linked-outside");
+            Directory.CreateDirectory(workspace);
+            Directory.CreateDirectory(outside);
+            try
+            {
+                string nested = Path.Combine(workspace, "nested");
+                Directory.CreateDirectory(nested);
+                string insideFile = Path.Combine(nested, "inside.txt");
+                await File.WriteAllTextAsync(insideFile, "inside").ConfigureAwait(false);
+                string outsideFile = Path.Combine(outside, "outside.txt");
+                await File.WriteAllTextAsync(outsideFile, "outside").ConfigureAwait(false);
+                ToolExecutionContext context = GuardContext(workspace, true);
+
+                string relative = WorkingDirectoryGuard.ResolvePath(Path.Combine("nested", "inside.txt"), context);
+                if (!String.Equals(Path.GetFullPath(insideFile), relative, PathComparison())) throw new InvalidOperationException("Expected relative path inside root to resolve.");
+
+                string absolute = WorkingDirectoryGuard.ResolvePath(insideFile, context);
+                if (!String.Equals(Path.GetFullPath(insideFile), absolute, PathComparison())) throw new InvalidOperationException("Expected absolute path inside root to resolve.");
+
+                ExpectToolExecutionException("path_outside_allowed_roots", () => WorkingDirectoryGuard.ResolvePath(Path.Combine("..", Path.GetFileName(outside), "outside.txt"), context));
+                ExpectToolExecutionException("path_outside_allowed_roots", () => WorkingDirectoryGuard.ResolvePath(outsideFile, context));
+                ExpectToolExecutionException("missing_allowed_roots", () => WorkingDirectoryGuard.ResolvePath("nested", new ToolExecutionContext { Settings = new Settings { Tools = new ToolsSettings { WorkingDirectory = workspace } } }));
+                ExpectToolExecutionException("working_directory_outside_allowed_roots", () => WorkingDirectoryGuard.ResolvePath("nested", new ToolExecutionContext { Settings = new Settings { Tools = new ToolsSettings { WorkingDirectory = outside, AllowedRoots = new List<string> { workspace } } } }));
+
+                await File.WriteAllTextAsync(Path.Combine(workspace, ".env"), "SECRET=value").ConfigureAwait(false);
+                ExpectToolExecutionException("secret_path_blocked", () => WorkingDirectoryGuard.ResolvePath(".env", context));
+                string secretAllowed = WorkingDirectoryGuard.ResolvePath(".env", GuardContext(workspace, false));
+                if (!String.Equals(Path.GetFullPath(Path.Combine(workspace, ".env")), secretAllowed, PathComparison())) throw new InvalidOperationException("Expected secret path blocking to be configurable.");
+
+                bool linked = TryCreateDirectoryLink(linkPath, outside);
+                if (!linked) throw new InvalidOperationException("Expected test environment to support directory symlink creation for WorkingDirectoryGuard coverage.");
+                ExpectToolExecutionException("path_outside_allowed_roots", () => WorkingDirectoryGuard.ResolvePath(Path.Combine("linked-outside", "outside.txt"), context));
+                ExpectToolExecutionException("path_outside_allowed_roots", () => WorkingDirectoryGuard.ResolvePath(Path.Combine("linked-outside", "new.txt"), context));
+            }
+            finally
+            {
+                TryDeleteDirectoryLink(linkPath);
+                TryDeleteDirectory(workspace);
+                TryDeleteDirectory(outside);
+            }
+        }
+
         private static async Task FilesystemMutationToolsAsync()
         {
             string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-write-" + Guid.NewGuid().ToString("N"));
@@ -905,6 +953,114 @@ namespace Test.Shared
                 document.RootElement,
                 new ToolExecutionContext(),
                 CancellationToken.None).ConfigureAwait(false);
+        }
+
+        private static ToolExecutionContext GuardContext(string workspace, bool blockSecretPaths)
+        {
+            return new ToolExecutionContext
+            {
+                Settings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        BlockSecretPaths = blockSecretPaths
+                    }
+                }
+            };
+        }
+
+        private static StringComparison PathComparison()
+        {
+            return OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        }
+
+        private static void ExpectToolExecutionException(string code, Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (ToolExecutionException ex) when (String.Equals(ex.Code, code, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException("Expected ToolExecutionException with code " + code + ".");
+        }
+
+        private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+        {
+            try
+            {
+                FileSystemInfo link = Directory.CreateSymbolicLink(linkPath, targetPath);
+                link.Refresh();
+                return link.Exists;
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            catch (PlatformNotSupportedException)
+            {
+            }
+
+            if (!OperatingSystem.IsWindows()) return false;
+
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                startInfo.ArgumentList.Add("/c");
+                startInfo.ArgumentList.Add("mklink");
+                startInfo.ArgumentList.Add("/J");
+                startInfo.ArgumentList.Add(linkPath);
+                startInfo.ArgumentList.Add(targetPath);
+                using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start mklink.");
+                process.WaitForExit();
+                return process.ExitCode == 0 && Directory.Exists(linkPath);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static void TryDeleteDirectory(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        private static void TryDeleteDirectoryLink(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
 
         private static JsonSerializerOptions TestJson()

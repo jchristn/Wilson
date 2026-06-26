@@ -1189,11 +1189,12 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - secret-like fields are redacted recursively.
   - public/model-visible redaction preserves safe continuation tokens.
   - Progress, 2026-06-26: `ToolAuditRedactionPersistenceAsync` covers persisted argument suppression/redaction, summary-only output persistence, recursive secret-field redaction, and request-history-linked redacted reads. Model-visible continuation-token tests remain pending until web/search tools add continuation-token payloads.
-- [ ] Test `WorkingDirectoryGuard`.
+- [x] Test `WorkingDirectoryGuard`.
   - relative paths inside root pass.
   - absolute paths inside root pass.
   - path traversal outside root fails.
   - symlink/junction behavior is defined and tested.
+  - Progress, 2026-06-26: hardened `WorkingDirectoryGuard` to validate both lexical and physical paths by resolving existing symlink/junction segments. Added automated tests for relative and absolute inside-root paths, traversal rejection, absolute outside-root rejection, missing configuration, working-directory/root mismatch, secret-path blocking and opt-out, and linked-directory escape rejection for both existing and new target paths.
 - [x] Test `read_file`.
   - line numbers.
   - offset/limit.
@@ -1356,7 +1357,8 @@ Each superset tool must have:
 - [~] File/process tools cannot run unless `Settings.Tools.Enabled` is true and `WorkingDirectory` plus `AllowedRoots` are configured.
   - Progress: tightening chat request resolution so global `Settings.Tools.Enabled = false` is a hard server-side disable even when a request explicitly sends `toolsEnabled: true`.
   - Progress: server chat resolution now rejects explicit tool requests while global tools are disabled; dashboard chat sends `toolsEnabled: false` when the user toggle is off. Validated with solution build and automated tests.
-- [ ] All filesystem paths must resolve inside allowed roots.
+- [x] All filesystem paths must resolve inside allowed roots.
+  - Progress: `WorkingDirectoryGuard` checks normalized paths and resolved physical paths, including symlink/junction segments, against allowed roots before returning a path to file/process tools.
 - [ ] Process execution must be disabled independently by default or marked approval-required by default.
 - [ ] Destructive tools must require approval unless an admin explicitly disables `DestructiveToolsRequireApproval`.
 - [~] Secrets must be redacted before API responses, request history, logs, and dashboard display.
