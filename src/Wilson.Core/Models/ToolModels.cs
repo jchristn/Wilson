@@ -229,6 +229,8 @@ namespace Wilson.Core.Models
         public DateTime? CompletedUtc { get; set; } = null;
         /// <summary>Elapsed milliseconds.</summary>
         public double ElapsedMs { get; set; } = 0;
+        /// <summary>Active flag used by retention and soft-delete flows.</summary>
+        public bool Active { get; set; } = true;
         /// <summary>UTC creation timestamp.</summary>
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
         /// <summary>UTC update timestamp.</summary>
@@ -266,6 +268,8 @@ namespace Wilson.Core.Models
         public int ToolCallCount { get; set; } = 0;
         /// <summary>Errors encountered.</summary>
         public int ErrorCount { get; set; } = 0;
+        /// <summary>UTC creation timestamp.</summary>
+        public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     }
 
     /// <summary>

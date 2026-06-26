@@ -1,6 +1,6 @@
 # Wilson JavaScript SDK
 
-Small browser/Node client for Wilson authentication, model-server listing, and model-server health.
+Small browser/Node client for Wilson authentication, model-server listing, model-server health, and tool metadata/history reads.
 
 ```js
 import { WilsonClient } from './index.js';
@@ -11,6 +11,11 @@ await client.login('wilsonadmin');
 const runners = await client.modelRunners({ pageNumber: 1, pageSize: 100 });
 const health = await client.modelRunnerHealth();
 const local = await client.modelRunnerHealthById('local-ollama');
+const tools = await client.tools();
+const readFile = await client.tool('read_file');
+const conversationTools = await client.conversationToolCalls('conversation-id', { pageNumber: 1, pageSize: 100 });
 ```
 
 Health responses match the Wilson API contract: `endpointId`, `endpointName`, `isHealthy`, `lastCheckUtc`, `uptimePercentage`, `consecutiveSuccesses`, `consecutiveFailures`, `lastError`, and `history`.
+
+Tool-call history methods return redacted Wilson records. Normal chat traces and history reads do not expose raw model arguments, raw tool output, or provider request IDs.

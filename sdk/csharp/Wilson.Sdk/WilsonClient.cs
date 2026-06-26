@@ -60,6 +60,78 @@ namespace Wilson.Sdk
             return SendAsync<EndpointHealthStatus>(HttpMethod.Get, "/v1.0/api/model-runners/" + Uri.EscapeDataString(runnerId) + "/health", null, token);
         }
 
+        /// <summary>
+        /// Get the effective Wilson tool catalog.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool descriptors.</returns>
+        public Task<List<ToolDescriptor>> GetToolsAsync(CancellationToken token = default)
+        {
+            return SendAsync<List<ToolDescriptor>>(HttpMethod.Get, "/v1.0/api/tools", null, token);
+        }
+
+        /// <summary>
+        /// Get one effective Wilson tool descriptor.
+        /// </summary>
+        /// <param name="name">Tool name.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool descriptor.</returns>
+        public Task<ToolDescriptor> GetToolAsync(string name, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(name)) throw new ArgumentException("Tool name is required.", nameof(name));
+            return SendAsync<ToolDescriptor>(HttpMethod.Get, "/v1.0/api/tools/" + Uri.EscapeDataString(name), null, token);
+        }
+
+        /// <summary>
+        /// Get one persisted tool run with its redacted tool-call records.
+        /// </summary>
+        /// <param name="runId">Tool run identifier.</param>
+        /// <param name="tenantId">Optional tenant scope for global administrators.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool run detail response.</returns>
+        public Task<ToolRunResponse> GetToolRunAsync(string runId, string? tenantId = null, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(runId)) throw new ArgumentException("Tool run ID is required.", nameof(runId));
+            string path = "/v1.0/api/tool-runs/" + Uri.EscapeDataString(runId);
+            if (!String.IsNullOrWhiteSpace(tenantId)) path += "?tenantId=" + Uri.EscapeDataString(tenantId);
+            return SendAsync<ToolRunResponse>(HttpMethod.Get, path, null, token);
+        }
+
+        /// <summary>
+        /// Get redacted tool-call records for a conversation.
+        /// </summary>
+        /// <param name="conversationId">Conversation identifier.</param>
+        /// <param name="pageNumber">Page number.</param>
+        /// <param name="pageSize">Page size.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Paginated tool-call records.</returns>
+        public Task<EnumerationResult<ToolExecutionRecord>> GetConversationToolCallsAsync(string conversationId, int pageNumber = 1, int pageSize = 100, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(conversationId)) throw new ArgumentException("Conversation ID is required.", nameof(conversationId));
+            return SendAsync<EnumerationResult<ToolExecutionRecord>>(
+                HttpMethod.Get,
+                "/v1.0/api/conversations/" + Uri.EscapeDataString(conversationId) + "/tool-calls?pageNumber=" + pageNumber + "&pageSize=" + pageSize,
+                null,
+                token);
+        }
+
+        /// <summary>
+        /// Get redacted tool-call records linked to one request-history entry.
+        /// </summary>
+        /// <param name="requestHistoryId">Request-history entry identifier.</param>
+        /// <param name="tenantId">Optional tenant scope for global administrators.</param>
+        /// <param name="pageNumber">Page number.</param>
+        /// <param name="pageSize">Page size.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Paginated tool-call records.</returns>
+        public Task<EnumerationResult<ToolExecutionRecord>> GetRequestHistoryToolCallsAsync(string requestHistoryId, string? tenantId = null, int pageNumber = 1, int pageSize = 100, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(requestHistoryId)) throw new ArgumentException("Request history ID is required.", nameof(requestHistoryId));
+            string path = "/v1.0/api/request-history/" + Uri.EscapeDataString(requestHistoryId) + "/tool-calls?pageNumber=" + pageNumber + "&pageSize=" + pageSize;
+            if (!String.IsNullOrWhiteSpace(tenantId)) path += "&tenantId=" + Uri.EscapeDataString(tenantId);
+            return SendAsync<EnumerationResult<ToolExecutionRecord>>(HttpMethod.Get, path, null, token);
+        }
+
         public void Dispose()
         {
             if (_DisposeClient) _HttpClient.Dispose();

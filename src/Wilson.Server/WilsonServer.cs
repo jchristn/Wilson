@@ -317,6 +317,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 stopwatch.Stop();
                 if (Settings.RequestHistory.Enabled && !path.Equals("/v1.0/api/request-history", StringComparison.OrdinalIgnoreCase))
                 {
+                    RequestCapture? capture = _RequestCapture.Value;
                     RequestHistoryEntry entry = new RequestHistoryEntry
                     {
                         TenantId = requestContext?.TenantId,
@@ -328,15 +329,26 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         RequestHeaders = RequestHeaders(ctx),
                         RequestBody = ctx.Request.DataAsString ?? String.Empty,
                         ResponseHeaders = ResponseHeaders(ctx),
-                        ResponseBody = _RequestCapture.Value?.ResponseBody ?? String.Empty,
-                        TimeToFirstTokenMs = _RequestCapture.Value?.TimeToFirstTokenMs ?? 0,
-                        StreamingTimeMs = _RequestCapture.Value?.StreamingTimeMs ?? 0,
-                        TotalTimeMs = _RequestCapture.Value?.TotalTimeMs ?? 0,
-                        TokensUsed = _RequestCapture.Value?.TokensUsed ?? 0
+                        ResponseBody = capture?.ResponseBody ?? String.Empty,
+                        TimeToFirstTokenMs = capture?.TimeToFirstTokenMs ?? 0,
+                        StreamingTimeMs = capture?.StreamingTimeMs ?? 0,
+                        TotalTimeMs = capture?.TotalTimeMs ?? 0,
+                        TokensUsed = capture?.TokensUsed ?? 0,
+                        ToolRunId = capture?.ToolRunId ?? String.Empty,
+                        ToolCallCount = capture?.ToolCallCount ?? 0,
+                        ToolElapsedMs = capture?.ToolElapsedMs ?? 0,
+                        AgentIterations = capture?.AgentIterations ?? 0
                     };
                     _ = Task.Run(async () =>
                     {
-                        try { await Database.CreateRequestHistoryAsync(entry).ConfigureAwait(false); }
+                        try
+                        {
+                            await Database.CreateRequestHistoryAsync(entry).ConfigureAwait(false);
+                            if (!String.IsNullOrWhiteSpace(entry.TenantId) && !String.IsNullOrWhiteSpace(entry.ToolRunId))
+                            {
+                                await Database.AttachToolCallsToRequestHistoryByRunIdAsync(entry.TenantId, entry.ToolRunId, entry.Id).ConfigureAwait(false);
+                            }
+                        }
                         catch { }
                     });
                 }
@@ -457,6 +469,21 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            if (path.StartsWith("/v1.0/api/tool-runs/", StringComparison.OrdinalIgnoreCase) && method == "GET")
+            {
+                string id = Segment(path, 3);
+                string tenantId = requestContext!.IsAdmin ? Query(ctx, "tenantId") ?? requestContext.TenantId ?? String.Empty : requestContext.TenantId!;
+                if (String.IsNullOrWhiteSpace(tenantId)) throw new ArgumentException("tenantId is required for global administrators when reading a tool run.");
+                ToolRun? run = await Database.GetToolRunAsync(tenantId, id, ctx.Token).ConfigureAwait(false);
+                if (run == null) throw new KeyNotFoundException("Tool run not found.");
+                Conversation? conversation = await Database.GetConversationAsync(tenantId, run.ConversationId, ctx.Token).ConfigureAwait(false);
+                if (conversation == null) throw new KeyNotFoundException("Conversation not found.");
+                EnsureConversationAccess(requestContext, conversation);
+                List<ToolExecutionRecord> calls = await Database.GetToolCallsForConversationAsync(tenantId, run.ConversationId, ctx.Token).ConfigureAwait(false);
+                await SendJsonAsync(ctx, new ToolRunResponse { ToolRun = run, ToolCalls = calls.Where(call => String.Equals(call.RunId, run.RunId, StringComparison.OrdinalIgnoreCase)).ToList() }).ConfigureAwait(false);
+                return;
+            }
+
             if (path == "/v1.0/api/tenants")
             {
                 RequireAdmin(requestContext);
@@ -532,6 +559,16 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            if (path.StartsWith("/v1.0/api/conversations/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/tool-calls", StringComparison.OrdinalIgnoreCase) && method == "GET")
+            {
+                string id = Segment(path, 3);
+                Conversation? existing = await Database.GetConversationAsync(requestContext!.TenantId!, id, ctx.Token).ConfigureAwait(false);
+                if (existing == null) throw new KeyNotFoundException("Conversation not found.");
+                EnsureConversationAccess(requestContext, existing);
+                await SendJsonAsync(ctx, Enumerate(await Database.GetToolCallsForConversationAsync(requestContext.TenantId!, id, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
+                return;
+            }
+
             if (path.StartsWith("/v1.0/api/conversations/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) && method == "GET")
             {
                 string id = Segment(path, 3);
@@ -539,15 +576,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
-            if (path.StartsWith("/v1.0/api/conversations/", StringComparison.OrdinalIgnoreCase) && !path.EndsWith("/messages", StringComparison.OrdinalIgnoreCase))
+            if (path.StartsWith("/v1.0/api/conversations/", StringComparison.OrdinalIgnoreCase) && !path.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) && !path.EndsWith("/tool-calls", StringComparison.OrdinalIgnoreCase))
             {
                 string id = Segment(path, 3);
                 Conversation? existing = await Database.GetConversationAsync(requestContext!.TenantId!, id, ctx.Token).ConfigureAwait(false);
                 if (existing == null) throw new KeyNotFoundException("Conversation not found.");
-                if (!requestContext.IsAdmin && !requestContext.IsTenantAdmin && !String.Equals(existing.UserId, requestContext.UserId, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new UnauthorizedAccessException("Conversation access denied.");
-                }
+                EnsureConversationAccess(requestContext, existing);
 
                 if (method == "PUT")
                 {
@@ -615,6 +649,15 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 Int32.TryParse(Query(ctx, "bucketMinutes"), out int bucketMinutes);
                 if (bucketMinutes < 1) bucketMinutes = 60;
                 await SendJsonAsync(ctx, await Database.SummarizeRequestHistoryAsync(requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId, from, to, bucketMinutes, ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                return;
+            }
+
+            if (path.StartsWith("/v1.0/api/request-history/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/tool-calls", StringComparison.OrdinalIgnoreCase) && method == "GET")
+            {
+                RequireTenantAdmin(requestContext);
+                string id = Segment(path, 3);
+                string? tenantId = requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId;
+                await SendJsonAsync(ctx, Enumerate(await Database.GetToolCallsForRequestHistoryAsync(tenantId, id, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
                 return;
             }
 
@@ -769,25 +812,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             string answer = agentResponse.Content ?? String.Empty;
             int outputTokens = InferenceService.EstimateTokens(answer);
             int inputTokens = modelMessages.Sum(message => InferenceService.EstimateTokens(message.Content ?? String.Empty));
-            ChatMessage assistantMessage = new ChatMessage
-            {
-                TenantId = requestContext.TenantId!,
-                ConversationId = conversation.Id,
-                Role = "assistant",
-                Content = answer,
-                RunnerId = body.RunnerId,
-                Model = body.Model,
-                TokenEstimate = outputTokens,
-                TimeToFirstTokenMs = total.Elapsed.TotalMilliseconds,
-                StreamingTimeMs = 0,
-                TotalTimeMs = total.Elapsed.TotalMilliseconds,
-                TokensUsed = inputTokens + outputTokens
-            };
-
-            await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
-            conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
-            SetRequestCapture(assistantMessage, answer);
-
             ToolRun toolRun = new ToolRun
             {
                 RunId = executionContext.RunId,
@@ -802,9 +826,9 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ElapsedMs = total.Elapsed.TotalMilliseconds,
                 IterationCount = agentResponse.IterationCount,
                 ToolCallCount = agentResponse.ToolCallCount,
-                ErrorCount = agentResponse.ErrorCount
+                ErrorCount = agentResponse.ErrorCount,
+                CreatedUtc = DateTime.UtcNow.AddMilliseconds(-total.Elapsed.TotalMilliseconds)
             };
-
             ChatToolMetrics metrics = new ChatToolMetrics
             {
                 ToolsEnabled = true,
@@ -813,6 +837,35 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 IterationCount = agentResponse.IterationCount,
                 TotalToolElapsedMs = agentResponse.ToolCalls.Sum(trace => trace.ElapsedMs)
             };
+            ChatMessage assistantMessage = new ChatMessage
+            {
+                TenantId = requestContext.TenantId!,
+                ConversationId = conversation.Id,
+                Role = "assistant",
+                Content = answer,
+                RunnerId = body.RunnerId,
+                Model = body.Model,
+                TokenEstimate = outputTokens,
+                TimeToFirstTokenMs = total.Elapsed.TotalMilliseconds,
+                StreamingTimeMs = 0,
+                TotalTimeMs = total.Elapsed.TotalMilliseconds,
+                TokensUsed = inputTokens + outputTokens,
+                RunId = toolRun.RunId
+            };
+            List<ToolExecutionRecord> toolRecords = BuildToolExecutionRecords(toolRun, agentResponse.ToolCalls, body.ApprovalPolicy ?? toolPlan.Settings.Tools.DefaultApprovalPolicy, assistantMessage, runner);
+            List<ToolTrace> safeToolCalls = BuildSafeToolTraces(agentResponse.ToolCalls, toolRecords);
+            assistantMessage.ToolCallsJson = JsonSerializer.Serialize(safeToolCalls, _Json);
+            assistantMessage.MetadataJson = JsonSerializer.Serialize(metrics, _Json);
+
+            await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
+            await Database.CreateToolRunAsync(toolRun, ctx.Token).ConfigureAwait(false);
+            foreach (ToolExecutionRecord record in toolRecords)
+            {
+                await Database.CreateToolCallAsync(record, ctx.Token).ConfigureAwait(false);
+            }
+
+            conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
+            SetRequestCapture(assistantMessage, answer, toolRun, metrics);
 
             await SendJsonAsync(ctx, new ChatResponse
             {
@@ -821,7 +874,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 AssistantMessage = assistantMessage,
                 Truncation = truncation,
                 ToolRun = toolRun,
-                ToolCalls = agentResponse.ToolCalls,
+                ToolCalls = safeToolCalls,
                 ToolMetrics = metrics
             }).ConfigureAwait(false);
         }
@@ -1028,6 +1081,14 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (!requestContext!.IsAdmin && !requestContext.IsTenantAdmin) throw new UnauthorizedAccessException("Tenant administrator access required.");
         }
 
+        private static void EnsureConversationAccess(RequestContext requestContext, Conversation conversation)
+        {
+            if (!requestContext.IsAdmin && !requestContext.IsTenantAdmin && !String.Equals(conversation.UserId, requestContext.UserId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException("Conversation access denied.");
+            }
+        }
+
         private T Body<T>(HttpContextBase ctx)
         {
             string body = ctx.Request.DataAsString;
@@ -1043,7 +1104,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await ctx.Response.Send(JsonSerializer.Serialize(value, _Json), ctx.Token).ConfigureAwait(false);
         }
 
-        private void SetRequestCapture(ChatMessage message, string responseBody)
+        private void SetRequestCapture(ChatMessage message, string responseBody, ToolRun? toolRun = null, ChatToolMetrics? metrics = null)
         {
             RequestCapture? capture = _RequestCapture.Value;
             if (capture == null) return;
@@ -1052,6 +1113,132 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             capture.TotalTimeMs = message.TotalTimeMs;
             capture.TokensUsed = message.TokensUsed;
             capture.ResponseBody = responseBody;
+            capture.ToolRunId = toolRun?.RunId ?? String.Empty;
+            capture.ToolCallCount = metrics?.ToolCallCount ?? 0;
+            capture.ToolElapsedMs = metrics?.TotalToolElapsedMs ?? 0;
+            capture.AgentIterations = metrics?.IterationCount ?? 0;
+        }
+
+        private static List<ToolExecutionRecord> BuildToolExecutionRecords(ToolRun run, List<ToolTrace> traces, string approvalPolicy, ChatMessage assistantMessage, ModelRunnerSettings runner)
+        {
+            List<ToolExecutionRecord> records = new List<ToolExecutionRecord>();
+            foreach (ToolTrace trace in traces)
+            {
+                string internalToolCallId = IdGenerator.ToolCall();
+                string summary = SafeToolSummary(trace);
+                string summaryJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+                {
+                    { "toolName", trace.ToolName },
+                    { "displayLabel", trace.DisplayLabel },
+                    { "success", trace.Success },
+                    { "denied", trace.Denied },
+                    { "truncated", trace.Truncated },
+                    { "outputCharacters", trace.OutputCharacters },
+                    { "resultCount", trace.ResultCount },
+                    { "elapsedMs", trace.ElapsedMs },
+                    { "summary", summary }
+                });
+
+                records.Add(new ToolExecutionRecord
+                {
+                    TenantId = run.TenantId,
+                    UserId = run.UserId,
+                    ConversationId = run.ConversationId,
+                    RunId = run.RunId,
+                    TraceId = run.RunId + ":" + trace.SequenceNumber.ToString(),
+                    Origin = "chat",
+                    AssistantMessageId = assistantMessage.Id,
+                    ToolCallId = internalToolCallId,
+                    ToolName = trace.ToolName,
+                    Iteration = trace.Iteration,
+                    SequenceNumber = trace.SequenceNumber,
+                    Status = trace.Success ? ToolStatuses.Completed : trace.Denied ? ToolStatuses.Denied : ToolStatuses.Failed,
+                    ApprovalPolicy = String.IsNullOrWhiteSpace(approvalPolicy) ? ToolApprovalPolicies.Ask : approvalPolicy,
+                    ArgumentsJson = "{}",
+                    ResultJson = summaryJson,
+                    ResultSummaryJson = summaryJson,
+                    ResultPreview = Cap(summary, 4000),
+                    Success = trace.Success,
+                    Denied = trace.Denied,
+                    Truncated = trace.Truncated,
+                    OutputCharacters = trace.OutputCharacters,
+                    OutputBytes = trace.OutputCharacters,
+                    ErrorType = trace.Success ? null : "tool_execution",
+                    ErrorCode = trace.Success ? null : "tool_failed",
+                    ErrorMessage = trace.Success ? null : Cap(summary, 1000),
+                    Model = run.Model,
+                    StartedUtc = trace.StartedUtc ?? run.StartedUtc,
+                    CompletedUtc = trace.CompletedUtc,
+                    ElapsedMs = trace.ElapsedMs,
+                    Active = true,
+                    CreatedUtc = trace.StartedUtc ?? run.CreatedUtc,
+                    UpdatedUtc = trace.CompletedUtc ?? DateTime.UtcNow
+                });
+            }
+
+            return records;
+        }
+
+        private static List<ToolTrace> BuildSafeToolTraces(List<ToolTrace> traces, List<ToolExecutionRecord> records)
+        {
+            List<ToolTrace> safe = new List<ToolTrace>();
+            for (int i = 0; i < traces.Count; i++)
+            {
+                ToolTrace trace = traces[i];
+                ToolExecutionRecord? record = i < records.Count ? records[i] : null;
+                safe.Add(new ToolTrace
+                {
+                    ToolCallId = record?.ToolCallId ?? IdGenerator.ToolCall(),
+                    ToolName = trace.ToolName,
+                    DisplayLabel = trace.DisplayLabel,
+                    Iteration = trace.Iteration,
+                    SequenceNumber = trace.SequenceNumber,
+                    Success = trace.Success,
+                    Denied = trace.Denied,
+                    Truncated = trace.Truncated,
+                    OutputCharacters = trace.OutputCharacters,
+                    ResultCount = trace.ResultCount,
+                    ElapsedMs = trace.ElapsedMs,
+                    Summary = SafeToolSummary(trace),
+                    StartedUtc = trace.StartedUtc,
+                    CompletedUtc = trace.CompletedUtc
+                });
+            }
+
+            return safe;
+        }
+
+        private static string SafeToolSummary(ToolTrace trace)
+        {
+            string summary = String.IsNullOrWhiteSpace(trace.Summary) ? (trace.Success ? "Completed." : "Tool call failed.") : trace.Summary!;
+            return Cap(RedactSensitiveText(summary), 4000);
+        }
+
+        private static string RedactSensitiveText(string value)
+        {
+            if (String.IsNullOrEmpty(value)) return String.Empty;
+            string output = value;
+            string[] markers = new[] { "apikey", "api_key", "password", "secret", "token", "credential", "bearer", "accesskey", "access_key", "connectionstring", "connection_string" };
+            foreach (string marker in markers)
+            {
+                int index = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                while (index >= 0)
+                {
+                    int end = output.IndexOfAny(new[] { ' ', '\r', '\n', '\t', ',', ';', '"' }, index + marker.Length);
+                    if (end < 0) end = Math.Min(output.Length, index + marker.Length + 80);
+                    output = output.Substring(0, index) + marker + "=[redacted]" + output.Substring(end);
+                    int nextStart = Math.Min(output.Length, index + marker.Length + 11);
+                    index = nextStart >= output.Length ? -1 : output.IndexOf(marker, nextStart, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            return output;
+        }
+
+        private static string Cap(string value, int maxCharacters)
+        {
+            if (String.IsNullOrEmpty(value) || value.Length <= maxCharacters) return value ?? String.Empty;
+            return value.Substring(0, maxCharacters) + "... [truncated]";
         }
 
         private string RequestHeaders(HttpContextBase ctx)
@@ -1227,6 +1414,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
                     { "/v1.0/api/tools", Path(Operation("get", "listTools", "Tools", "List effective tools", "Lists effective tool descriptors for the authenticated principal, including unavailable diagnostics when tools or prerequisites are disabled.", "ToolDescriptorArray", true)) },
                     { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
+                    { "/v1.0/api/tool-runs/{id}", Path(Operation("get", "getToolRun", "Tools", "Get tool run", "Returns one persisted tool run and its redacted tool-call records.", "ToolRunResponse", true, parameters: Parameters(PathParameter("id", "Tool run identifier."), TenantScopeParameter()))) },
                     { "/v1.0/api/tenants", Path(
                         Operation("get", "listTenants", "Administration", "List tenants", "Lists tenant records. Requires a global administrator bearer token.", "TenantEnumeration", true, parameters: WithPagination()),
                         Operation("post", "createTenant", "Administration", "Create tenant", "Creates a tenant record. Requires a global administrator bearer token.", "Tenant", true, requestSchema: "Tenant", successStatus: "201", successDescription: "Tenant created.")) },
@@ -1255,6 +1443,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Operation("put", "updateConversation", "Chat", "Update conversation", "Updates conversation metadata.", "Conversation", true, parameters: Parameters(PathParameter("id", "Conversation identifier.")), requestSchema: "Conversation"),
                         Operation("delete", "deleteConversation", "Chat", "Delete conversation", "Deletes a conversation and its associated messages and feedback.", null, true, parameters: Parameters(PathParameter("id", "Conversation identifier.")), successStatus: "204", successDescription: "Conversation deleted.")) },
                     { "/v1.0/api/conversations/{id}/messages", Path(Operation("get", "listConversationMessages", "Chat", "List conversation messages", "Lists messages for a conversation visible to the authenticated principal.", "ChatMessageEnumeration", true, parameters: WithPagination(PathParameter("id", "Conversation identifier.")))) },
+                    { "/v1.0/api/conversations/{id}/tool-calls", Path(Operation("get", "listConversationToolCalls", "Chat", "List conversation tool calls", "Lists persisted redacted tool-call records for a conversation visible to the authenticated principal.", "ToolExecutionRecordEnumeration", true, parameters: WithPagination(PathParameter("id", "Conversation identifier.")))) },
                     { "/v1.0/api/chat", Path(Operation("post", "createChatCompletion", "Chat", "Non-streaming chat", "Sends a prompt to a chat-capable model and stores the user and assistant messages.", "ChatResponse", true, requestSchema: "ChatRequest")) },
                     { "/v1.0/api/chat/stream", Path(Operation("post", "streamChatCompletion", "Chat", "Streaming chat over SSE", "Streams model output as server-sent events and stores the completed assistant message.", "SseEventStream", true, requestSchema: "ChatRequest", responseContentType: "text/event-stream")) },
                     { "/v1.0/api/feedback", Path(
@@ -1266,7 +1455,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         QueryParameter("fromUtc", "Inclusive UTC start timestamp. Defaults to 24 hours ago.", StringSchema("date-time")),
                         QueryParameter("toUtc", "Inclusive UTC end timestamp. Defaults to now.", StringSchema("date-time")),
                         QueryParameter("bucketMinutes", "Bucket size in minutes. Defaults to 60.", IntegerSchema())))) },
-                    { "/v1.0/api/request-history/{id}", Path(Operation("delete", "deleteRequestHistoryEntry", "Request History", "Delete request history entry", "Deletes one captured request history entry. Requires tenant administrator or global administrator access.", null, true, parameters: Parameters(PathParameter("id", "Request history entry identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "Request history entry deleted.")) }
+                    { "/v1.0/api/request-history/{id}", Path(Operation("delete", "deleteRequestHistoryEntry", "Request History", "Delete request history entry", "Deletes one captured request history entry. Requires tenant administrator or global administrator access.", null, true, parameters: Parameters(PathParameter("id", "Request history entry identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "Request history entry deleted.")) },
+                    { "/v1.0/api/request-history/{id}/tool-calls", Path(Operation("get", "listRequestHistoryToolCalls", "Request History", "List request-history tool calls", "Lists persisted redacted tool-call records linked to one captured request-history entry. Requires tenant administrator or global administrator access.", "ToolExecutionRecordEnumeration", true, parameters: WithPagination(PathParameter("id", "Request history entry identifier."), TenantScopeParameter()))) }
                 },
                 components = new
                 {
@@ -1508,6 +1698,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ToolCapableInferenceRequest));
             AddComponentSchema(schemas, typeof(ToolCapableInferenceResponse));
             AddComponentSchema(schemas, typeof(ModelChatMessage));
+            AddComponentSchema(schemas, typeof(ToolRunResponse));
 
             schemas["EndpointHealthStatusArray"] = ArraySchema(SchemaRef("EndpointHealthStatus"));
             schemas["ToolDescriptorArray"] = ArraySchema(SchemaRef("ToolDescriptor"));
@@ -1519,6 +1710,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             schemas["ChatMessageEnumeration"] = EnumerationSchema("ChatMessage");
             schemas["FeedbackEnumeration"] = EnumerationSchema("Feedback");
             schemas["RequestHistoryEntryEnumeration"] = EnumerationSchema("RequestHistoryEntry");
+            schemas["ToolExecutionRecordEnumeration"] = EnumerationSchema("ToolExecutionRecord");
 
             return schemas;
         }
@@ -1663,6 +1855,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public double StreamingTimeMs { get; set; }
         public double TotalTimeMs { get; set; }
         public int TokensUsed { get; set; }
+        public string ToolRunId { get; set; } = String.Empty;
+        public int ToolCallCount { get; set; }
+        public double ToolElapsedMs { get; set; }
+        public int AgentIterations { get; set; }
     }
 
     internal sealed class ChatToolPlan
@@ -1738,6 +1934,17 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public int IterationCount { get; set; } = 0;
         /// <summary>Total elapsed milliseconds spent in tools.</summary>
         public double TotalToolElapsedMs { get; set; } = 0;
+    }
+
+    /// <summary>
+    /// Tool run detail response.
+    /// </summary>
+    public sealed class ToolRunResponse
+    {
+        /// <summary>Tool run metadata.</summary>
+        public ToolRun? ToolRun { get; set; } = null;
+        /// <summary>Tool-call audit records associated with the run.</summary>
+        public List<ToolExecutionRecord> ToolCalls { get; set; } = new List<ToolExecutionRecord>();
     }
 
     /// <summary>

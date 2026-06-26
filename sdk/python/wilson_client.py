@@ -61,3 +61,18 @@ class WilsonClient:
 
     def model_runner_health_by_id(self, runner_id: str) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/model-runners/{quote(runner_id, safe='')}/health")
+
+    def tools(self) -> list[dict[str, Any]]:
+        return self.request("GET", "/v1.0/api/tools")
+
+    def tool(self, name: str) -> dict[str, Any]:
+        return self.request("GET", f"/v1.0/api/tools/{quote(name, safe='')}")
+
+    def tool_run(self, run_id: str, **params: Any) -> dict[str, Any]:
+        return self.request("GET", f"/v1.0/api/tool-runs/{quote(run_id, safe='')}", query=params)
+
+    def conversation_tool_calls(self, conversation_id: str, **params: Any) -> dict[str, Any]:
+        return self.request("GET", f"/v1.0/api/conversations/{quote(conversation_id, safe='')}/tool-calls", query=params)
+
+    def request_history_tool_calls(self, request_history_id: str, **params: Any) -> dict[str, Any]:
+        return self.request("GET", f"/v1.0/api/request-history/{quote(request_history_id, safe='')}/tool-calls", query=params)

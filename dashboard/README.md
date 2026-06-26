@@ -22,6 +22,12 @@ The Model Servers view shows:
 - Health detail modal with uptime, consecutive success/failure counts, last error, timestamps, history, and probe configuration
 - Health-check settings in both the Model Server editor and Settings page
 
+## Tool Activity
+
+When Wilson tools are enabled by the server and by the selected model runner, Chat shows a compact tool toggle and approval-policy selector. Non-streaming tool responses render a low-profile "Tool activity" disclosure under assistant messages. Reopened conversations reload persisted tool calls, and request-history details show linked tool activity for administrators.
+
+The Settings page exposes the global tool switch, built-in tool policy, working directory, allowed roots, limits, and per-runner tool capability flags. Tools remain disabled until the server settings and runner capability checks allow them.
+
 ## Checks
 
 ```powershell

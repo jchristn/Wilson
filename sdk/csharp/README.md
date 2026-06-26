@@ -1,16 +1,23 @@
 # Wilson C# SDK
 
-Typed .NET client for Wilson authentication, model-server listing, and model-server health.
+Typed .NET client for Wilson authentication, model-server listing, model-server health, and tool metadata/history reads.
 
 ```csharp
+using System.Collections.Generic;
 using Wilson.Sdk;
+using Wilson.Sdk.Models;
 
 using WilsonClient client = new WilsonClient("http://127.0.0.1:9400");
 await client.LoginAsync("wilsonadmin");
 
-var runners = await client.GetModelRunnersAsync(pageSize: 100);
-var health = await client.GetModelRunnerHealthAsync();
-var local = await client.GetModelRunnerHealthAsync("local-ollama");
+EnumerationResult<ModelRunnerStatus> runners = await client.GetModelRunnersAsync(pageSize: 100);
+List<EndpointHealthStatus> health = await client.GetModelRunnerHealthAsync();
+EndpointHealthStatus local = await client.GetModelRunnerHealthAsync("local-ollama");
+List<ToolDescriptor> tools = await client.GetToolsAsync();
+ToolDescriptor readFile = await client.GetToolAsync("read_file");
+EnumerationResult<ToolExecutionRecord> conversationTools = await client.GetConversationToolCallsAsync("conversation-id");
 ```
 
 Health responses are exposed as `EndpointHealthStatus` with `EndpointId`, `EndpointName`, `IsHealthy`, `LastCheckUtc`, `UptimePercentage`, `ConsecutiveSuccesses`, `ConsecutiveFailures`, `LastError`, and `History`.
+
+Tool-call history methods return redacted Wilson records. Normal chat traces and history reads do not expose raw model arguments, raw tool output, or provider request IDs.

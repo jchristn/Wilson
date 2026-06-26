@@ -2,14 +2,19 @@
   "info": {
     "name": "Wilson",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Wilson API collection with model server health checks."
+    "description": "Wilson API collection with model server health checks and tool metadata/history endpoints."
   },
   "variable": [
     { "key": "baseUrl", "value": "http://127.0.0.1:9400" },
     { "key": "accessKey", "value": "wilsonadmin" },
     { "key": "token", "value": "wilsonadmin" },
     { "key": "runnerId", "value": "local-ollama" },
-    { "key": "modelName", "value": "llama3.2" }
+    { "key": "modelName", "value": "llama3.2" },
+    { "key": "toolName", "value": "read_file" },
+    { "key": "toolRunId", "value": "toolrun_000000000000000000000000" },
+    { "key": "conversationId", "value": "conv_000000000000000000000000" },
+    { "key": "requestHistoryId", "value": "req_000000000000000000000000" },
+    { "key": "tenantId", "value": "" }
   ],
   "auth": {
     "type": "bearer",
@@ -125,6 +130,78 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"{{modelName}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tools",
+      "item": [
+        {
+          "name": "List Tools",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/tools",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "tools" ]
+            }
+          }
+        },
+        {
+          "name": "Get Tool",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/tools/{{toolName}}",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "tools", "{{toolName}}" ]
+            }
+          }
+        },
+        {
+          "name": "Get Tool Run",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/tool-runs/{{toolRunId}}?tenantId={{tenantId}}",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "tool-runs", "{{toolRunId}}" ],
+              "query": [
+                { "key": "tenantId", "value": "{{tenantId}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Conversation Tool Calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/conversations/{{conversationId}}/tool-calls?pageNumber=1&pageSize=100",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "conversations", "{{conversationId}}", "tool-calls" ],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "100" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Request History Tool Calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/request-history/{{requestHistoryId}}/tool-calls?pageNumber=1&pageSize=100&tenantId={{tenantId}}",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "request-history", "{{requestHistoryId}}", "tool-calls" ],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "100" },
+                { "key": "tenantId", "value": "{{tenantId}}" }
+              ]
             }
           }
         }

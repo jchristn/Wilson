@@ -51,8 +51,11 @@ class ApiClient {
   updateConversation(id, payload) { return this.request('PUT', `/v1.0/api/conversations/${id}`, payload); }
   deleteConversation(id) { return this.request('DELETE', `/v1.0/api/conversations/${id}`); }
   messages(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`, null, params); }
+  conversationToolCalls(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/tool-calls`, null, params); }
   chat(payload, options = {}) { return this.request('POST', '/v1.0/api/chat', payload, null, options); }
   tools() { return this.request('GET', '/v1.0/api/tools'); }
+  tool(name) { return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`); }
+  toolRun(id, params = {}) { return this.request('GET', `/v1.0/api/tool-runs/${encodeURIComponent(id)}`, null, params); }
   tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }
@@ -68,6 +71,7 @@ class ApiClient {
   feedback(payload = null, params = {}) { return payload ? this.request('POST', '/v1.0/api/feedback', payload) : this.request('GET', '/v1.0/api/feedback', null, params); }
   requestHistory(params = {}) { return this.request('GET', '/v1.0/api/request-history', null, params); }
   requestSummary(params = {}) { return this.request('GET', '/v1.0/api/request-history/summary', null, params); }
+  requestHistoryToolCalls(id, params = {}) { return this.request('GET', `/v1.0/api/request-history/${encodeURIComponent(id)}/tool-calls`, null, params); }
   deleteRequestHistory(id) { return this.request('DELETE', `/v1.0/api/request-history/${id}`); }
   settings(payload = null) { return payload ? this.request('PUT', '/v1.0/api/settings', payload) : this.request('GET', '/v1.0/api/settings'); }
   openApi() { return this.request('GET', '/openapi.json'); }

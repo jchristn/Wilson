@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in model tool calling with safe built-in file discovery/read tools, runner capability controls, and dashboard tool enablement settings.
+- Added persisted tool runs and redacted tool-call records linked to conversations, assistant messages, and request history.
+- Added tool catalog, tool-run, conversation tool-call, and request-history tool-call REST/OpenAPI endpoints.
+- Added compact dashboard tool activity in chat, conversation reload support, and request-history tool activity details.
+- Added C#, JavaScript, and Python SDK methods plus Postman requests for implemented tool metadata/history APIs.
+- Added `REST_API.md` coverage for tool enablement, safe chat traces, request-history metrics, and tool-call reads.
+
 ## 0.3.0
 
 - Added background model server health checks with configurable URL, method, interval, timeout, expected status, thresholds, and auth.

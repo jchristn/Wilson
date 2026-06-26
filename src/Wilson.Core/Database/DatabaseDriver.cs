@@ -54,7 +54,9 @@ namespace Wilson.Core.Database
                     "CREATE TABLE IF NOT EXISTS conversations (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, title TEXT NOT NULL, runnerid TEXT NOT NULL, model TEXT NOT NULL, active INTEGER NOT NULL, createdutc TEXT NOT NULL, lastupdateutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS messages (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, conversationid TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, runnerid TEXT NOT NULL, model TEXT NOT NULL, tokenestimate INTEGER NOT NULL, createdutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS feedback (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, messageid TEXT NOT NULL, rating INTEGER NOT NULL, comment TEXT NOT NULL, createdutc TEXT NOT NULL)",
-                    "CREATE TABLE IF NOT EXISTS requesthistory (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NULL, userid TEXT NULL, method TEXT NOT NULL, path TEXT NOT NULL, statuscode INTEGER NOT NULL, durationms REAL NOT NULL, createdutc TEXT NOT NULL)"
+                    "CREATE TABLE IF NOT EXISTS requesthistory (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NULL, userid TEXT NULL, method TEXT NOT NULL, path TEXT NOT NULL, statuscode INTEGER NOT NULL, durationms REAL NOT NULL, createdutc TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS toolruns (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, runnerid TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, startedutc TEXT NOT NULL, completedutc TEXT NULL, elapsedms REAL NOT NULL, iterationcount INTEGER NOT NULL, toolcallcount INTEGER NOT NULL, errorcount INTEGER NOT NULL, createdutc TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS toolcalls (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, runid TEXT NOT NULL, requesthistoryid TEXT NULL, traceid TEXT NULL, origin TEXT NULL, assistantmessageid TEXT NULL, providertoolcallid TEXT NULL, toolcallid TEXT NOT NULL, toolname TEXT NOT NULL, iteration INTEGER NOT NULL, sequencenumber INTEGER NOT NULL, status TEXT NOT NULL, approvalpolicy TEXT NOT NULL, approvedbyuserid TEXT NULL, argumentsjson TEXT NOT NULL, resultjson TEXT NOT NULL, resultsummaryjson TEXT NOT NULL, resultpreview TEXT NOT NULL, success INTEGER NOT NULL, denied INTEGER NOT NULL, truncated INTEGER NOT NULL, outputcharacters INTEGER NOT NULL, inputbytes INTEGER NOT NULL, outputbytes INTEGER NOT NULL, errortype TEXT NULL, errorcode TEXT NULL, errormessage TEXT NULL, provider TEXT NULL, model TEXT NULL, startedutc TEXT NOT NULL, completedutc TEXT NULL, elapsedms REAL NOT NULL, active INTEGER NOT NULL, createdutc TEXT NOT NULL, updatedutc TEXT NOT NULL)"
                 };
 
                 foreach (string statement in statements)
@@ -71,6 +73,10 @@ namespace Wilson.Core.Database
                 EnsureColumn(connection, "messages", "streamingtimems", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "messages", "totaltimems", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "messages", "tokensused", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "messages", "runid", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "messages", "toolcallsjson", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "messages", "toolcallid", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "messages", "metadatajson", "TEXT NOT NULL DEFAULT ''");
                 EnsureColumn(connection, "requesthistory", "requestheaders", "TEXT NOT NULL DEFAULT ''");
                 EnsureColumn(connection, "requesthistory", "requestbody", "TEXT NOT NULL DEFAULT ''");
                 EnsureColumn(connection, "requesthistory", "responseheaders", "TEXT NOT NULL DEFAULT ''");
@@ -79,6 +85,17 @@ namespace Wilson.Core.Database
                 EnsureColumn(connection, "requesthistory", "streamingtimems", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "requesthistory", "totaltimems", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "requesthistory", "tokensused", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "toolrunid", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "toolcallcount", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "toolelapsedms", "REAL NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "agentiterations", "INTEGER NOT NULL DEFAULT 0");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolruns_tenant_conversation_created ON toolruns (tenantid,conversationid,createdutc)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_conversation_run ON toolcalls (tenantid,conversationid,runid)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_assistantmessage ON toolcalls (tenantid,assistantmessageid)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_trace ON toolcalls (tenantid,traceid)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_requesthistory ON toolcalls (tenantid,requesthistoryid)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_toolname_created ON toolcalls (tenantid,toolname,createdutc)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_success_created ON toolcalls (tenantid,success,createdutc)");
             }
 
             await Task.CompletedTask.ConfigureAwait(false);
@@ -296,6 +313,8 @@ namespace Wilson.Core.Database
         public async Task DeleteConversationAsync(string tenantId, string id, CancellationToken token = default)
         {
             await ExecuteSimpleAsync("DELETE FROM feedback WHERE tenantid=@tenantid AND conversationid=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+            await ExecuteSimpleAsync("DELETE FROM toolcalls WHERE tenantid=@tenantid AND conversationid=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+            await ExecuteSimpleAsync("DELETE FROM toolruns WHERE tenantid=@tenantid AND conversationid=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
             await ExecuteSimpleAsync("DELETE FROM messages WHERE tenantid=@tenantid AND conversationid=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
             await ExecuteSimpleAsync("DELETE FROM conversations WHERE tenantid=@tenantid AND id=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
         }
@@ -323,7 +342,7 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task CreateMessageAsync(ChatMessage item, CancellationToken token = default)
         {
-            await ExecuteAsync("INSERT INTO messages (id,tenantid,conversationid,role,content,runnerid,model,tokenestimate,timetofirsttokenms,streamingtimems,totaltimems,tokensused,createdutc) VALUES (@id,@tenantid,@conversationid,@role,@content,@runnerid,@model,@tokenestimate,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@createdutc)", AddMessage, item, token).ConfigureAwait(false);
+            await ExecuteAsync("INSERT INTO messages (id,tenantid,conversationid,role,content,runnerid,model,tokenestimate,timetofirsttokenms,streamingtimems,totaltimems,tokensused,runid,toolcallsjson,toolcallid,metadatajson,createdutc) VALUES (@id,@tenantid,@conversationid,@role,@content,@runnerid,@model,@tokenestimate,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@runid,@toolcallsjson,@toolcallid,@metadatajson,@createdutc)", AddMessage, item, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -357,7 +376,7 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task CreateRequestHistoryAsync(RequestHistoryEntry item, CancellationToken token = default)
         {
-            await ExecuteAsync("INSERT INTO requesthistory (id,tenantid,userid,method,path,statuscode,durationms,requestheaders,requestbody,responseheaders,responsebody,timetofirsttokenms,streamingtimems,totaltimems,tokensused,createdutc) VALUES (@id,@tenantid,@userid,@method,@path,@statuscode,@durationms,@requestheaders,@requestbody,@responseheaders,@responsebody,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@createdutc)", AddRequestHistory, item, token).ConfigureAwait(false);
+            await ExecuteAsync("INSERT INTO requesthistory (id,tenantid,userid,method,path,statuscode,durationms,requestheaders,requestbody,responseheaders,responsebody,timetofirsttokenms,streamingtimems,totaltimems,tokensused,toolrunid,toolcallcount,toolelapsedms,agentiterations,createdutc) VALUES (@id,@tenantid,@userid,@method,@path,@statuscode,@durationms,@requestheaders,@requestbody,@responseheaders,@responsebody,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@toolrunid,@toolcallcount,@toolelapsedms,@agentiterations,@createdutc)", AddRequestHistory, item, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -376,6 +395,122 @@ namespace Wilson.Core.Database
         {
             if (String.IsNullOrWhiteSpace(tenantId)) await ExecuteSimpleAsync("DELETE FROM requesthistory WHERE id=@id", command => Add(command, "@id", id), token).ConfigureAwait(false);
             else await ExecuteSimpleAsync("DELETE FROM requesthistory WHERE tenantid=@tenantid AND id=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Create a tool run.
+        /// </summary>
+        public async Task CreateToolRunAsync(ToolRun item, CancellationToken token = default)
+        {
+            await ExecuteAsync("INSERT INTO toolruns (id,tenantid,userid,conversationid,runnerid,model,status,startedutc,completedutc,elapsedms,iterationcount,toolcallcount,errorcount,createdutc) VALUES (@id,@tenantid,@userid,@conversationid,@runnerid,@model,@status,@startedutc,@completedutc,@elapsedms,@iterationcount,@toolcallcount,@errorcount,@createdutc)", AddToolRun, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Update a tool run.
+        /// </summary>
+        public async Task UpdateToolRunAsync(ToolRun item, CancellationToken token = default)
+        {
+            await ExecuteAsync("UPDATE toolruns SET userid=@userid, conversationid=@conversationid, runnerid=@runnerid, model=@model, status=@status, startedutc=@startedutc, completedutc=@completedutc, elapsedms=@elapsedms, iterationcount=@iterationcount, toolcallcount=@toolcallcount, errorcount=@errorcount WHERE tenantid=@tenantid AND id=@id", AddToolRun, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get a tool run by identifier.
+        /// </summary>
+        public async Task<ToolRun?> GetToolRunAsync(string tenantId, string id, CancellationToken token = default)
+        {
+            List<ToolRun> items = await QueryAsync("SELECT * FROM toolruns WHERE tenantid=@tenantid AND id=@id", ReadToolRun, command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+            return items.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Get tool runs for a conversation.
+        /// </summary>
+        public async Task<List<ToolRun>> GetToolRunsForConversationAsync(string tenantId, string conversationId, CancellationToken token = default)
+        {
+            return await QueryAsync("SELECT * FROM toolruns WHERE tenantid=@tenantid AND conversationid=@conversationid ORDER BY createdutc ASC", ReadToolRun, command => { Add(command, "@tenantid", tenantId); Add(command, "@conversationid", conversationId); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Create a tool-call audit record.
+        /// </summary>
+        public async Task CreateToolCallAsync(ToolExecutionRecord item, CancellationToken token = default)
+        {
+            await ExecuteAsync("INSERT INTO toolcalls (id,tenantid,userid,conversationid,runid,requesthistoryid,traceid,origin,assistantmessageid,providertoolcallid,toolcallid,toolname,iteration,sequencenumber,status,approvalpolicy,approvedbyuserid,argumentsjson,resultjson,resultsummaryjson,resultpreview,success,denied,truncated,outputcharacters,inputbytes,outputbytes,errortype,errorcode,errormessage,provider,model,startedutc,completedutc,elapsedms,active,createdutc,updatedutc) VALUES (@id,@tenantid,@userid,@conversationid,@runid,@requesthistoryid,@traceid,@origin,@assistantmessageid,@providertoolcallid,@toolcallid,@toolname,@iteration,@sequencenumber,@status,@approvalpolicy,@approvedbyuserid,@argumentsjson,@resultjson,@resultsummaryjson,@resultpreview,@success,@denied,@truncated,@outputcharacters,@inputbytes,@outputbytes,@errortype,@errorcode,@errormessage,@provider,@model,@startedutc,@completedutc,@elapsedms,@active,@createdutc,@updatedutc)", AddToolExecutionRecord, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Update a tool-call audit record.
+        /// </summary>
+        public async Task UpdateToolCallAsync(ToolExecutionRecord item, CancellationToken token = default)
+        {
+            item.UpdatedUtc = DateTime.UtcNow;
+            await ExecuteAsync("UPDATE toolcalls SET userid=@userid, conversationid=@conversationid, runid=@runid, requesthistoryid=@requesthistoryid, traceid=@traceid, origin=@origin, assistantmessageid=@assistantmessageid, providertoolcallid=@providertoolcallid, toolcallid=@toolcallid, toolname=@toolname, iteration=@iteration, sequencenumber=@sequencenumber, status=@status, approvalpolicy=@approvalpolicy, approvedbyuserid=@approvedbyuserid, argumentsjson=@argumentsjson, resultjson=@resultjson, resultsummaryjson=@resultsummaryjson, resultpreview=@resultpreview, success=@success, denied=@denied, truncated=@truncated, outputcharacters=@outputcharacters, inputbytes=@inputbytes, outputbytes=@outputbytes, errortype=@errortype, errorcode=@errorcode, errormessage=@errormessage, provider=@provider, model=@model, startedutc=@startedutc, completedutc=@completedutc, elapsedms=@elapsedms, active=@active, updatedutc=@updatedutc WHERE tenantid=@tenantid AND id=@id", AddToolExecutionRecord, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get a tool-call audit record by identifier.
+        /// </summary>
+        public async Task<ToolExecutionRecord?> GetToolCallAsync(string tenantId, string id, CancellationToken token = default)
+        {
+            List<ToolExecutionRecord> items = await QueryAsync("SELECT * FROM toolcalls WHERE tenantid=@tenantid AND id=@id", ReadToolExecutionRecord, command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+            return items.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Get tool-call audit records for a conversation.
+        /// </summary>
+        public async Task<List<ToolExecutionRecord>> GetToolCallsForConversationAsync(string tenantId, string conversationId, CancellationToken token = default)
+        {
+            return await QueryAsync("SELECT * FROM toolcalls WHERE tenantid=@tenantid AND conversationid=@conversationid ORDER BY createdutc ASC, sequencenumber ASC", ReadToolExecutionRecord, command => { Add(command, "@tenantid", tenantId); Add(command, "@conversationid", conversationId); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get tool-call audit records for an assistant message.
+        /// </summary>
+        public async Task<List<ToolExecutionRecord>> GetToolCallsForMessageAsync(string tenantId, string messageId, CancellationToken token = default)
+        {
+            return await QueryAsync("SELECT * FROM toolcalls WHERE tenantid=@tenantid AND assistantmessageid=@assistantmessageid ORDER BY createdutc ASC, sequencenumber ASC", ReadToolExecutionRecord, command => { Add(command, "@tenantid", tenantId); Add(command, "@assistantmessageid", messageId); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get tool-call audit records for a request-history entry.
+        /// </summary>
+        public async Task<List<ToolExecutionRecord>> GetToolCallsForRequestHistoryAsync(string? tenantId, string requestHistoryId, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(tenantId)) return await QueryAsync("SELECT * FROM toolcalls WHERE requesthistoryid=@requesthistoryid ORDER BY createdutc ASC, sequencenumber ASC", ReadToolExecutionRecord, command => Add(command, "@requesthistoryid", requestHistoryId), token).ConfigureAwait(false);
+            return await QueryAsync("SELECT * FROM toolcalls WHERE tenantid=@tenantid AND requesthistoryid=@requesthistoryid ORDER BY createdutc ASC, sequencenumber ASC", ReadToolExecutionRecord, command => { Add(command, "@tenantid", tenantId); Add(command, "@requesthistoryid", requestHistoryId); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Attach tool-call records with a trace identifier to an assistant message.
+        /// </summary>
+        public async Task AttachToolCallsToMessageByTraceIdAsync(string tenantId, string traceId, string assistantMessageId, CancellationToken token = default)
+        {
+            await ExecuteSimpleAsync("UPDATE toolcalls SET assistantmessageid=@assistantmessageid, updatedutc=@updatedutc WHERE tenantid=@tenantid AND traceid=@traceid", command => { Add(command, "@tenantid", tenantId); Add(command, "@traceid", traceId); Add(command, "@assistantmessageid", assistantMessageId); Add(command, "@updatedutc", Iso(DateTime.UtcNow)); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Attach tool-call records with a run identifier to a request-history entry.
+        /// </summary>
+        public async Task AttachToolCallsToRequestHistoryByRunIdAsync(string tenantId, string runId, string requestHistoryId, CancellationToken token = default)
+        {
+            await ExecuteSimpleAsync("UPDATE toolcalls SET requesthistoryid=@requesthistoryid, updatedutc=@updatedutc WHERE tenantid=@tenantid AND runid=@runid", command => { Add(command, "@tenantid", tenantId); Add(command, "@runid", runId); Add(command, "@requesthistoryid", requestHistoryId); Add(command, "@updatedutc", Iso(DateTime.UtcNow)); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Delete expired tool-call audit records.
+        /// </summary>
+        public async Task DeleteExpiredToolCallsAsync(string? tenantId, DateTime beforeUtc, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(tenantId))
+            {
+                await ExecuteSimpleAsync("DELETE FROM toolcalls WHERE createdutc<@beforeutc", command => Add(command, "@beforeutc", Iso(beforeUtc)), token).ConfigureAwait(false);
+                await ExecuteSimpleAsync("DELETE FROM toolruns WHERE createdutc<@beforeutc", command => Add(command, "@beforeutc", Iso(beforeUtc)), token).ConfigureAwait(false);
+                return;
+            }
+
+            await ExecuteSimpleAsync("DELETE FROM toolcalls WHERE tenantid=@tenantid AND createdutc<@beforeutc", command => { Add(command, "@tenantid", tenantId); Add(command, "@beforeutc", Iso(beforeUtc)); }, token).ConfigureAwait(false);
+            await ExecuteSimpleAsync("DELETE FROM toolruns WHERE tenantid=@tenantid AND createdutc<@beforeutc", command => { Add(command, "@tenantid", tenantId); Add(command, "@beforeutc", Iso(beforeUtc)); }, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -429,6 +564,19 @@ namespace Wilson.Core.Database
             {
                 using IDbCommand command = connection.CreateCommand();
                 command.CommandText = "ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition;
+                command.ExecuteNonQuery();
+            }
+            catch
+            {
+            }
+        }
+
+        private static void EnsureIndex(IDbConnection connection, string statement)
+        {
+            try
+            {
+                using IDbCommand command = connection.CreateCommand();
+                command.CommandText = statement;
                 command.ExecuteNonQuery();
             }
             catch
@@ -501,13 +649,15 @@ namespace Wilson.Core.Database
 
         private static string S(IDataRecord record, string name)
         {
-            object value = record[name];
-            return value == DBNull.Value ? String.Empty : value.ToString() ?? String.Empty;
+            object? value = V(record, name);
+            if (value == null || value == DBNull.Value) return String.Empty;
+            return value.ToString() ?? String.Empty;
         }
 
         private static bool B(IDataRecord record, string name)
         {
-            return Convert.ToInt32(record[name]) == 1;
+            object? value = V(record, name);
+            return value != null && value != DBNull.Value && Convert.ToInt32(value) == 1;
         }
 
         private static DateTime D(IDataRecord record, string name)
@@ -524,8 +674,18 @@ namespace Wilson.Core.Database
 
         private static double R(IDataRecord record, string name)
         {
-            object value = record[name];
+            object? value = V(record, name);
             return value == DBNull.Value ? 0 : Convert.ToDouble(value);
+        }
+
+        private static object? V(IDataRecord record, string name)
+        {
+            for (int i = 0; i < record.FieldCount; i++)
+            {
+                if (String.Equals(record.GetName(i), name, StringComparison.OrdinalIgnoreCase)) return record.GetValue(i);
+            }
+
+            return null;
         }
 
         private static string Iso(DateTime value)
@@ -575,12 +735,12 @@ namespace Wilson.Core.Database
 
         private static void AddMessage(IDbCommand command, ChatMessage item)
         {
-            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@conversationid", item.ConversationId); Add(command, "@role", item.Role); Add(command, "@content", item.Content); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@tokenestimate", item.TokenEstimate); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@createdutc", Iso(item.CreatedUtc));
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@conversationid", item.ConversationId); Add(command, "@role", item.Role); Add(command, "@content", item.Content); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@tokenestimate", item.TokenEstimate); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@runid", item.RunId); Add(command, "@toolcallsjson", item.ToolCallsJson); Add(command, "@toolcallid", item.ToolCallId); Add(command, "@metadatajson", item.MetadataJson); Add(command, "@createdutc", Iso(item.CreatedUtc));
         }
 
         private static ChatMessage ReadMessage(IDataRecord record)
         {
-            return new ChatMessage { Id = S(record, "id"), TenantId = S(record, "tenantid"), ConversationId = S(record, "conversationid"), Role = S(record, "role"), Content = S(record, "content"), RunnerId = S(record, "runnerid"), Model = S(record, "model"), TokenEstimate = Convert.ToInt32(record["tokenestimate"]), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), CreatedUtc = D(record, "createdutc") };
+            return new ChatMessage { Id = S(record, "id"), TenantId = S(record, "tenantid"), ConversationId = S(record, "conversationid"), Role = S(record, "role"), Content = S(record, "content"), RunnerId = S(record, "runnerid"), Model = S(record, "model"), TokenEstimate = Convert.ToInt32(R(record, "tokenestimate")), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), RunId = S(record, "runid"), ToolCallsJson = S(record, "toolcallsjson"), ToolCallId = S(record, "toolcallid"), MetadataJson = S(record, "metadatajson"), CreatedUtc = D(record, "createdutc") };
         }
 
         private static void AddFeedback(IDbCommand command, Feedback item)
@@ -595,12 +755,32 @@ namespace Wilson.Core.Database
 
         private static void AddRequestHistory(IDbCommand command, RequestHistoryEntry item)
         {
-            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@method", item.Method); Add(command, "@path", item.Path); Add(command, "@statuscode", item.StatusCode); Add(command, "@durationms", item.DurationMs); Add(command, "@requestheaders", item.RequestHeaders); Add(command, "@requestbody", item.RequestBody); Add(command, "@responseheaders", item.ResponseHeaders); Add(command, "@responsebody", item.ResponseBody); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@createdutc", Iso(item.CreatedUtc));
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@method", item.Method); Add(command, "@path", item.Path); Add(command, "@statuscode", item.StatusCode); Add(command, "@durationms", item.DurationMs); Add(command, "@requestheaders", item.RequestHeaders); Add(command, "@requestbody", item.RequestBody); Add(command, "@responseheaders", item.ResponseHeaders); Add(command, "@responsebody", item.ResponseBody); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@toolrunid", item.ToolRunId); Add(command, "@toolcallcount", item.ToolCallCount); Add(command, "@toolelapsedms", item.ToolElapsedMs); Add(command, "@agentiterations", item.AgentIterations); Add(command, "@createdutc", Iso(item.CreatedUtc));
         }
 
         private static RequestHistoryEntry ReadRequestHistory(IDataRecord record)
         {
-            return new RequestHistoryEntry { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), Method = S(record, "method"), Path = S(record, "path"), StatusCode = Convert.ToInt32(record["statuscode"]), DurationMs = Convert.ToDouble(record["durationms"]), RequestHeaders = S(record, "requestheaders"), RequestBody = S(record, "requestbody"), ResponseHeaders = S(record, "responseheaders"), ResponseBody = S(record, "responsebody"), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), CreatedUtc = D(record, "createdutc") };
+            return new RequestHistoryEntry { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), Method = S(record, "method"), Path = S(record, "path"), StatusCode = Convert.ToInt32(R(record, "statuscode")), DurationMs = R(record, "durationms"), RequestHeaders = S(record, "requestheaders"), RequestBody = S(record, "requestbody"), ResponseHeaders = S(record, "responseheaders"), ResponseBody = S(record, "responsebody"), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), ToolRunId = S(record, "toolrunid"), ToolCallCount = Convert.ToInt32(R(record, "toolcallcount")), ToolElapsedMs = R(record, "toolelapsedms"), AgentIterations = Convert.ToInt32(R(record, "agentiterations")), CreatedUtc = D(record, "createdutc") };
+        }
+
+        private static void AddToolRun(IDbCommand command, ToolRun item)
+        {
+            Add(command, "@id", item.RunId); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@conversationid", item.ConversationId); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@status", item.Status); Add(command, "@startedutc", Iso(item.StartedUtc)); Add(command, "@completedutc", item.CompletedUtc.HasValue ? Iso(item.CompletedUtc.Value) : null); Add(command, "@elapsedms", item.ElapsedMs); Add(command, "@iterationcount", item.IterationCount); Add(command, "@toolcallcount", item.ToolCallCount); Add(command, "@errorcount", item.ErrorCount); Add(command, "@createdutc", Iso(item.CreatedUtc));
+        }
+
+        private static ToolRun ReadToolRun(IDataRecord record)
+        {
+            return new ToolRun { RunId = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), ConversationId = S(record, "conversationid"), RunnerId = S(record, "runnerid"), Model = S(record, "model"), Status = S(record, "status"), StartedUtc = D(record, "startedutc"), CompletedUtc = N(record, "completedutc"), ElapsedMs = R(record, "elapsedms"), IterationCount = Convert.ToInt32(R(record, "iterationcount")), ToolCallCount = Convert.ToInt32(R(record, "toolcallcount")), ErrorCount = Convert.ToInt32(R(record, "errorcount")), CreatedUtc = D(record, "createdutc") };
+        }
+
+        private static void AddToolExecutionRecord(IDbCommand command, ToolExecutionRecord item)
+        {
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@conversationid", item.ConversationId); Add(command, "@runid", item.RunId); Add(command, "@requesthistoryid", item.RequestHistoryId); Add(command, "@traceid", item.TraceId); Add(command, "@origin", item.Origin); Add(command, "@assistantmessageid", item.AssistantMessageId); Add(command, "@providertoolcallid", item.ProviderToolCallId); Add(command, "@toolcallid", item.ToolCallId); Add(command, "@toolname", item.ToolName); Add(command, "@iteration", item.Iteration); Add(command, "@sequencenumber", item.SequenceNumber); Add(command, "@status", item.Status); Add(command, "@approvalpolicy", item.ApprovalPolicy); Add(command, "@approvedbyuserid", item.ApprovedByUserId); Add(command, "@argumentsjson", item.ArgumentsJson); Add(command, "@resultjson", item.ResultJson); Add(command, "@resultsummaryjson", item.ResultSummaryJson); Add(command, "@resultpreview", item.ResultPreview); Add(command, "@success", item.Success ? 1 : 0); Add(command, "@denied", item.Denied ? 1 : 0); Add(command, "@truncated", item.Truncated ? 1 : 0); Add(command, "@outputcharacters", item.OutputCharacters); Add(command, "@inputbytes", item.InputBytes); Add(command, "@outputbytes", item.OutputBytes); Add(command, "@errortype", item.ErrorType); Add(command, "@errorcode", item.ErrorCode); Add(command, "@errormessage", item.ErrorMessage); Add(command, "@provider", item.Provider); Add(command, "@model", item.Model); Add(command, "@startedutc", Iso(item.StartedUtc)); Add(command, "@completedutc", item.CompletedUtc.HasValue ? Iso(item.CompletedUtc.Value) : null); Add(command, "@elapsedms", item.ElapsedMs); Add(command, "@active", item.Active ? 1 : 0); Add(command, "@createdutc", Iso(item.CreatedUtc)); Add(command, "@updatedutc", Iso(item.UpdatedUtc));
+        }
+
+        private static ToolExecutionRecord ReadToolExecutionRecord(IDataRecord record)
+        {
+            return new ToolExecutionRecord { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), ConversationId = S(record, "conversationid"), RunId = S(record, "runid"), RequestHistoryId = S(record, "requesthistoryid"), TraceId = S(record, "traceid"), Origin = S(record, "origin"), AssistantMessageId = S(record, "assistantmessageid"), ProviderToolCallId = S(record, "providertoolcallid"), ToolCallId = S(record, "toolcallid"), ToolName = S(record, "toolname"), Iteration = Convert.ToInt32(R(record, "iteration")), SequenceNumber = Convert.ToInt32(R(record, "sequencenumber")), Status = S(record, "status"), ApprovalPolicy = S(record, "approvalpolicy"), ApprovedByUserId = S(record, "approvedbyuserid"), ArgumentsJson = S(record, "argumentsjson"), ResultJson = S(record, "resultjson"), ResultSummaryJson = S(record, "resultsummaryjson"), ResultPreview = S(record, "resultpreview"), Success = B(record, "success"), Denied = B(record, "denied"), Truncated = B(record, "truncated"), OutputCharacters = Convert.ToInt32(R(record, "outputcharacters")), InputBytes = Convert.ToInt32(R(record, "inputbytes")), OutputBytes = Convert.ToInt32(R(record, "outputbytes")), ErrorType = S(record, "errortype"), ErrorCode = S(record, "errorcode"), ErrorMessage = S(record, "errormessage"), Provider = S(record, "provider"), Model = S(record, "model"), StartedUtc = D(record, "startedutc"), CompletedUtc = N(record, "completedutc"), ElapsedMs = R(record, "elapsedms"), Active = B(record, "active"), CreatedUtc = D(record, "createdutc"), UpdatedUtc = D(record, "updatedutc") };
         }
     }
 }

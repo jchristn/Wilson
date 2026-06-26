@@ -304,6 +304,43 @@ function enumerationObjects(result) {
   return Array.isArray(result) ? result : result?.objects || [];
 }
 
+function parseStoredJson(value, fallback) {
+  if (!value || typeof value !== 'string') return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function toolTraceFromRecord(record) {
+  return {
+    toolCallId: record.toolCallId || record.id || '',
+    toolName: record.toolName || '',
+    displayLabel: displayToolName(record.toolName || ''),
+    iteration: record.iteration || 0,
+    sequenceNumber: record.sequenceNumber || 0,
+    success: Boolean(record.success),
+    denied: Boolean(record.denied),
+    truncated: Boolean(record.truncated),
+    outputCharacters: record.outputCharacters || 0,
+    resultCount: null,
+    elapsedMs: record.elapsedMs || 0,
+    summary: record.resultPreview || record.errorMessage || '',
+    startedUtc: record.startedUtc || '',
+    completedUtc: record.completedUtc || ''
+  };
+}
+
+function displayToolName(name) {
+  return String(name || '')
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Tool';
+}
+
 function sameModelName(left, right) {
   return String(left || '').toLowerCase() === String(right || '').toLowerCase();
 }
@@ -434,7 +471,31 @@ function Chat({ api }) {
     setModel(item.model);
     setTruncationNotice(null);
     if (options.remember !== false) localStorage.setItem(lastConversationStorageKey, item.id);
-    setMessages(enumerationObjects(await api.messages(item.id, { pageNumber: 1, pageSize: 500 })));
+    const [messageResult, toolCallResult] = await Promise.all([
+      api.messages(item.id, { pageNumber: 1, pageSize: 500 }),
+      api.conversationToolCalls(item.id, { pageNumber: 1, pageSize: 500 })
+    ]);
+    const toolCalls = enumerationObjects(toolCallResult);
+    const callsByMessage = toolCalls.reduce((map, call) => {
+      const key = call.assistantMessageId || '';
+      if (!key) return map;
+      const existing = map.get(key) || [];
+      existing.push(call);
+      map.set(key, existing);
+      return map;
+    }, new Map());
+    setMessages(enumerationObjects(messageResult).map(message => {
+      if (message.role !== 'assistant') return message;
+      const records = callsByMessage.get(message.id) || [];
+      const storedToolCalls = parseStoredJson(message.toolCallsJson, []);
+      const attachedToolCalls = records.length ? records.map(toolTraceFromRecord) : (Array.isArray(storedToolCalls) ? storedToolCalls : []);
+      return {
+        ...message,
+        toolRun: message.runId ? { runId: message.runId } : null,
+        toolCalls: attachedToolCalls,
+        toolMetrics: parseStoredJson(message.metadataJson, null)
+      };
+    }));
   }
 
   async function loadSelectedModel() {
@@ -1616,7 +1677,7 @@ function RequestHistory({ api }) {
         {summary && <ActivityChart summary={summary} range={range} />}
       </div>
       <RequestHistoryTable rows={filteredRows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} onRefresh={load} loading={loading} onView={(row) => setModal({ type: 'view', row })} onJson={(row) => setModal({ type: 'json', row })} onDelete={(row) => setModal({ type: 'delete', row })} />
-      {modal?.type === 'view' && <RequestHistoryDetailModal row={modal.row} onClose={() => setModal(null)} />}
+      {modal?.type === 'view' && <RequestHistoryDetailModal api={api} row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'json' && <JsonModal title="Request History Entry JSON" row={modal.row} onClose={() => setModal(null)} />}
       {modal?.type === 'delete' && <ConfirmModal title="Delete request history entry" message="Delete this request history entry?" onCancel={() => setModal(null)} onConfirm={async () => { await api.deleteRequestHistory(modal.row.id); setModal(null); load(); }} />}
     </div>
@@ -1765,7 +1826,22 @@ function LatencyCell({ value, rows }) {
   return <div className="latency-cell" title={`Request latency ${formatDuration(value)}`}><span>{formatDuration(value)}</span><div><i style={{ width: `${Math.max(4, (Number(value || 0) / max) * 100)}%` }} /></div></div>;
 }
 
-function RequestHistoryDetailModal({ row, onClose }) {
+function RequestHistoryDetailModal({ api, row, onClose }) {
+  const [toolCalls, setToolCalls] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!row?.toolCallCount) return () => { cancelled = true; };
+    api.requestHistoryToolCalls(row.id, { pageNumber: 1, pageSize: 500 })
+      .then(result => { if (!cancelled) setToolCalls(enumerationObjects(result).map(toolTraceFromRecord)); })
+      .catch(() => { if (!cancelled) setToolCalls([]); });
+    return () => { cancelled = true; };
+  }, [api, row]);
+  const toolMetrics = {
+    totalToolElapsedMs: row.toolElapsedMs || toolCalls.reduce((sum, call) => sum + Number(call.elapsedMs || 0), 0),
+    toolCallCount: row.toolCallCount || toolCalls.length,
+    errorCount: toolCalls.filter(call => call.success === false || call.denied).length,
+    iterationCount: row.agentIterations || 0
+  };
   return (
     <Modal title="Request History Detail" onClose={onClose} wide full>
       <div className="detail-content request-history-detail">
@@ -1794,11 +1870,21 @@ function RequestHistoryDetailModal({ row, onClose }) {
               <tr><th title="Milliseconds spent receiving streamed tokens">Streaming time (ms)</th><td>{formatNumber(row.streamingTimeMs)}</td></tr>
               <tr><th title="Total model inference time for chat requests">Total time (ms)</th><td>{formatNumber(row.totalTimeMs)}</td></tr>
               <tr><th title="Estimated tokens used by this request">Tokens used</th><td>{row.tokensUsed || 0}</td></tr>
+              <tr><th title="Tool calls executed during this request">Tool calls</th><td>{row.toolCallCount || 0}</td></tr>
+              <tr><th title="Milliseconds spent in tools during this request">Tool time (ms)</th><td>{formatNumber(row.toolElapsedMs || 0)}</td></tr>
+              <tr><th title="Tool-agent iterations used by this request">Tool iterations</th><td>{row.agentIterations || 0}</td></tr>
               <tr><th title="HTTP method used by this request">Method</th><td><span className={`method-badge ${String(row.method).toLowerCase()}`}>{row.method}</span></td></tr>
               <tr><th title="HTTP response status code">HTTP Status</th><td><span className={`http-status ${statusClass(row.statusCode)}`}>{row.statusCode || '-'}</span></td></tr>
             </tbody>
           </table>
         </div>
+
+        {toolCalls.length > 0 && (
+          <div className="detail-section">
+            <h3>Tool Activity</h3>
+            <ToolActivity toolCalls={toolCalls} metrics={toolMetrics} />
+          </div>
+        )}
 
         <div className="detail-section">
           <h3>Principal</h3>

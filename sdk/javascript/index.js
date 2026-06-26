@@ -56,6 +56,26 @@ export class WilsonClient {
   modelRunnerHealthById(runnerId) {
     return this.request('GET', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/health`);
   }
+
+  tools() {
+    return this.request('GET', '/v1.0/api/tools');
+  }
+
+  tool(name) {
+    return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`);
+  }
+
+  toolRun(runId, params = {}) {
+    return this.request('GET', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}`, null, params);
+  }
+
+  conversationToolCalls(conversationId, params = {}) {
+    return this.request('GET', `/v1.0/api/conversations/${encodeURIComponent(conversationId)}/tool-calls`, null, params);
+  }
+
+  requestHistoryToolCalls(requestHistoryId, params = {}) {
+    return this.request('GET', `/v1.0/api/request-history/${encodeURIComponent(requestHistoryId)}/tool-calls`, null, params);
+  }
 }
 
 export default WilsonClient;

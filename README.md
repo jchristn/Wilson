@@ -25,6 +25,7 @@ Wilson can:
 - Show which Ollama models are available and currently loaded
 - Capture request history, response timing, and request/response payload metadata
 - Collect thumbs-up/thumbs-down feedback and optional free-form comments
+- Expose model-directed tools when explicitly enabled, with safe chat traces and persisted tool-call history
 - Expose OpenAPI JSON and Swagger UI for the backend API
 
 The waves never answer. Wilson does.
@@ -36,6 +37,7 @@ The waves never answer. Wilson does.
 - **Tenant-aware auth**: tenants, users, credentials, admin tokens, tenant admins, and bearer-token authentication.
 - **Conversation storage**: saved conversations and messages backed by SQLite or PostgreSQL.
 - **Request history**: latency summary, activity chart, detailed request/response metadata, headers, bodies, timing, and token estimates.
+- **Tool activity**: optional model tool execution with safe inline chat activity, persisted tool runs/tool calls, request-history linkage, and dashboard settings controls.
 - **Feedback review**: admin view for ratings, comments, related message IDs, and model timing fields.
 - **Settings editor**: dashboard form for editing Wilson configuration without dumping raw JSON as the primary workflow.
 - **API tools**: named API explorer, OpenAPI JSON at `/openapi.json`, and Swagger UI at `/swagger`.
@@ -129,6 +131,7 @@ Important sections:
 - `cors`: allowed origins, methods, and headers
 - `auth`: admin bearer tokens and session lifetime
 - `requestHistory`: request capture settings
+- `tools`: global tool enablement, built-in tool policy, safety limits, allowed roots, web search, and MCP settings
 - `modelRunners`: Ollama/OpenAI/OpenAI-compatible model servers
 - `seed`: first-run tenant, user, and access key
 
@@ -144,6 +147,8 @@ Each `modelRunners` entry supports endpoint health checks:
 
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
+Tools are disabled by default. To use built-in file tools, enable `tools.enabled`, configure `tools.workingDirectory`, and include at least one path in `tools.allowedRoots`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
+
 ## API
 
 - OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`
@@ -151,10 +156,15 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 - Dashboard API Explorer: available inside the dashboard after login
 - Model server health: `GET /v1.0/api/model-runners/health`
 - Single model server health: `GET /v1.0/api/model-runners/{id}/health`
+- Tool catalog: `GET /v1.0/api/tools`
+- Conversation tool calls: `GET /v1.0/api/conversations/{id}/tool-calls`
+- Request-history tool calls: `GET /v1.0/api/request-history/{id}/tool-calls`
+- Tool run detail: `GET /v1.0/api/tool-runs/{id}`
 
 Model server list responses also include the latest health snapshot when health checks are enabled.
 Use `GET /v1.0/api/model-runners?includeLiveStatus=false` to return configured servers and cached health without waiting on upstream model list or loaded-model calls.
 The dashboard refreshes model server health summaries and health detail modals every 15 seconds.
+Tool call records returned through chat and conversation APIs are safe summaries: raw model arguments, raw tool output, provider request IDs, and secrets are not exposed in normal chat traces.
 
 ## SDKs And Postman
 

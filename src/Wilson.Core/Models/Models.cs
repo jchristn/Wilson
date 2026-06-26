@@ -187,6 +187,14 @@ namespace Wilson.Core.Models
         public double TotalTimeMs { get; set; } = 0;
         /// <summary>Estimated tokens used.</summary>
         public int TokensUsed { get; set; } = 0;
+        /// <summary>Tool run identifier associated with this message.</summary>
+        public string RunId { get; set; } = String.Empty;
+        /// <summary>Safe tool-call summary JSON associated with this message.</summary>
+        public string ToolCallsJson { get; set; } = String.Empty;
+        /// <summary>Tool-call identifier associated with this message when it represents a tool response.</summary>
+        public string ToolCallId { get; set; } = String.Empty;
+        /// <summary>Additional message metadata JSON.</summary>
+        public string MetadataJson { get; set; } = String.Empty;
         /// <summary>Created UTC.</summary>
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     }
@@ -278,6 +286,14 @@ namespace Wilson.Core.Models
         public double TotalTimeMs { get; set; } = 0;
         /// <summary>Estimated tokens used.</summary>
         public int TokensUsed { get; set; } = 0;
+        /// <summary>Tool run identifier associated with the request.</summary>
+        public string ToolRunId { get; set; } = String.Empty;
+        /// <summary>Tool calls executed during the request.</summary>
+        public int ToolCallCount { get; set; } = 0;
+        /// <summary>Total elapsed milliseconds spent in tools during the request.</summary>
+        public double ToolElapsedMs { get; set; } = 0;
+        /// <summary>Tool-agent iterations used during the request.</summary>
+        public int AgentIterations { get; set; } = 0;
         /// <summary>Created UTC.</summary>
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     }
