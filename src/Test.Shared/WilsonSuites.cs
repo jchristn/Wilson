@@ -717,15 +717,31 @@ namespace Test.Shared
                 using (CancellationTokenSource serverStop = new CancellationTokenSource())
                 using (HttpClient adminClient = new HttpClient())
                 using (HttpClient userClient = new HttpClient())
+                using (HttpClient anonymousClient = new HttpClient())
                 {
                     Task serverTask = Task.Run(() => server.Server.StartAsync(serverStop.Token), serverStop.Token);
                     adminClient.BaseAddress = new Uri("http://127.0.0.1:" + port);
                     adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-admin-token");
                     userClient.BaseAddress = adminClient.BaseAddress;
+                    userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-user-token");
+                    anonymousClient.BaseAddress = adminClient.BaseAddress;
 
                     try
                     {
                         await WaitForHttpAsync(adminClient).ConfigureAwait(false);
+
+                        using (JsonDocument catalog = await GetJsonDocumentAsync(userClient, "/v1.0/api/tools").ConfigureAwait(false))
+                        {
+                            if (catalog.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Expected tools catalog array.");
+                            bool foundReadFile = catalog.RootElement.EnumerateArray().Any(tool => String.Equals(tool.GetProperty("name").GetString(), "read_file", StringComparison.OrdinalIgnoreCase));
+                            if (!foundReadFile) throw new InvalidOperationException("Expected tools catalog to include read_file descriptor.");
+                        }
+
+                        using (JsonDocument readFileDescriptor = await GetJsonDocumentAsync(userClient, "/v1.0/api/tools/read_file").ConfigureAwait(false))
+                        {
+                            if (!String.Equals(readFileDescriptor.RootElement.GetProperty("name").GetString(), "read_file", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Expected single tool descriptor for read_file.");
+                            if (readFileDescriptor.RootElement.GetProperty("available").GetBoolean()) throw new InvalidOperationException("Expected read_file to be unavailable while global tools are disabled.");
+                        }
 
                         ToolPolicyValidationResult disabled = await PostJsonAsync<ToolPolicyValidationResult>(
                             adminClient,
@@ -793,7 +809,7 @@ namespace Test.Shared
                         if (missingRunner.Success || missingRunner.RunnerFound || !missingRunner.Errors.Any(error => error.Contains("not found", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected missing runner readiness to fail.");
 
                         await ExpectStatusAsync(
-                            userClient,
+                            anonymousClient,
                             "/v1.0/api/tools/validate",
                             new ToolPolicyValidationRequest { Tools = validTools },
                             HttpStatusCode.Unauthorized).ConfigureAwait(false);

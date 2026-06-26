@@ -1282,14 +1282,17 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 ### Server/API Tests
 
-- [ ] Add API tests for `GET /v1.0/api/tools`.
-- [ ] Add API tests for tool validate/test diagnostics.
+- [x] Add API tests for `GET /v1.0/api/tools`.
+  - Progress, 2026-06-26: `ToolDiagnosticsApiAsync` now verifies authenticated catalog listing and single `read_file` descriptor retrieval from the live server.
+- [x] Add API tests for tool validate/test diagnostics.
+  - Progress, 2026-06-26: `ToolDiagnosticsApiAsync` covers validation success/failure, missing allowed roots, unknown enabled tool names, runner readiness success, disabled runner, unsupported runner, missing runner, admin-only access, and OpenAPI path/schema presence.
 - [ ] Add API tests for approval endpoint authorization.
 - [ ] Add API tests for conversation tool calls authorization.
 - [ ] Add API tests for request-history tool calls authorization.
 - [ ] Add streaming SSE parser tests for tool events.
 - [ ] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
-- [ ] Add OpenAPI generation test proving schemas and paths are present.
+- [x] Add OpenAPI generation test proving schemas and paths are present.
+  - Progress, 2026-06-26: live `/openapi.json` test verifies tool validate/test paths and request/result schemas.
 
 ### Dashboard Tests
 
