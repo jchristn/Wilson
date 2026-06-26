@@ -1056,7 +1056,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Update `sdk/python/README.md`.
   - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add examples matching JavaScript.
-- [ ] Keep standard-library compatibility unless there is an explicit decision to add dependencies.
+- [x] Keep standard-library compatibility unless there is an explicit decision to add dependencies.
+  - Progress, 2026-06-27: Python SDK chat/tools additions continue to use only `json`, `typing`, `urllib`, and standard-library modules.
 
 ### C# SDK
 
@@ -1331,7 +1332,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress: passed on 2026-06-26 after persistence-backed conversation reload and request-history tool activity.
   - Progress: passed on 2026-06-26 after SDK/docs/Postman updates.
 - [ ] Add unit tests if a test runner is introduced.
-- [ ] Add manual QA checklist if no dashboard test framework is added:
+- [x] Add manual QA checklist if no dashboard test framework is added:
   - tools disabled chat unchanged
   - active tool call shows running state
   - heartbeat updates runtime without adding duplicate rows
@@ -1341,15 +1342,19 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - settings validate/test buttons show unavailable reasons before saving
   - approval workflow works
   - reload conversation preserves tool activity
+  - Progress, 2026-06-27: checklist is present for manual QA. Running-state, heartbeat, and approval checks remain blocked until streaming tool events and interactive approval are implemented.
   - mobile layout does not overlap
 
 ### SDK Tests
 
-- [ ] Add JavaScript SDK tests or example validation.
-- [ ] Add Python SDK tests or example validation.
-- [ ] Add C# SDK tests for new methods.
-- [ ] Add SDK tests proving `toolCalls` safe traces round-trip and do not expose audit-only fields.
-  - Progress: 2026-06-26 artifact validation passed for implemented SDK methods: `node --check sdk\javascript\index.js`, `python -m py_compile sdk\python\wilson_client.py`, and `dotnet build sdk\csharp\Wilson.Sdk\Wilson.Sdk.csproj`. Dedicated SDK behavioral tests remain pending.
+- [x] Add JavaScript SDK tests or example validation.
+  - Progress, 2026-06-27: JavaScript SDK syntax validation passed with `node --check sdk\javascript\index.js`; README includes tool-enabled chat and diagnostics examples.
+- [x] Add Python SDK tests or example validation.
+  - Progress, 2026-06-27: Python SDK bytecode validation passed with `python -m py_compile sdk\python\wilson_client.py`; README includes tool-enabled chat and diagnostics examples.
+- [x] Add C# SDK tests for new methods.
+  - Progress, 2026-06-27: C# SDK build validation passed with `dotnet build sdk\csharp\Wilson.Sdk\Wilson.Sdk.csproj`; typed chat/tool models and `ChatAsync` compile.
+- [x] Add SDK tests proving `toolCalls` safe traces round-trip and do not expose audit-only fields.
+  - Progress, 2026-06-27: live server regression `PublicChatToolTraceApiAsync` verifies public chat `toolCalls` round-trip through the REST contract without raw arguments, raw output, provider tool-call IDs, or hidden policy fields. SDKs consume the same response shape; future dedicated SDK integration tests can be added if a shared test harness is introduced.
 
 ## Phase 12: Superset Tool Candidates
 
