@@ -1245,35 +1245,37 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 ### Agent Loop Tests
 
-- [ ] Add fake chat-completions transport.
-- [ ] Test no-tool path produces final assistant message.
-- [ ] Test one tool call:
+- [x] Add fake chat-completions transport.
+- [x] Test no-tool path produces final assistant message.
+- [x] Test one tool call:
   - model proposes tool.
   - tool executes.
   - tool result is appended.
   - model receives tool result and returns final answer.
 - [ ] Test the provider request contains `tools`, tool choice, and Wilson tool behavior instructions.
 - [ ] Test the second provider request contains the assistant message with `tool_calls` and a matching `role: "tool"` result message.
-- [ ] Test multiple tool calls in one assistant message.
-- [ ] Test sequential tool calls across multiple model iterations.
-- [ ] Test tool execution errors are returned to the model as structured non-secret tool outputs and the model can recover with a final answer.
-- [ ] Test parallel tool-call support is serialized or parallelized according to implementation decision.
-- [ ] Test unknown tool result.
-- [ ] Test disabled tool result.
+- [x] Test multiple tool calls in one assistant message.
+- [x] Test sequential tool calls across multiple model iterations.
+- [x] Test tool execution errors are returned to the model as structured non-secret tool outputs and the model can recover with a final answer.
+- [x] Test parallel tool-call support is serialized or parallelized according to implementation decision.
+  - Progress, 2026-06-27: current implementation serializes model-proposed parallel calls in sequence; automated coverage verifies both returned tool results are present before the final model call.
+- [x] Test unknown tool result.
+- [x] Test disabled tool result.
 - [x] Test approval deny.
   - Progress, 2026-06-27: `ToolAgentApprovalPolicyAsync` verifies deny policy returns a denied tool result without exposing read content, approval-required `write_file` does not write the file, denial is sent back to the model for a final answer, and disabling destructive approval clears the descriptor approval requirement.
 - [ ] Test approval ask approved.
 - [ ] Test approval ask timeout.
-- [ ] Test max iterations reached.
-- [ ] Test max tool calls per turn reached.
+- [x] Test max iterations reached.
+- [x] Test max tool calls per turn reached.
 - [x] Test per-turn output limit reached.
 - [ ] Test loop guard stops repeated discovery/read cycles and requests a best-effort final answer.
 - [ ] Test final fallback message when tool limit is reached and the final model call fails or returns empty content.
 - [ ] Test cancellation.
-- [ ] Test truncation preserves valid assistant/tool result pairs.
+- [x] Test truncation preserves valid assistant/tool result pairs.
 - [ ] Test metrics.
-- [ ] Test OpenAI-compatible tool-call parsing.
-- [ ] Test Ollama tool-call parsing, including object-shaped arguments and missing OpenAI IDs.
+- [x] Test OpenAI-compatible tool-call parsing.
+- [x] Test Ollama tool-call parsing, including object-shaped arguments and missing OpenAI IDs.
+  - Progress, 2026-06-27: expanded fake-transport agent-loop coverage is complete for no-tool final responses, multiple calls in one assistant message, sequential iterations, unknown tools, disabled tools, max-call limits, max-iteration failure, and valid truncated tool-message pairs. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 
 ### Database Tests
 

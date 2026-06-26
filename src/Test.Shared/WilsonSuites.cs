@@ -48,6 +48,7 @@ namespace Test.Shared
             ToolCapableInferenceParsing();
             await ToolAgentLoopAsync().ConfigureAwait(false);
             await ToolAgentApprovalPolicyAsync().ConfigureAwait(false);
+            await ToolAgentLoopCoverageAsync().ConfigureAwait(false);
             await ToolAgentPerTurnOutputLimitAsync().ConfigureAwait(false);
             ContextTruncationAsync();
             HealthCheckDefaults();
@@ -1736,6 +1737,209 @@ namespace Test.Shared
 
             if (modelCalls != 2) throw new InvalidOperationException("Expected denial result to be sent back to the model for a final answer.");
             return response;
+        }
+
+        private static async Task ToolAgentLoopCoverageAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-agent-coverage-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                await File.WriteAllTextAsync(Path.Combine(workspace, "one.txt"), "one content").ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "two.txt"), "two content").ConfigureAwait(false);
+
+                Settings settings = AgentTestSettings(workspace);
+                await AssertNoToolPathAsync(settings).ConfigureAwait(false);
+                await AssertMultipleToolCallsAsync(settings).ConfigureAwait(false);
+                await AssertSequentialToolCallsAsync(settings).ConfigureAwait(false);
+                await AssertUnknownAndDisabledToolsAsync(settings, workspace).ConfigureAwait(false);
+                await AssertToolCallLimitAsync(settings).ConfigureAwait(false);
+                await AssertIterationLimitAsync(settings).ConfigureAwait(false);
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static Settings AgentTestSettings(string workspace)
+        {
+            return new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    WorkingDirectory = workspace,
+                    AllowedRoots = new List<string> { workspace },
+                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                    MaxToolIterations = 4,
+                    MaxToolCallsPerTurn = 4
+                }
+            };
+        }
+
+        private static async Task AssertNoToolPathAsync(Settings settings)
+        {
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(settings), (runner, request, token) =>
+            {
+                modelCalls++;
+                if (request.Tools.Count == 0) throw new InvalidOperationException("Expected available tool definitions in tool-capable request.");
+                return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "plain answer", FinishReason = "stop" });
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, settings, "answer directly").ConfigureAwait(false);
+            if (!response.Success || modelCalls != 1 || response.ToolCallCount != 0 || response.ToolCalls.Count != 0 || !String.Equals(response.Content, "plain answer", StringComparison.Ordinal)) throw new InvalidOperationException("Expected no-tool path to return the final assistant answer.");
+        }
+
+        private static async Task AssertMultipleToolCallsAsync(Settings settings)
+        {
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(settings), (runner, request, token) =>
+            {
+                modelCalls++;
+                if (modelCalls == 1)
+                {
+                    return Task.FromResult(new ToolCapableInferenceResponse
+                    {
+                        Success = true,
+                        FinishReason = "tool_calls",
+                        ToolCalls = new List<ModelToolCall>
+                        {
+                            new ModelToolCall { Id = "call_one", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"one.txt"}""" } },
+                            new ModelToolCall { Id = "call_two", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"two.txt"}""" } }
+                        }
+                    });
+                }
+
+                List<ModelChatMessage> toolMessages = request.Messages.Where(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (toolMessages.Count != 2 || !(toolMessages[0].Content ?? String.Empty).Contains("one content", StringComparison.Ordinal) || !(toolMessages[1].Content ?? String.Empty).Contains("two content", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected both tool results before final model call.");
+                return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "multiple complete", FinishReason = "stop" });
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, settings, "read both").ConfigureAwait(false);
+            if (!response.Success || modelCalls != 2 || response.ToolCalls.Count != 2 || response.ToolCalls.Any(call => !call.Success)) throw new InvalidOperationException("Expected multiple tool calls to complete in one assistant message.");
+        }
+
+        private static async Task AssertSequentialToolCallsAsync(Settings settings)
+        {
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(settings), (runner, request, token) =>
+            {
+                modelCalls++;
+                if (modelCalls == 1)
+                    return Task.FromResult(ToolCallResponse("call_seq_one", "read_file", """{"file_path":"one.txt"}"""));
+
+                if (modelCalls == 2)
+                {
+                    if (!request.Messages.Any(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) && (message.Content ?? String.Empty).Contains("one content", StringComparison.Ordinal)))
+                        throw new InvalidOperationException("Expected first sequential tool result before second tool request.");
+                    return Task.FromResult(ToolCallResponse("call_seq_two", "read_file", """{"file_path":"two.txt"}"""));
+                }
+
+                List<ModelChatMessage> toolMessages = request.Messages.Where(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (toolMessages.Count != 2 || !(toolMessages[1].Content ?? String.Empty).Contains("two content", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected second sequential tool result before final response.");
+                return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "sequential complete", FinishReason = "stop" });
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, settings, "read sequential").ConfigureAwait(false);
+            if (!response.Success || modelCalls != 3 || response.IterationCount != 3 || response.ToolCallCount != 2) throw new InvalidOperationException("Expected sequential tool calls across model iterations.");
+        }
+
+        private static async Task AssertUnknownAndDisabledToolsAsync(Settings settings, string workspace)
+        {
+            ToolAgentResponse unknown = await RunSingleToolThenFinalAsync(settings, "missing_tool", "{}", message =>
+            {
+                if (!(message.Content ?? String.Empty).Contains("unknown_tool", StringComparison.Ordinal)) throw new InvalidOperationException("Expected unknown tool result to be returned to the model.");
+            }).ConfigureAwait(false);
+            if (!unknown.Success || unknown.ToolCalls.Count != 1 || unknown.ToolCalls[0].Success || unknown.ToolCalls[0].Denied) throw new InvalidOperationException("Expected unknown tool to fail without denial.");
+
+            Settings disabled = AgentTestSettings(workspace);
+            disabled.Tools.DisabledToolNames = new List<string> { "read_file" };
+            ToolAgentResponse disabledResponse = await RunSingleToolThenFinalAsync(disabled, "read_file", """{"file_path":"one.txt"}""", message =>
+            {
+                if (!(message.Content ?? String.Empty).Contains("tool_unavailable", StringComparison.Ordinal)) throw new InvalidOperationException("Expected disabled tool result to be returned to the model.");
+            }).ConfigureAwait(false);
+            if (!disabledResponse.Success || disabledResponse.ToolCalls.Count != 1 || disabledResponse.ToolCalls[0].Success || disabledResponse.ToolCalls[0].Denied) throw new InvalidOperationException("Expected disabled tool to fail without denial.");
+        }
+
+        private static async Task AssertToolCallLimitAsync(Settings settings)
+        {
+            Settings limited = AgentTestSettings(settings.Tools.WorkingDirectory ?? String.Empty);
+            limited.Tools.MaxToolCallsPerTurn = 1;
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(limited), (runner, request, token) =>
+            {
+                modelCalls++;
+                if (modelCalls == 1)
+                {
+                    return Task.FromResult(new ToolCapableInferenceResponse
+                    {
+                        Success = true,
+                        FinishReason = "tool_calls",
+                        ToolCalls = new List<ModelToolCall>
+                        {
+                            new ModelToolCall { Id = "call_allowed", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"one.txt"}""" } },
+                            new ModelToolCall { Id = "call_limited", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"two.txt"}""" } }
+                        }
+                    });
+                }
+
+                List<ModelChatMessage> toolMessages = request.Messages.Where(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (toolMessages.Count != 2 || !(toolMessages[1].Content ?? String.Empty).Contains("tool_call_limit_reached", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected tool-call limit result before final model call.");
+                return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "limited complete", FinishReason = "stop" });
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, limited, "trigger limit").ConfigureAwait(false);
+            if (!response.Success || response.ToolCalls.Count != 2 || !response.ToolCalls[1].Denied || response.ToolCalls[1].Success) throw new InvalidOperationException("Expected max tool calls per turn to produce a denied trace.");
+        }
+
+        private static async Task AssertIterationLimitAsync(Settings settings)
+        {
+            Settings limited = AgentTestSettings(settings.Tools.WorkingDirectory ?? String.Empty);
+            limited.Tools.MaxToolIterations = 2;
+            ToolAgentService agent = new ToolAgentService(new ToolService(limited), (runner, request, token) =>
+            {
+                return Task.FromResult(ToolCallResponse("call_loop_" + request.Messages.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), "read_file", """{"file_path":"one.txt"}"""));
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, limited, "loop until limit").ConfigureAwait(false);
+            if (response.Success || !String.Equals(response.FinishReason, "tool_iteration_limit", StringComparison.Ordinal) || response.ToolCallCount != 2) throw new InvalidOperationException("Expected max iterations to stop the tool loop.");
+        }
+
+        private static ToolCapableInferenceResponse ToolCallResponse(string id, string name, string arguments)
+        {
+            return new ToolCapableInferenceResponse
+            {
+                Success = true,
+                FinishReason = "tool_calls",
+                ToolCalls = new List<ModelToolCall>
+                {
+                    new ModelToolCall
+                    {
+                        Id = id,
+                        Function = new ModelToolFunctionCall
+                        {
+                            Name = name,
+                            Arguments = arguments
+                        }
+                    }
+                }
+            };
+        }
+
+        private static async Task<ToolAgentResponse> RunAgentAsync(ToolAgentService agent, Settings settings, string prompt)
+        {
+            return await agent.RunAsync(
+                new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "http://localhost", Models = new List<string> { "test-model" } },
+                "test-model",
+                new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = prompt } },
+                new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
+                new ToolExecutionContext { Settings = settings },
+                CancellationToken.None).ConfigureAwait(false);
         }
 
         private static async Task ToolAgentPerTurnOutputLimitAsync()
