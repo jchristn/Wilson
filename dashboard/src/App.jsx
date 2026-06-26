@@ -361,6 +361,30 @@ function parseSseFrame(frame) {
   return { event, data: data.join('\n') };
 }
 
+function mergeToolProgress(calls, progress) {
+  if (!progress || !progress.toolCallId) return calls;
+  const nextCall = {
+    toolCallId: progress.toolCallId,
+    toolName: progress.toolName || '',
+    displayLabel: progress.displayLabel || progress.toolName || 'Tool',
+    iteration: progress.iteration || 0,
+    sequenceNumber: progress.sequenceNumber || 0,
+    success: progress.success,
+    denied: progress.denied,
+    truncated: progress.truncated,
+    outputCharacters: progress.outputCharacters || 0,
+    resultCount: progress.resultCount,
+    elapsedMs: progress.elapsedMs || 0,
+    summary: progress.summary || '',
+    startedUtc: progress.startedUtc || '',
+    completedUtc: progress.completedUtc || '',
+    statusCode: progress.statusCode || ''
+  };
+  const index = calls.findIndex(call => call.toolCallId === nextCall.toolCallId);
+  if (index < 0) return [...calls, nextCall];
+  return calls.map((call, callIndex) => callIndex === index ? { ...call, ...nextCall } : call);
+}
+
 function Chat({ api }) {
   const [runners, setRunners] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -545,7 +569,7 @@ function Chat({ api }) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         const assistantId = `stream-${Date.now()}`;
-        let assistant = { id: assistantId, role: 'assistant', content: '' };
+        let assistant = { id: assistantId, role: 'assistant', content: '', toolCalls: [], toolMetrics: null, toolRun: null };
         let buffer = '';
         setMessages(prev => [...prev, assistant]);
         while (true) {
@@ -569,6 +593,14 @@ function Chat({ api }) {
             if (event === 'chunk') {
               assistant = { ...assistant, content: assistant.content + (parsed.text || '') };
               setMessages(prev => prev.map(item => item.id === assistant.id ? assistant : item));
+            }
+            if (event.startsWith('tool_call_')) {
+              assistant = { ...assistant, toolCalls: mergeToolProgress(assistant.toolCalls || [], parsed) };
+              setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
+            }
+            if (event === 'run_completed') {
+              assistant = { ...assistant, toolRun: parsed.toolRun || null, toolMetrics: parsed.toolMetrics || null };
+              setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
             }
             if (event === 'error') {
               const message = parsed.error || parsed.detail || 'The selected model could not generate a response.';
@@ -699,13 +731,13 @@ function Chat({ api }) {
           {modelLoading && <span className="model-loading-note" title="Model loading may take several minutes depending on model size">Model loading may take several minutes depending on model size</span>}
           <button className="secondary toolbar-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} />System Prompt</button>
           <button className="secondary toolbar-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} />Settings</button>
-          <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for non-streaming chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => { const checked = e.target.checked; setToolsEnabled(checked); if (checked) setStreaming(false); }} />Tools</label>
+          <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
           <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
             <option value="auto">Auto</option>
             <option value="deny">Deny</option>
-            <option value="ask" disabled>Ask</option>
+            <option value="ask">Ask</option>
           </select>
-          <label className="toggle" title={toolRequestEnabled ? 'Streaming is disabled while tool chat uses the non-streaming path' : 'Enable streaming responses'}><input title="Toggle streaming responses" type="checkbox" checked={streaming} disabled={toolRequestEnabled} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
+          <label className="toggle" title="Enable streaming responses"><input title="Toggle streaming responses" type="checkbox" checked={streaming} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
         </div>
         {modelError && <div className="model-error" title="Model loading status">{modelError}</div>}
         <div className="messages">
@@ -765,18 +797,19 @@ function Message({ api, message, conversation }) {
 }
 
 function ToolActivity({ toolCalls, metrics }) {
-  const [open, setOpen] = useState(toolCalls.some(call => call.success === false || call.denied));
+  const [open, setOpen] = useState(toolCalls.some(call => call.success === false || call.denied || call.statusCode === 'running'));
   const count = toolCalls.length;
   const failed = toolCalls.filter(call => call.success === false || call.denied).length;
+  const running = toolCalls.filter(call => call.statusCode === 'running').length;
   const runtime = metrics?.totalToolElapsedMs ?? toolCalls.reduce((sum, call) => sum + Number(call.elapsedMs || 0), 0);
-  const label = failed > 0 ? `${failed} failed` : 'Completed';
+  const label = running > 0 ? `${running} running` : failed > 0 ? `${failed} failed` : 'Completed';
   return (
     <div className="tool-activity">
       <button className="tool-activity-summary" type="button" title="Show tool activity for this response" onClick={() => setOpen(value => !value)}>
         <Activity size={15} />
         <span>Tool activity</span>
         <span className="tool-activity-count">{count} tool{count === 1 ? '' : 's'}</span>
-        <span className={failed > 0 ? 'tool-status failed' : 'tool-status complete'}>{label}</span>
+        <span className={running > 0 ? 'tool-status running' : failed > 0 ? 'tool-status failed' : 'tool-status complete'}>{label}</span>
         <span className="tool-runtime"><Clock size={13} />{formatNumber(runtime)} ms</span>
         <ChevronDown size={15} className={open ? 'open' : ''} />
       </button>
@@ -787,13 +820,15 @@ function ToolActivity({ toolCalls, metrics }) {
 
 function ToolCallRow({ call }) {
   const [open, setOpen] = useState(false);
-  const success = call.success !== false && !call.denied;
+  const running = call.statusCode === 'running';
+  const success = !running && call.success !== false && !call.denied;
+  const statusLabel = running ? 'running' : success ? 'completed' : call.denied ? 'denied' : 'failed';
   return (
     <div className="tool-call-row">
       <button className="tool-call-main" type="button" title={`Show ${call.displayLabel || call.toolName || 'tool'} details`} onClick={() => setOpen(value => !value)}>
-        {success ? <Check size={14} /> : <AlertCircle size={14} />}
+        {running ? <RefreshCw size={14} className="spin" /> : success ? <Check size={14} /> : <AlertCircle size={14} />}
         <span className="tool-call-name">{call.displayLabel || call.toolName || 'Tool'}</span>
-        <span className={success ? 'tool-status complete' : 'tool-status failed'}>{success ? 'completed' : 'failed'}</span>
+        <span className={running ? 'tool-status running' : success ? 'tool-status complete' : 'tool-status failed'}>{statusLabel}</span>
         <span className="tool-runtime">{formatNumber(call.elapsedMs || 0)} ms</span>
         <ChevronDown size={14} className={open ? 'open' : ''} />
       </button>

@@ -500,6 +500,15 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            if (path.StartsWith("/v1.0/api/tool-runs/", StringComparison.OrdinalIgnoreCase)
+                && path.Contains("/tool-calls/", StringComparison.OrdinalIgnoreCase)
+                && path.EndsWith("/approval", StringComparison.OrdinalIgnoreCase)
+                && method == "POST")
+            {
+                await HandleToolApprovalAsync(ctx, requestContext!).ConfigureAwait(false);
+                return;
+            }
+
             if (path == "/v1.0/api/tenants")
             {
                 RequireAdmin(requestContext);
@@ -750,6 +759,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ctx.Response.Headers.Add("Cache-Control", "no-cache");
             ctx.Response.Headers.Add("Connection", "keep-alive");
             ctx.Response.ChunkedTransfer = true;
+            if (toolPlan.Enabled)
+            {
+                await ChatWithToolsStreamingAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan).ConfigureAwait(false);
+                return;
+            }
+
             StringBuilder full = new StringBuilder();
             Stopwatch total = Stopwatch.StartNew();
             double firstTokenMs = 0;
@@ -799,6 +814,89 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ChatTruncationNotice truncation,
             ChatToolPlan toolPlan)
         {
+            ChatResponse response = await CompleteToolChatAsync(ctx, requestContext, body, runner, conversation, previousMessages, userMessage, truncation, toolPlan, null).ConfigureAwait(false);
+            await SendJsonAsync(ctx, response).ConfigureAwait(false);
+        }
+
+        private async Task ChatWithToolsStreamingAsync(
+            HttpContextBase ctx,
+            RequestContext requestContext,
+            ChatRequest body,
+            ModelRunnerSettings runner,
+            Conversation conversation,
+            List<ChatMessage> previousMessages,
+            ChatMessage userMessage,
+            ChatTruncationNotice truncation,
+            ChatToolPlan toolPlan)
+        {
+            await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
+            await SendSseAsync(ctx, "truncation", truncation, false).ConfigureAwait(false);
+            await SendSseAsync(ctx, "run_started", new { conversationId = conversation.Id }, false).ConfigureAwait(false);
+
+            try
+            {
+                ChatResponse response = await CompleteToolChatAsync(
+                    ctx,
+                    requestContext,
+                    body,
+                    runner,
+                    conversation,
+                    previousMessages,
+                    userMessage,
+                    truncation,
+                    toolPlan,
+                    async (progress, token) =>
+                    {
+                        if (toolPlan.Settings.Tools.EmitProgressEvents)
+                        {
+                            await SendSseAsync(ctx, SseEventName(progress.EventType), progress, false).ConfigureAwait(false);
+                        }
+                    }).ConfigureAwait(false);
+
+                await SendSseAsync(ctx, "conversation", response.Conversation!, false).ConfigureAwait(false);
+                await SendSseAsync(ctx, "run_completed", new { toolRun = response.ToolRun, toolMetrics = response.ToolMetrics }, false).ConfigureAwait(false);
+                await SendSseAsync(ctx, "done", new
+                {
+                    response.AssistantMessage!.Id,
+                    response.AssistantMessage.TenantId,
+                    response.AssistantMessage.ConversationId,
+                    response.AssistantMessage.Role,
+                    response.AssistantMessage.Content,
+                    response.AssistantMessage.RunnerId,
+                    response.AssistantMessage.Model,
+                    response.AssistantMessage.TokenEstimate,
+                    response.AssistantMessage.TimeToFirstTokenMs,
+                    response.AssistantMessage.StreamingTimeMs,
+                    response.AssistantMessage.TotalTimeMs,
+                    response.AssistantMessage.TokensUsed,
+                    response.AssistantMessage.RunId,
+                    response.AssistantMessage.ToolCallsJson,
+                    response.AssistantMessage.ToolCallId,
+                    response.AssistantMessage.MetadataJson,
+                    response.AssistantMessage.CreatedUtc,
+                    toolRun = response.ToolRun,
+                    toolCalls = response.ToolCalls,
+                    toolMetrics = response.ToolMetrics
+                }, true).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await SendSseAsync(ctx, "error", new { error = "Tool-enabled chat failed before producing a final assistant response.", detail = ex.Message }, true).ConfigureAwait(false);
+            }
+        }
+
+        private async Task<ChatResponse> CompleteToolChatAsync(
+            HttpContextBase ctx,
+            RequestContext requestContext,
+            ChatRequest body,
+            ModelRunnerSettings runner,
+            Conversation conversation,
+            List<ChatMessage> previousMessages,
+            ChatMessage userMessage,
+            ChatTruncationNotice truncation,
+            ChatToolPlan toolPlan,
+            ToolAgentService.ToolProgressHandler? progressHandler)
+        {
             Stopwatch total = Stopwatch.StartNew();
             ToolExecutionContext executionContext = new ToolExecutionContext
             {
@@ -817,7 +915,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 .ToList();
             modelMessages.Add(new ModelChatMessage { Role = "user", Content = body.Prompt });
 
-            ToolAgentResponse agentResponse = await agent.RunAsync(runner, body.Model, modelMessages, body.Settings, executionContext, ctx.Token).ConfigureAwait(false);
+            ToolAgentResponse agentResponse = await agent.RunAsync(runner, body.Model, modelMessages, body.Settings, executionContext, ctx.Token, progressHandler).ConfigureAwait(false);
             total.Stop();
 
             if (!agentResponse.Success)
@@ -883,7 +981,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
             SetRequestCapture(assistantMessage, answer, toolRun, metrics);
 
-            await SendJsonAsync(ctx, new ChatResponse
+            return new ChatResponse
             {
                 Conversation = conversation,
                 UserMessage = userMessage,
@@ -892,7 +990,45 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ToolRun = toolRun,
                 ToolCalls = safeToolCalls,
                 ToolMetrics = metrics
-            }).ConfigureAwait(false);
+            };
+        }
+
+        private async Task HandleToolApprovalAsync(HttpContextBase ctx, RequestContext requestContext)
+        {
+            string runId = Segment(ctx.Request.Url.RawWithoutQuery, 3);
+            string toolCallId = Segment(ctx.Request.Url.RawWithoutQuery, 5);
+            ToolApprovalRequest body = Body<ToolApprovalRequest>(ctx);
+            string tenantId = requestContext.IsAdmin ? Query(ctx, "tenantId") ?? requestContext.TenantId ?? String.Empty : requestContext.TenantId ?? String.Empty;
+            if (String.IsNullOrWhiteSpace(tenantId)) throw new ArgumentException("tenantId is required for global administrators when approving a tool call.");
+
+            ToolRun? run = await Database.GetToolRunAsync(tenantId, runId, ctx.Token).ConfigureAwait(false);
+            if (run == null) throw new KeyNotFoundException("Tool run not found.");
+
+            Conversation? conversation = await Database.GetConversationAsync(tenantId, run.ConversationId, ctx.Token).ConfigureAwait(false);
+            if (conversation == null) throw new KeyNotFoundException("Conversation not found.");
+            EnsureConversationAccess(requestContext, conversation);
+
+            if (!requestContext.IsAdmin && !requestContext.IsTenantAdmin && !String.Equals(run.UserId, requestContext.UserId, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Only the user who started the tool run may approve this tool call.");
+
+            List<ToolExecutionRecord> records = await Database.GetToolCallsForConversationAsync(tenantId, run.ConversationId, ctx.Token).ConfigureAwait(false);
+            ToolExecutionRecord? record = records.FirstOrDefault(item =>
+                String.Equals(item.RunId, run.RunId, StringComparison.OrdinalIgnoreCase)
+                && (String.Equals(item.ToolCallId, toolCallId, StringComparison.OrdinalIgnoreCase) || String.Equals(item.Id, toolCallId, StringComparison.OrdinalIgnoreCase)));
+            if (record == null) throw new KeyNotFoundException("Tool call not found.");
+            if (!String.Equals(record.Status, ToolStatuses.PendingApproval, StringComparison.OrdinalIgnoreCase)
+                && !String.Equals(record.Status, ToolStatuses.Proposed, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Only proposed or pending tool calls can be approved or denied.");
+
+            record.ApprovedByUserId = requestContext.UserId;
+            record.Status = body.Approved ? ToolStatuses.Approved : ToolStatuses.Denied;
+            record.Denied = !body.Approved;
+            record.Success = false;
+            record.ErrorCode = body.Approved ? record.ErrorCode : "tool_call_denied";
+            record.ErrorMessage = body.Approved ? record.ErrorMessage : String.IsNullOrWhiteSpace(body.Reason) ? "Tool execution was denied by the user." : body.Reason;
+            await Database.UpdateToolCallAsync(record, ctx.Token).ConfigureAwait(false);
+
+            await SendJsonAsync(ctx, new ToolApprovalResponse { ToolCall = record }).ConfigureAwait(false);
         }
 
         private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
@@ -901,13 +1037,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 if (body.ToolsEnabled == true)
                     throw new ArgumentException("Tools are disabled by server settings.");
-                return ChatToolPlan.Disabled();
-            }
-
-            if (streaming)
-            {
-                if (body.ToolsEnabled == true)
-                    throw new ArgumentException("Tool-enabled streaming chat is not implemented yet. Disable streaming for tool-enabled requests.");
                 return ChatToolPlan.Disabled();
             }
 
@@ -963,7 +1092,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
 
             NormalizeTools(tools);
-            if (String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
+            if (!streaming && String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Non-streaming tool approval is not implemented. Set approvalPolicy to 'auto' for safe tools, or disable tools for this request.");
 
             Settings effectiveSettings = new Settings { Tools = tools };
@@ -1046,8 +1175,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 {
                     result.Warnings.Add("Web search is enabled, but no enabled search provider is configured.");
                 }
-
-                result.Warnings.Add("Web search settings are configured, but no web_search executor is registered in this Wilson build.");
             }
 
             if (tools.Mcp.Enabled)
@@ -1373,6 +1500,19 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await ctx.Response.SendChunk(bytes, done, ctx.Token).ConfigureAwait(false);
         }
 
+        private static string SseEventName(string? eventType)
+        {
+            if (String.Equals(eventType, ToolEventTypes.ToolIterationStarted, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(eventType, ToolEventTypes.ToolIterationStopped, StringComparison.OrdinalIgnoreCase))
+                return "tool_iteration";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallStarted, StringComparison.OrdinalIgnoreCase)) return "tool_call_running";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallHeartbeat, StringComparison.OrdinalIgnoreCase)) return "tool_call_heartbeat";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallCompleted, StringComparison.OrdinalIgnoreCase)) return "tool_call_completed";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallFailed, StringComparison.OrdinalIgnoreCase)) return "tool_call_failed";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallDenied, StringComparison.OrdinalIgnoreCase)) return "tool_call_denied";
+            return "tool_iteration";
+        }
+
         private void ApplyCors(HttpResponseBase response)
         {
             if (!Settings.Cors.Enabled) return;
@@ -1522,6 +1662,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "/v1.0/api/tools/test", Path(Operation("post", "testTools", "Tools", "Test tool readiness", "Runs dry-run tool readiness diagnostics against draft tool settings and an optional model runner. Requires a global administrator bearer token.", "ToolPolicyTestResult", true, requestSchema: "ToolPolicyTestRequest")) },
                     { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
                     { "/v1.0/api/tool-runs/{id}", Path(Operation("get", "getToolRun", "Tools", "Get tool run", "Returns one persisted tool run and its redacted tool-call records.", "ToolRunResponse", true, parameters: Parameters(PathParameter("id", "Tool run identifier."), TenantScopeParameter()))) },
+                    { "/v1.0/api/tool-runs/{runId}/tool-calls/{toolCallId}/approval", Path(Operation("post", "approveToolCall", "Tools", "Approve or deny a tool call", "Approves or denies a proposed or pending tool call for a conversation visible to the authenticated principal.", "ToolApprovalResponse", true, parameters: Parameters(PathParameter("runId", "Tool run identifier."), PathParameter("toolCallId", "Tool call identifier."), TenantScopeParameter()), requestSchema: "ToolApprovalRequest")) },
                     { "/v1.0/api/tenants", Path(
                         Operation("get", "listTenants", "Administration", "List tenants", "Lists tenant records. Requires a global administrator bearer token.", "TenantEnumeration", true, parameters: WithPagination()),
                         Operation("post", "createTenant", "Administration", "Create tenant", "Creates a tenant record. Requires a global administrator bearer token.", "Tenant", true, requestSchema: "Tenant", successStatus: "201", successDescription: "Tenant created.")) },
@@ -1747,7 +1888,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 { "HealthResponse", ObjectSchema(Property("status", StringSchema()), Property("service", StringSchema())) },
                 { "OpenApiDocument", new Dictionary<string, object> { { "type", "object" }, { "description", "OpenAPI 3.0 document." } } },
                 { "HtmlDocument", new Dictionary<string, object> { { "type", "string" }, { "description", "HTML document." } } },
-                { "SseEventStream", new Dictionary<string, object> { { "type", "string" }, { "description", "Server-sent event stream containing conversation, truncation, chunk, done, or error events." } } },
+                { "SseEventStream", new Dictionary<string, object> { { "type", "string" }, { "description", "Server-sent event stream containing conversation, truncation, chunk, run_started, tool_iteration, tool_call_running, tool_call_completed, tool_call_failed, tool_call_denied, run_completed, done, or error events." } } },
                 {
                     "AuthTokenRequest",
                     ObjectSchema(
@@ -1810,6 +1951,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ToolCapableInferenceResponse));
             AddComponentSchema(schemas, typeof(ModelChatMessage));
             AddComponentSchema(schemas, typeof(ToolRunResponse));
+            AddComponentSchema(schemas, typeof(ToolApprovalRequest));
+            AddComponentSchema(schemas, typeof(ToolApprovalResponse));
 
             schemas["EndpointHealthStatusArray"] = ArraySchema(SchemaRef("EndpointHealthStatus"));
             schemas["ToolDescriptorArray"] = ArraySchema(SchemaRef("ToolDescriptor"));
@@ -2056,6 +2199,26 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public ToolRun? ToolRun { get; set; } = null;
         /// <summary>Tool-call audit records associated with the run.</summary>
         public List<ToolExecutionRecord> ToolCalls { get; set; } = new List<ToolExecutionRecord>();
+    }
+
+    /// <summary>
+    /// Tool approval request.
+    /// </summary>
+    public sealed class ToolApprovalRequest
+    {
+        /// <summary>Whether to approve execution.</summary>
+        public bool Approved { get; set; } = false;
+        /// <summary>Optional user-visible reason for denial.</summary>
+        public string Reason { get; set; } = String.Empty;
+    }
+
+    /// <summary>
+    /// Tool approval response.
+    /// </summary>
+    public sealed class ToolApprovalResponse
+    {
+        /// <summary>Updated tool-call audit record.</summary>
+        public ToolExecutionRecord? ToolCall { get; set; } = null;
     }
 
     /// <summary>

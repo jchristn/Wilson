@@ -58,6 +58,7 @@ class ApiClient {
   testTools(payload = {}) { return this.request('POST', '/v1.0/api/tools/test', payload); }
   tool(name) { return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`); }
   toolRun(id, params = {}) { return this.request('GET', `/v1.0/api/tool-runs/${encodeURIComponent(id)}`, null, params); }
+  approveToolCall(runId, toolCallId, approved, reason = '', params = {}) { return this.request('POST', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}/tool-calls/${encodeURIComponent(toolCallId)}/approval`, { approved, reason }, params); }
   tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }

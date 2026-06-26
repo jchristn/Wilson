@@ -25,6 +25,11 @@ namespace Wilson.Core.Services
         /// </summary>
         public delegate Task<ToolCapableInferenceResponse> ToolInferenceHandler(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token);
 
+        /// <summary>
+        /// Receives safe tool progress events.
+        /// </summary>
+        public delegate Task ToolProgressHandler(ToolProgressEvent progress, CancellationToken token);
+
         private readonly ToolService _ToolService;
         private readonly ToolInferenceHandler _Inference;
 
@@ -58,6 +63,7 @@ namespace Wilson.Core.Services
         /// <param name="completionSettings">Completion settings.</param>
         /// <param name="executionContext">Tool execution context.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="progressHandler">Optional safe progress event handler.</param>
         /// <returns>Agent result.</returns>
         public async Task<ToolAgentResponse> RunAsync(
             ModelRunnerSettings runner,
@@ -65,7 +71,8 @@ namespace Wilson.Core.Services
             List<ModelChatMessage> messages,
             CompletionRequestSettings? completionSettings,
             ToolExecutionContext executionContext,
-            CancellationToken token = default)
+            CancellationToken token = default,
+            ToolProgressHandler? progressHandler = null)
         {
             ArgumentNullException.ThrowIfNull(runner);
             ArgumentNullException.ThrowIfNull(messages);
@@ -82,10 +89,19 @@ namespace Wilson.Core.Services
             int remainingToolOutputCharacters = Math.Clamp(executionContext.Settings.Tools.MaxToolOutputCharsPerTurn, executionContext.SafetyLimits.MaxToolOutputChars, 500000);
             int sequence = 0;
             int errors = 0;
+            Dictionary<string, int> repeatedCallCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
             for (int iteration = 1; iteration <= maxIterations; iteration++)
             {
                 token.ThrowIfCancellationRequested();
+                await EmitProgressAsync(progressHandler, new ToolProgressEvent
+                {
+                    EventType = ToolEventTypes.ToolIterationStarted,
+                    StatusCode = ToolStatuses.Running,
+                    Iteration = iteration,
+                    Summary = "Tool iteration started."
+                }, token).ConfigureAwait(false);
+
                 ToolCapableInferenceRequest request = new ToolCapableInferenceRequest
                 {
                     Messages = conversation,
@@ -147,6 +163,7 @@ namespace Wilson.Core.Services
                     ToolCalls = toolCalls
                 });
 
+                bool loopGuardStopped = false;
                 foreach (ModelToolCall call in toolCalls)
                 {
                     token.ThrowIfCancellationRequested();
@@ -159,13 +176,29 @@ namespace Wilson.Core.Services
                         DateTime limitCompleted = DateTime.UtcNow;
                         traces.Add(BuildTrace(call, iteration, sequence, limit, limitStarted, limitCompleted, 0));
                         auditTraces.Add(BuildAuditTrace(call, iteration, sequence, limit, limitStarted, limitCompleted, 0));
+                        await EmitProgressAsync(progressHandler, BuildProgress(call, ToolEventTypes.ToolCallDenied, ToolStatuses.Denied, iteration, sequence, limit, limitStarted, limitCompleted, 0), token).ConfigureAwait(false);
                         errors++;
                         continue;
                     }
 
                     DateTime started = DateTime.UtcNow;
                     Stopwatch sw = Stopwatch.StartNew();
-                    ToolResult result = await ExecuteToolCallAsync(call, executionContext, token).ConfigureAwait(false);
+                    await EmitProgressAsync(progressHandler, BuildProgress(call, ToolEventTypes.ToolCallStarted, ToolStatuses.Running, iteration, sequence, null, started, null, null), token).ConfigureAwait(false);
+                    ToolResult result;
+                    string repeatedKey = (call.Function?.Name ?? String.Empty) + "\n" + (call.Function?.Arguments ?? "{}");
+                    repeatedCallCounts.TryGetValue(repeatedKey, out int repeatedCount);
+                    repeatedCount++;
+                    repeatedCallCounts[repeatedKey] = repeatedCount;
+                    if (repeatedCount > 3)
+                    {
+                        result = ToolResultFactory.Error(call.Id ?? IdGenerator.ToolCall(), "tool_loop_guard_stopped", "Repeated tool calls were stopped by Wilson's loop guard.");
+                        loopGuardStopped = true;
+                    }
+                    else
+                    {
+                        result = await ExecuteToolCallAsync(call, executionContext, token).ConfigureAwait(false);
+                    }
+
                     result = ApplyTurnOutputBudget(result, ref remainingToolOutputCharacters);
                     sw.Stop();
                     DateTime completed = DateTime.UtcNow;
@@ -173,6 +206,9 @@ namespace Wilson.Core.Services
 
                     traces.Add(BuildTrace(call, iteration, sequence, result, started, completed, sw.Elapsed.TotalMilliseconds));
                     auditTraces.Add(BuildAuditTrace(call, iteration, sequence, result, started, completed, sw.Elapsed.TotalMilliseconds));
+                    string eventType = IsDenied(result) ? ToolEventTypes.ToolCallDenied : result.Success ? ToolEventTypes.ToolCallCompleted : ToolEventTypes.ToolCallFailed;
+                    string status = IsDenied(result) ? ToolStatuses.Denied : result.Success ? ToolStatuses.Completed : ToolStatuses.Failed;
+                    await EmitProgressAsync(progressHandler, BuildProgress(call, eventType, status, iteration, sequence, result, started, completed, sw.Elapsed.TotalMilliseconds), token).ConfigureAwait(false);
                     conversation.Add(new ModelChatMessage
                     {
                         Role = "tool",
@@ -180,6 +216,22 @@ namespace Wilson.Core.Services
                         Name = call.Function?.Name,
                         Content = result.Content
                     });
+                }
+
+                if (loopGuardStopped)
+                {
+                    return await RequestFinalAnswerAfterToolStopAsync(
+                        runner,
+                        model,
+                        conversation,
+                        completionSettings,
+                        executionContext,
+                        iteration,
+                        sequence,
+                        errors,
+                        traces,
+                        auditTraces,
+                        token).ConfigureAwait(false);
                 }
             }
 
@@ -196,6 +248,63 @@ namespace Wilson.Core.Services
                 AuditToolCalls = auditTraces,
                 Messages = conversation
             };
+        }
+
+        private async Task<ToolAgentResponse> RequestFinalAnswerAfterToolStopAsync(
+            ModelRunnerSettings runner,
+            string model,
+            List<ModelChatMessage> conversation,
+            CompletionRequestSettings completionSettings,
+            ToolExecutionContext executionContext,
+            int iteration,
+            int sequence,
+            int errors,
+            List<ToolTrace> traces,
+            List<ToolAuditTrace> auditTraces,
+            CancellationToken token)
+        {
+            conversation.Add(new ModelChatMessage
+            {
+                Role = "system",
+                Content = "Wilson stopped repeated tool calls. Provide the best final answer possible from the evidence already available."
+            });
+
+            ToolCapableInferenceResponse finalResponse = await _Inference(runner, new ToolCapableInferenceRequest
+            {
+                Messages = conversation,
+                Model = model,
+                MaxTokens = completionSettings.MaxTokens ?? 2048,
+                Temperature = completionSettings.Temperature ?? 0.7,
+                TopP = completionSettings.TopP ?? 0.9,
+                Provider = runner.ApiType,
+                Endpoint = runner.Endpoint,
+                ApiKey = runner.ApiKey,
+                Tools = new List<ModelToolDefinition>(),
+                ToolChoice = ToolChoiceModes.None
+            }, token).ConfigureAwait(false);
+
+            string content = finalResponse.Success && !String.IsNullOrWhiteSpace(finalResponse.Content)
+                ? finalResponse.Content!
+                : "Wilson stopped repeated tool calls before a final model answer could be generated.";
+            conversation.Add(new ModelChatMessage { Role = "assistant", Content = content });
+            return new ToolAgentResponse
+            {
+                Success = true,
+                Content = content,
+                FinishReason = finalResponse.Success ? finalResponse.FinishReason : "tool_loop_guard_stopped",
+                IterationCount = iteration,
+                ToolCallCount = sequence,
+                ErrorCount = errors + 1,
+                ToolCalls = traces,
+                AuditToolCalls = auditTraces,
+                Messages = conversation
+            };
+        }
+
+        private static async Task EmitProgressAsync(ToolProgressHandler? progressHandler, ToolProgressEvent progress, CancellationToken token)
+        {
+            if (progressHandler == null) return;
+            await progressHandler(progress, token).ConfigureAwait(false);
         }
 
         private static ToolResult ApplyTurnOutputBudget(ToolResult result, ref int remainingCharacters)
@@ -355,6 +464,28 @@ namespace Wilson.Core.Services
                 ElapsedMs = elapsedMs,
                 StartedUtc = started,
                 CompletedUtc = completed
+            };
+        }
+
+        private static ToolProgressEvent BuildProgress(ModelToolCall call, string eventType, string status, int iteration, int sequenceNumber, ToolResult? result, DateTime started, DateTime? completed, double? elapsedMs)
+        {
+            string name = call.Function?.Name ?? String.Empty;
+            return new ToolProgressEvent
+            {
+                EventType = eventType,
+                ToolCallId = call.Id,
+                ToolName = name,
+                DisplayLabel = DisplayName(name),
+                StatusCode = status,
+                Iteration = iteration,
+                SequenceNumber = sequenceNumber,
+                StartedUtc = started,
+                CompletedUtc = completed,
+                ElapsedMs = elapsedMs,
+                Truncated = result?.Truncated,
+                Denied = result == null ? null : IsDenied(result),
+                Success = result?.Success,
+                Summary = result == null ? "Running." : result.Success ? "Completed." : result.ErrorMessage
             };
         }
 

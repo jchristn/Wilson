@@ -80,6 +80,21 @@ class WilsonClient:
     def tool_run(self, run_id: str, **params: Any) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/tool-runs/{quote(run_id, safe='')}", query=params)
 
+    def approve_tool_call(
+        self,
+        run_id: str,
+        tool_call_id: str,
+        approved: bool,
+        reason: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/v1.0/api/tool-runs/{quote(run_id, safe='')}/tool-calls/{quote(tool_call_id, safe='')}/approval",
+            {"approved": approved, "reason": reason},
+            query=params,
+        )
+
     def conversation_tool_calls(self, conversation_id: str, **params: Any) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/conversations/{quote(conversation_id, safe='')}/tool-calls", query=params)
 

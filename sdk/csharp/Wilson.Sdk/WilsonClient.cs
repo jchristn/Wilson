@@ -135,6 +135,26 @@ namespace Wilson.Sdk
         }
 
         /// <summary>
+        /// Approve or deny a proposed or pending tool call.
+        /// </summary>
+        /// <param name="runId">Tool run identifier.</param>
+        /// <param name="toolCallId">Tool call identifier.</param>
+        /// <param name="approved">Whether to approve execution.</param>
+        /// <param name="reason">Optional reason for denial.</param>
+        /// <param name="tenantId">Optional tenant scope for global administrators.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Updated tool-call record.</returns>
+        public Task<ToolApprovalResponse> ApproveToolCallAsync(string runId, string toolCallId, bool approved, string reason = "", string? tenantId = null, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(runId)) throw new ArgumentException("Tool run ID is required.", nameof(runId));
+            if (String.IsNullOrWhiteSpace(toolCallId)) throw new ArgumentException("Tool call ID is required.", nameof(toolCallId));
+            string path = "/v1.0/api/tool-runs/" + Uri.EscapeDataString(runId) + "/tool-calls/" + Uri.EscapeDataString(toolCallId) + "/approval";
+            if (!String.IsNullOrWhiteSpace(tenantId)) path += "?tenantId=" + Uri.EscapeDataString(tenantId);
+            ToolApprovalRequest request = new ToolApprovalRequest { Approved = approved, Reason = reason };
+            return SendAsync<ToolApprovalResponse>(HttpMethod.Post, path, request, token);
+        }
+
+        /// <summary>
         /// Get redacted tool-call records for a conversation.
         /// </summary>
         /// <param name="conversationId">Conversation identifier.</param>

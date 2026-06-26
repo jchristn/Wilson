@@ -81,6 +81,10 @@ export class WilsonClient {
     return this.request('GET', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}`, null, params);
   }
 
+  approveToolCall(runId, toolCallId, approved, reason = '', params = {}) {
+    return this.request('POST', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}/tool-calls/${encodeURIComponent(toolCallId)}/approval`, { approved, reason }, params);
+  }
+
   conversationToolCalls(conversationId, params = {}) {
     return this.request('GET', `/v1.0/api/conversations/${encodeURIComponent(conversationId)}/tool-calls`, null, params);
   }

@@ -33,6 +33,7 @@ namespace Wilson.Core.Tools
             Register(new GrepTool());
             Register(new RunProcessTool());
             Register(new WebRetrieveTool());
+            Register(new WebSearchTool());
         }
 
         /// <summary>

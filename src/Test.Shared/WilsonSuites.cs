@@ -47,6 +47,7 @@ namespace Test.Shared
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
             await WebRetrieveToolAsync().ConfigureAwait(false);
+            await WebSearchToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
             await ToolAgentLoopAsync().ConfigureAwait(false);
             await ToolAgentApprovalPolicyAsync().ConfigureAwait(false);
@@ -1151,6 +1152,30 @@ namespace Test.Shared
             };
             await server.Database.CreateToolCallAsync(record).ConfigureAwait(false);
 
+            ToolExecutionRecord pending = new ToolExecutionRecord
+            {
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                ConversationId = conversation.Id,
+                RunId = run.RunId,
+                TraceId = run.RunId + ":2",
+                ToolCallId = "toolcall-api-pending",
+                ToolName = "write_file",
+                Iteration = 1,
+                SequenceNumber = 2,
+                Status = ToolStatuses.PendingApproval,
+                ApprovalPolicy = ToolApprovalPolicies.Ask,
+                ArgumentsJson = "{}",
+                ResultJson = "{}",
+                ResultSummaryJson = "{}",
+                ResultPreview = String.Empty,
+                Success = false,
+                StartedUtc = run.StartedUtc,
+                CreatedUtc = run.StartedUtc,
+                UpdatedUtc = run.StartedUtc
+            };
+            await server.Database.CreateToolCallAsync(pending).ConfigureAwait(false);
+
             RequestHistoryEntry history = new RequestHistoryEntry
             {
                 Id = "request-tool-api-auth",
@@ -1170,22 +1195,32 @@ namespace Test.Shared
 
             using (JsonDocument conversationCalls = await GetJsonDocumentAsync(userClient, "/v1.0/api/conversations/" + conversation.Id + "/tool-calls").ConfigureAwait(false))
             {
-                AssertEnumerationCount(conversationCalls, 1, "conversation tool calls");
+                AssertEnumerationCount(conversationCalls, 2, "conversation tool calls");
             }
 
             await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/conversations/" + conversation.Id + "/tool-calls", HttpStatusCode.Unauthorized).ConfigureAwait(false);
 
             using (JsonDocument requestHistoryCalls = await GetJsonDocumentAsync(userClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls").ConfigureAwait(false))
             {
-                AssertEnumerationCount(requestHistoryCalls, 1, "request-history tool calls for tenant admin");
+                AssertEnumerationCount(requestHistoryCalls, 2, "request-history tool calls for tenant admin");
             }
 
             using (JsonDocument adminRequestHistoryCalls = await GetJsonDocumentAsync(adminClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls?tenantId=" + tenant.Id).ConfigureAwait(false))
             {
-                AssertEnumerationCount(adminRequestHistoryCalls, 1, "request-history tool calls for global admin");
+                AssertEnumerationCount(adminRequestHistoryCalls, 2, "request-history tool calls for global admin");
             }
 
             await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls", HttpStatusCode.Unauthorized).ConfigureAwait(false);
+
+            string approvalPath = "/v1.0/api/tool-runs/" + run.RunId + "/tool-calls/" + pending.ToolCallId + "/approval";
+            using (JsonDocument approval = await PostJsonAsync<JsonDocument>(userClient, approvalPath, new { approved = false, reason = "No thanks" }).ConfigureAwait(false))
+            {
+                JsonElement toolCall = approval.RootElement.GetProperty("toolCall");
+                if (!String.Equals(toolCall.GetProperty("status").GetString(), ToolStatuses.Denied, StringComparison.Ordinal)) throw new InvalidOperationException("Expected approval endpoint to deny the pending tool call.");
+                if (!toolCall.GetProperty("denied").GetBoolean()) throw new InvalidOperationException("Expected denied flag after approval denial.");
+            }
+
+            await ExpectStatusAsync(anonymousClient, approvalPath, new { approved = true }, HttpStatusCode.Unauthorized).ConfigureAwait(false);
         }
 
         private static async Task WorkingDirectoryGuardAsync()
@@ -1735,6 +1770,60 @@ namespace Test.Shared
             }
         }
 
+        private static async Task WebSearchToolAsync()
+        {
+            int port = GetFreePort();
+            Settings settings = new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                    MaxToolResultItems = 5,
+                    WebSearch = new WebSearchToolSettings
+                    {
+                        Enabled = true,
+                        Providers = new List<WebSearchProviderSettings>
+                        {
+                            new WebSearchProviderSettings
+                            {
+                                Name = "local",
+                                ProviderType = "generic",
+                                Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/search",
+                                Enabled = true,
+                                IsDefault = true,
+                                TimeoutMs = 5000
+                            }
+                        }
+                    }
+                }
+            };
+
+            ToolService service = new ToolService(settings);
+            ToolDescriptor? descriptor = service.GetTool("web_search");
+            if (descriptor == null || !descriptor.Available || descriptor.Dangerous || descriptor.RequiresApproval) throw new InvalidOperationException("Expected web_search to be available as a safe configured tool.");
+
+            string body = """{"results":[{"title":"Wilson Tools","url":"https://example.com/tools","snippet":"Tool search result."},{"title":"Ignored","url":"","snippet":"Missing URL"}]}""";
+            Task serverTask = RunSingleHttpResponseServerAsync(port, "application/json", body, CancellationToken.None);
+            ToolResult result = await ExecuteToolAsync(service, "web_search", """{"query":"wilson tools","max_results":3}""").ConfigureAwait(false);
+            await serverTask.ConfigureAwait(false);
+
+            if (!result.Success) throw new InvalidOperationException("Expected web_search request to succeed: " + result.ErrorMessage);
+            using (JsonDocument document = JsonDocument.Parse(result.Content ?? "{}"))
+            {
+                JsonElement root = document.RootElement;
+                if (!String.Equals(root.GetProperty("provider").GetString(), "local", StringComparison.Ordinal)) throw new InvalidOperationException("Expected web_search provider name.");
+                JsonElement results = root.GetProperty("results");
+                if (results.ValueKind != JsonValueKind.Array || results.GetArrayLength() != 1) throw new InvalidOperationException("Expected one valid web_search result.");
+                if (!String.Equals(results[0].GetProperty("url").GetString(), "https://example.com/tools", StringComparison.Ordinal)) throw new InvalidOperationException("Expected web_search result URL.");
+            }
+
+            Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = true } };
+            ToolDescriptor? disabledDescriptor = new ToolService(disabled).GetTool("web_search");
+            if (disabledDescriptor == null || disabledDescriptor.Available || !String.Equals(disabledDescriptor.UnavailableReason, "Web search is disabled.", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected web_search to explain disabled settings.");
+        }
+
         private static async Task RunSingleHttpResponseServerAsync(int port, string contentType, string body, CancellationToken token)
         {
             TcpListener listener = new TcpListener(IPAddress.Loopback, port);
@@ -2018,6 +2107,7 @@ namespace Test.Shared
                 await AssertUnknownAndDisabledToolsAsync(settings, workspace).ConfigureAwait(false);
                 await AssertToolCallLimitAsync(settings).ConfigureAwait(false);
                 await AssertIterationLimitAsync(settings).ConfigureAwait(false);
+                await AssertLoopGuardAsync(settings).ConfigureAwait(false);
             }
             finally
             {
@@ -2175,6 +2265,29 @@ namespace Test.Shared
 
             ToolAgentResponse response = await RunAgentAsync(agent, limited, "loop until limit").ConfigureAwait(false);
             if (response.Success || !String.Equals(response.FinishReason, "tool_iteration_limit", StringComparison.Ordinal) || response.ToolCallCount != 2) throw new InvalidOperationException("Expected max iterations to stop the tool loop.");
+        }
+
+        private static async Task AssertLoopGuardAsync(Settings settings)
+        {
+            Settings guarded = AgentTestSettings(settings.Tools.WorkingDirectory ?? String.Empty);
+            guarded.Tools.MaxToolIterations = 10;
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(guarded), (runner, request, token) =>
+            {
+                modelCalls++;
+                if (request.ToolChoice == ToolChoiceModes.None)
+                {
+                    if (!request.Messages.Any(message => String.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) && (message.Content ?? String.Empty).Contains("tool_loop_guard_stopped", StringComparison.Ordinal)))
+                        throw new InvalidOperationException("Expected loop guard tool result before final best-effort request.");
+                    return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "best effort after guard", FinishReason = "stop" });
+                }
+
+                return Task.FromResult(ToolCallResponse("call_guard_" + modelCalls.ToString(System.Globalization.CultureInfo.InvariantCulture), "read_file", """{"file_path":"one.txt"}"""));
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(agent, guarded, "loop guard").ConfigureAwait(false);
+            if (!response.Success || !String.Equals(response.Content, "best effort after guard", StringComparison.Ordinal) || response.ToolCallCount != 4)
+                throw new InvalidOperationException("Expected repeated tool loop guard to request a best-effort final answer.");
         }
 
         private static ToolCapableInferenceResponse ToolCallResponse(string id, string name, string arguments)

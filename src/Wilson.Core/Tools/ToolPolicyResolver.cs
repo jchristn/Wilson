@@ -41,6 +41,10 @@ namespace Wilson.Core.Tools
                 {
                     unavailableReason = FilesystemUnavailableReason(settings);
                 }
+                else if (String.Equals(executor.Name, "web_search", StringComparison.OrdinalIgnoreCase))
+                {
+                    unavailableReason = WebSearchUnavailableReason(tools);
+                }
 
                 bool available = enabledByPolicy && String.IsNullOrWhiteSpace(unavailableReason);
                 ToolDescriptor descriptor = new ToolDescriptor
@@ -86,6 +90,14 @@ namespace Wilson.Core.Tools
             {
                 return ex.Message;
             }
+        }
+
+        private static string? WebSearchUnavailableReason(ToolsSettings tools)
+        {
+            if (tools.WebSearch == null || !tools.WebSearch.Enabled) return "Web search is disabled.";
+            if (tools.WebSearch.Providers == null || !tools.WebSearch.Providers.Any(provider => provider != null && provider.Enabled))
+                return "No enabled web search provider is configured.";
+            return null;
         }
 
         private static string DisplayName(string name)
