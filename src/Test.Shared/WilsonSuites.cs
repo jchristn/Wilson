@@ -8,6 +8,7 @@ namespace Test.Shared
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Net.Sockets;
+    using System.Reflection;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
@@ -34,6 +35,7 @@ namespace Test.Shared
             await DatabaseRoundTripAsync().ConfigureAwait(false);
             await DatabaseParameterizationAsync().ConfigureAwait(false);
             await ToolPersistenceAsync().ConfigureAwait(false);
+            await ToolAuditRedactionPersistenceAsync().ConfigureAwait(false);
             IdLength();
             ToolSettingsDefaults();
             await ToolServiceFoundationAsync().ConfigureAwait(false);
@@ -352,6 +354,195 @@ namespace Test.Shared
             string prompt = service.BuildPrompt(messages, "hello", 512);
             if (!prompt.EndsWith("user: hello", StringComparison.Ordinal)) throw new InvalidOperationException("Prompt did not include the latest user message.");
             if (InferenceService.EstimateTokens(prompt) > 512) throw new InvalidOperationException("Prompt exceeded expected context budget.");
+        }
+
+        private static async Task ToolAuditRedactionPersistenceAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-tool-audit-redaction-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            string tenantId = "tenant-audit-redaction";
+            string userId = "user-audit-redaction";
+            string conversationId = "conversation-audit-redaction";
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+                await database.CreateTenantAsync(new Tenant { Id = tenantId, Name = "Audit Redaction Tenant" }).ConfigureAwait(false);
+                await database.CreateUserAsync(new User { Id = userId, TenantId = tenantId, Email = "audit-redaction@example.com", FirstName = "Audit", LastName = "Redaction" }).ConfigureAwait(false);
+                await database.CreateConversationAsync(new Conversation { Id = conversationId, TenantId = tenantId, UserId = userId, Title = "Audit redaction", RunnerId = "runner-audit", Model = "model-audit" }).ConfigureAwait(false);
+
+                ToolRun fullRun = new ToolRun
+                {
+                    RunId = "toolrun-audit-full",
+                    TenantId = tenantId,
+                    UserId = userId,
+                    ConversationId = conversationId,
+                    RunnerId = "runner-audit",
+                    Model = "model-audit",
+                    Status = ToolStatuses.Completed,
+                    StartedUtc = DateTime.UtcNow.AddMilliseconds(-50),
+                    CompletedUtc = DateTime.UtcNow,
+                    ToolCallCount = 1,
+                    IterationCount = 1
+                };
+                await database.CreateToolRunAsync(fullRun).ConfigureAwait(false);
+
+                List<ToolExecutionRecord> fullRecords = BuildAuditRecordsForTest(
+                    fullRun,
+                    CreateSecretAuditTraces(),
+                    CreateSecretSafeTraces(),
+                    new ToolsSettings { StoreToolArguments = true, StoreFullToolResults = true, MaxToolResultBytes = 12000 });
+                if (fullRecords.Count != 1) throw new InvalidOperationException("Expected one full audit record.");
+                ToolExecutionRecord fullRecord = fullRecords[0];
+                AssertAuditRecordRedacted(fullRecord);
+                if (!fullRecord.ResultJson.Contains("stdout", StringComparison.Ordinal) || !fullRecord.ResultJson.Contains("stderr", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected explicit full-result persistence to retain redacted stdout/stderr structure.");
+
+                await database.CreateToolCallAsync(fullRecord).ConfigureAwait(false);
+                RequestHistoryEntry history = new RequestHistoryEntry
+                {
+                    Id = "request-audit-redaction",
+                    TenantId = tenantId,
+                    UserId = userId,
+                    CreatedUtc = DateTime.UtcNow,
+                    Method = "POST",
+                    Path = "/v1.0/api/chat",
+                    StatusCode = 200,
+                    RequestBody = "{}",
+                    ResponseBody = "{}",
+                    ToolRunId = fullRun.RunId,
+                    ToolCallCount = 1,
+                    ToolElapsedMs = 12,
+                    AgentIterations = 1
+                };
+                await database.CreateRequestHistoryAsync(history).ConfigureAwait(false);
+                await database.AttachToolCallsToRequestHistoryByRunIdAsync(tenantId, fullRun.RunId, history.Id).ConfigureAwait(false);
+                List<ToolExecutionRecord> linked = await database.GetToolCallsForRequestHistoryAsync(tenantId, history.Id).ConfigureAwait(false);
+                if (linked.Count != 1) throw new InvalidOperationException("Expected one request-history linked audit record.");
+                AssertAuditRecordRedacted(linked[0]);
+
+                ToolRun summaryRun = new ToolRun
+                {
+                    RunId = "toolrun-audit-summary",
+                    TenantId = tenantId,
+                    UserId = userId,
+                    ConversationId = conversationId,
+                    RunnerId = "runner-audit",
+                    Model = "model-audit",
+                    Status = ToolStatuses.Completed,
+                    StartedUtc = DateTime.UtcNow.AddMilliseconds(-50),
+                    CompletedUtc = DateTime.UtcNow,
+                    ToolCallCount = 1,
+                    IterationCount = 1
+                };
+                List<ToolExecutionRecord> summaryRecords = BuildAuditRecordsForTest(
+                    summaryRun,
+                    CreateSecretAuditTraces(),
+                    CreateSecretSafeTraces(),
+                    new ToolsSettings { StoreToolArguments = true, StoreFullToolResults = false, MaxToolResultBytes = 12000 });
+                if (summaryRecords.Count != 1) throw new InvalidOperationException("Expected one summary audit record.");
+                ToolExecutionRecord summaryRecord = summaryRecords[0];
+                AssertAuditRecordRedacted(summaryRecord);
+                if (summaryRecord.ResultJson.Contains("stdout", StringComparison.Ordinal) || summaryRecord.ResultJson.Contains("stderr", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Summary-only audit persistence must not store raw stdout/stderr result structure.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static List<ToolAuditTrace> CreateSecretAuditTraces()
+        {
+            return new List<ToolAuditTrace>
+            {
+                new ToolAuditTrace
+                {
+                    ProviderToolCallId = "provider-call-1",
+                    ToolName = "run_process",
+                    DisplayLabel = "Run Process",
+                    Iteration = 1,
+                    SequenceNumber = 1,
+                    ArgumentsJson = """
+{"command":"pwsh","api_key":"sk-live-secret","nested":{"authorization":"Bearer argument-token"},"args":["--password=p@ssword"]}
+""",
+                    ResultJson = """
+{"stdout":"hello\nAPI_KEY=secret123\nAuthorization: Bearer output-token","stderr":"password=hunter2","token":"result-token"}
+""",
+                    Success = true,
+                    Truncated = false,
+                    OutputCharacters = 120,
+                    ElapsedMs = 12,
+                    StartedUtc = DateTime.UtcNow.AddMilliseconds(-12),
+                    CompletedUtc = DateTime.UtcNow
+                }
+            };
+        }
+
+        private static List<ToolTrace> CreateSecretSafeTraces()
+        {
+            return new List<ToolTrace>
+            {
+                new ToolTrace
+                {
+                    ToolCallId = "safe-call-1",
+                    ToolName = "run_process",
+                    DisplayLabel = "Run Process",
+                    Iteration = 1,
+                    SequenceNumber = 1,
+                    Success = true,
+                    Truncated = false,
+                    OutputCharacters = 120,
+                    ElapsedMs = 12,
+                    Summary = "Completed with token=summary-token and Bearer summary-bearer-token.",
+                    StartedUtc = DateTime.UtcNow.AddMilliseconds(-12),
+                    CompletedUtc = DateTime.UtcNow
+                }
+            };
+        }
+
+        private static List<ToolExecutionRecord> BuildAuditRecordsForTest(ToolRun run, List<ToolAuditTrace> auditTraces, List<ToolTrace> safeTraces, ToolsSettings tools)
+        {
+            MethodInfo? method = typeof(WilsonServer).GetMethod("BuildToolExecutionRecords", BindingFlags.NonPublic | BindingFlags.Static);
+            if (method == null) throw new InvalidOperationException("Expected WilsonServer BuildToolExecutionRecords helper.");
+            object? result = method.Invoke(null, new object[]
+            {
+                run,
+                auditTraces,
+                safeTraces,
+                ToolApprovalPolicies.Auto,
+                new ChatMessage { TenantId = run.TenantId, ConversationId = run.ConversationId, Role = "assistant", Content = "done" },
+                new ModelRunnerSettings { Id = run.RunnerId, Name = "Audit Runner", ApiType = "OpenAI", Models = new List<string> { run.Model } },
+                tools
+            });
+            if (result is not List<ToolExecutionRecord> records) throw new InvalidOperationException("Expected tool execution records from audit builder.");
+            return records;
+        }
+
+        private static void AssertAuditRecordRedacted(ToolExecutionRecord record)
+        {
+            string combined = String.Join("\n", record.ArgumentsJson, record.ResultJson, record.ResultSummaryJson, record.ResultPreview, record.ErrorMessage ?? String.Empty);
+            string[] forbidden = new[]
+            {
+                "sk-live-secret",
+                "argument-token",
+                "p@ssword",
+                "secret123",
+                "output-token",
+                "hunter2",
+                "result-token",
+                "summary-token",
+                "summary-bearer-token"
+            };
+
+            foreach (string value in forbidden)
+            {
+                if (combined.Contains(value, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Audit record leaked sensitive value: " + value);
+            }
+
+            if (!combined.Contains("[redacted]", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected audit record to contain redaction markers.");
         }
 
         private static void IdLength()

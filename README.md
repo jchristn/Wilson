@@ -159,6 +159,8 @@ Implemented built-in tools:
 
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 
+Tool audit records are redacted before persistence and before API responses. Chat responses use safe tool traces that omit raw arguments, raw tool output, provider tool-call IDs, and hidden policy details. Admin audit records may include redacted arguments and, only when `tools.storeFullToolResults` is explicitly enabled, redacted capped result payloads. The database layer uses parameterized commands for tenant, user, conversation, request-history, tool-run, and tool-call values.
+
 ## API
 
 - OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`
@@ -174,7 +176,7 @@ Destructive and process tools are marked dangerous and approval-required. Keep a
 Model server list responses also include the latest health snapshot when health checks are enabled.
 Use `GET /v1.0/api/model-runners?includeLiveStatus=false` to return configured servers and cached health without waiting on upstream model list or loaded-model calls.
 The dashboard refreshes model server health summaries and health detail modals every 15 seconds.
-Tool call records returned through chat and conversation APIs are safe summaries: raw model arguments, raw tool output, provider request IDs, and secrets are not exposed in normal chat traces.
+Chat tool activity is safe by default: raw model arguments, raw tool output, provider tool-call IDs, and secrets are not exposed in normal chat traces. Tool-call audit APIs return redacted, tenant-scoped records.
 
 ## SDKs And Postman
 

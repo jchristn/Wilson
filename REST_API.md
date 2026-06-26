@@ -33,6 +33,8 @@ Implemented built-in tools:
 
 Write, edit, delete, directory-management, and process tools are marked dangerous and approval-required. Use narrow `allowedRoots` and avoid automatic approval unless the deployment is trusted and admin-only.
 
+Tool audit payloads are redacted before persistence. Persisted arguments are redacted and capped when argument storage is enabled. Full result payloads are not persisted unless `tools.storeFullToolResults` is explicitly enabled; otherwise Wilson stores redacted summaries and previews. Chat responses always use safe tool traces, not audit records.
+
 ### List Tools
 
 ```http
@@ -94,6 +96,8 @@ GET /v1.0/api/conversations/{id}/tool-calls?pageNumber=1&pageSize=100
 
 Returns redacted persisted tool-call records for a conversation visible to the authenticated principal. Conversation owners can read their own records; tenant and global administrators can read records within their scope.
 
+Records are tenant scoped and redacted. `argumentsJson`, `resultJson`, `resultSummaryJson`, `resultPreview`, and error fields should be treated as audit data, not raw provider or tool output.
+
 ### Request-History Tool Calls
 
 ```http
@@ -132,6 +136,8 @@ When tools run, `ChatResponse` includes:
 - `toolMetrics`: aggregate tool-call count, error count, iteration count, and total tool runtime.
 
 Normal chat traces do not expose raw model arguments, raw tool output, provider request IDs, API keys, bearer tokens, passwords, or hidden policy details.
+
+Audit APIs may return redacted arguments and redacted result summaries. Redacted full result JSON is returned only for records created while full result persistence was enabled.
 
 ## Request History
 

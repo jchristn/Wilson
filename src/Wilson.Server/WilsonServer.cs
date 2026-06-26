@@ -868,7 +868,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 TokensUsed = inputTokens + outputTokens,
                 RunId = toolRun.RunId
             };
-            List<ToolExecutionRecord> toolRecords = BuildToolExecutionRecords(toolRun, agentResponse.ToolCalls, body.ApprovalPolicy ?? toolPlan.Settings.Tools.DefaultApprovalPolicy, assistantMessage, runner);
+            List<ToolExecutionRecord> toolRecords = BuildToolExecutionRecords(toolRun, agentResponse.AuditToolCalls, agentResponse.ToolCalls, body.ApprovalPolicy ?? toolPlan.Settings.Tools.DefaultApprovalPolicy, assistantMessage, runner, toolPlan.Settings.Tools);
             List<ToolTrace> safeToolCalls = BuildSafeToolTraces(agentResponse.ToolCalls, toolRecords);
             assistantMessage.ToolCallsJson = JsonSerializer.Serialize(safeToolCalls, _Json);
             assistantMessage.MetadataJson = JsonSerializer.Serialize(metrics, _Json);
@@ -1311,13 +1311,16 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             capture.AgentIterations = metrics?.IterationCount ?? 0;
         }
 
-        private static List<ToolExecutionRecord> BuildToolExecutionRecords(ToolRun run, List<ToolTrace> traces, string approvalPolicy, ChatMessage assistantMessage, ModelRunnerSettings runner)
+        private static List<ToolExecutionRecord> BuildToolExecutionRecords(ToolRun run, List<ToolAuditTrace> auditTraces, List<ToolTrace> safeTraces, string approvalPolicy, ChatMessage assistantMessage, ModelRunnerSettings runner, ToolsSettings tools)
         {
             List<ToolExecutionRecord> records = new List<ToolExecutionRecord>();
-            foreach (ToolTrace trace in traces)
+            int maxPayloadCharacters = Math.Clamp(tools.MaxToolResultBytes, 1024, 200000);
+            for (int i = 0; i < auditTraces.Count; i++)
             {
+                ToolAuditTrace trace = auditTraces[i];
+                ToolTrace? safeTrace = i < safeTraces.Count ? safeTraces[i] : null;
                 string internalToolCallId = IdGenerator.ToolCall();
-                string summary = SafeToolSummary(trace);
+                string summary = safeTrace == null ? SafeToolSummary(trace) : SafeToolSummary(safeTrace);
                 string summaryJson = JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     { "toolName", trace.ToolName },
@@ -1330,6 +1333,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "elapsedMs", trace.ElapsedMs },
                     { "summary", summary }
                 });
+                summaryJson = ToolAuditSanitizer.RedactAndCapJson(summaryJson, maxPayloadCharacters);
+                string argumentsJson = tools.StoreToolArguments ? ToolAuditSanitizer.RedactAndCapJson(trace.ArgumentsJson, maxPayloadCharacters) : "{}";
+                string resultJson = tools.StoreFullToolResults ? ToolAuditSanitizer.RedactAndCapJson(trace.ResultJson, maxPayloadCharacters) : summaryJson;
+                string errorMessage = ToolAuditSanitizer.RedactAndCapText(trace.ErrorMessage ?? summary, 1000);
 
                 records.Add(new ToolExecutionRecord
                 {
@@ -1346,18 +1353,19 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     SequenceNumber = trace.SequenceNumber,
                     Status = trace.Success ? ToolStatuses.Completed : trace.Denied ? ToolStatuses.Denied : ToolStatuses.Failed,
                     ApprovalPolicy = String.IsNullOrWhiteSpace(approvalPolicy) ? ToolApprovalPolicies.Ask : approvalPolicy,
-                    ArgumentsJson = "{}",
-                    ResultJson = summaryJson,
+                    ArgumentsJson = argumentsJson,
+                    ResultJson = resultJson,
                     ResultSummaryJson = summaryJson,
-                    ResultPreview = Cap(summary, 4000),
+                    ResultPreview = ToolAuditSanitizer.RedactAndCapText(summary, 4000),
                     Success = trace.Success,
                     Denied = trace.Denied,
                     Truncated = trace.Truncated,
                     OutputCharacters = trace.OutputCharacters,
-                    OutputBytes = trace.OutputCharacters,
+                    InputBytes = Encoding.UTF8.GetByteCount(argumentsJson),
+                    OutputBytes = Encoding.UTF8.GetByteCount(resultJson),
                     ErrorType = trace.Success ? null : "tool_execution",
-                    ErrorCode = trace.Success ? null : "tool_failed",
-                    ErrorMessage = trace.Success ? null : Cap(summary, 1000),
+                    ErrorCode = trace.Success ? null : trace.ErrorCode ?? "tool_failed",
+                    ErrorMessage = trace.Success ? null : errorMessage,
                     Model = run.Model,
                     StartedUtc = trace.StartedUtc ?? run.StartedUtc,
                     CompletedUtc = trace.CompletedUtc,
@@ -1403,34 +1411,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private static string SafeToolSummary(ToolTrace trace)
         {
             string summary = String.IsNullOrWhiteSpace(trace.Summary) ? (trace.Success ? "Completed." : "Tool call failed.") : trace.Summary!;
-            return Cap(RedactSensitiveText(summary), 4000);
+            return ToolAuditSanitizer.RedactAndCapText(summary, 4000);
         }
 
-        private static string RedactSensitiveText(string value)
+        private static string SafeToolSummary(ToolAuditTrace trace)
         {
-            if (String.IsNullOrEmpty(value)) return String.Empty;
-            string output = value;
-            string[] markers = new[] { "apikey", "api_key", "password", "secret", "token", "credential", "bearer", "accesskey", "access_key", "connectionstring", "connection_string" };
-            foreach (string marker in markers)
-            {
-                int index = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-                while (index >= 0)
-                {
-                    int end = output.IndexOfAny(new[] { ' ', '\r', '\n', '\t', ',', ';', '"' }, index + marker.Length);
-                    if (end < 0) end = Math.Min(output.Length, index + marker.Length + 80);
-                    output = output.Substring(0, index) + marker + "=[redacted]" + output.Substring(end);
-                    int nextStart = Math.Min(output.Length, index + marker.Length + 11);
-                    index = nextStart >= output.Length ? -1 : output.IndexOf(marker, nextStart, StringComparison.OrdinalIgnoreCase);
-                }
-            }
-
-            return output;
-        }
-
-        private static string Cap(string value, int maxCharacters)
-        {
-            if (String.IsNullOrEmpty(value) || value.Length <= maxCharacters) return value ?? String.Empty;
-            return value.Substring(0, maxCharacters) + "... [truncated]";
+            string summary = trace.Success ? "Completed." : trace.ErrorMessage ?? "Tool call failed.";
+            return ToolAuditSanitizer.RedactAndCapText(summary, 4000);
         }
 
         private string RequestHeaders(HttpContextBase ctx)

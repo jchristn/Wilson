@@ -72,6 +72,7 @@ namespace Wilson.Core.Services
             completionSettings ??= new CompletionRequestSettings();
             List<ModelChatMessage> conversation = BuildInitialConversation(messages, completionSettings);
             List<ToolTrace> traces = new List<ToolTrace>();
+            List<ToolAuditTrace> auditTraces = new List<ToolAuditTrace>();
             List<ModelToolDefinition> tools = _ToolService.GetModelToolDefinitions();
             int maxIterations = Math.Clamp(executionContext.Settings.Tools.MaxToolIterations, 1, 20);
             int maxToolCalls = Math.Clamp(executionContext.Settings.Tools.MaxToolCallsPerTurn, 1, 50);
@@ -109,6 +110,7 @@ namespace Wilson.Core.Services
                         ToolCallCount = sequence,
                         ErrorCount = errors + 1,
                         ToolCalls = traces,
+                        AuditToolCalls = auditTraces,
                         Messages = conversation
                     };
                 }
@@ -130,6 +132,7 @@ namespace Wilson.Core.Services
                         ToolCallCount = sequence,
                         ErrorCount = errors,
                         ToolCalls = traces,
+                        AuditToolCalls = auditTraces,
                         Messages = conversation
                     };
                 }
@@ -147,9 +150,12 @@ namespace Wilson.Core.Services
                     sequence++;
                     if (sequence > maxToolCalls)
                     {
+                        DateTime limitStarted = DateTime.UtcNow;
                         ToolResult limit = ToolResultFactory.Error(call.Id ?? IdGenerator.ToolCall(), "tool_call_limit_reached", "Tool call limit reached for this turn.");
                         conversation.Add(new ModelChatMessage { Role = "tool", ToolCallId = call.Id, Name = call.Function?.Name, Content = limit.Content });
-                        traces.Add(BuildTrace(call, iteration, sequence, limit, DateTime.UtcNow, DateTime.UtcNow, 0));
+                        DateTime limitCompleted = DateTime.UtcNow;
+                        traces.Add(BuildTrace(call, iteration, sequence, limit, limitStarted, limitCompleted, 0));
+                        auditTraces.Add(BuildAuditTrace(call, iteration, sequence, limit, limitStarted, limitCompleted, 0));
                         errors++;
                         continue;
                     }
@@ -163,6 +169,7 @@ namespace Wilson.Core.Services
                     if (!result.Success) errors++;
 
                     traces.Add(BuildTrace(call, iteration, sequence, result, started, completed, sw.Elapsed.TotalMilliseconds));
+                    auditTraces.Add(BuildAuditTrace(call, iteration, sequence, result, started, completed, sw.Elapsed.TotalMilliseconds));
                     conversation.Add(new ModelChatMessage
                     {
                         Role = "tool",
@@ -183,6 +190,7 @@ namespace Wilson.Core.Services
                 ToolCallCount = sequence,
                 ErrorCount = errors + 1,
                 ToolCalls = traces,
+                AuditToolCalls = auditTraces,
                 Messages = conversation
             };
         }
@@ -285,6 +293,31 @@ namespace Wilson.Core.Services
                 OutputCharacters = result.Content?.Length ?? 0,
                 ElapsedMs = elapsedMs,
                 Summary = result.Success ? "Completed." : result.ErrorMessage,
+                StartedUtc = started,
+                CompletedUtc = completed
+            };
+        }
+
+        private static ToolAuditTrace BuildAuditTrace(ModelToolCall call, int iteration, int sequenceNumber, ToolResult result, DateTime started, DateTime completed, double elapsedMs)
+        {
+            string name = call.Function?.Name ?? String.Empty;
+            string resultJson = String.IsNullOrWhiteSpace(result.ContentJson) ? result.Content ?? "{}" : result.ContentJson;
+            return new ToolAuditTrace
+            {
+                ProviderToolCallId = call.Id,
+                ToolName = name,
+                DisplayLabel = DisplayName(name),
+                Iteration = iteration,
+                SequenceNumber = sequenceNumber,
+                ArgumentsJson = call.Function?.Arguments ?? "{}",
+                ResultJson = String.IsNullOrWhiteSpace(resultJson) ? "{}" : resultJson,
+                Success = result.Success,
+                Denied = String.Equals(result.ErrorCode, "tool_call_limit_reached", StringComparison.OrdinalIgnoreCase),
+                Truncated = result.Truncated,
+                OutputCharacters = result.Content?.Length ?? 0,
+                ErrorCode = result.ErrorCode,
+                ErrorMessage = result.ErrorMessage,
+                ElapsedMs = elapsedMs,
                 StartedUtc = started,
                 CompletedUtc = completed
             };

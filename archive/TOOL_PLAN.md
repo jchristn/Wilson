@@ -629,20 +629,22 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
 
 ### Retention And Redaction
 
+Progress, 2026-06-26: audit redaction hardening slice is complete. Added a separate `ToolAuditTrace` path alongside safe public `ToolTrace` responses, plus a central `ToolAuditSanitizer` for JSON and text redaction before persistence. Server audit record creation now honors `StoreToolArguments` and `StoreFullToolResults`, redacts/caps arguments, results, summaries, previews, and error messages before database writes, and keeps default full-result persistence disabled. Regression tests cover full-result redaction, default summary-only suppression of stdout/stderr, and request-history-linked audit reads. Passing checks: `dotnet build src\Wilson.slnx`, `dotnet run --project src\Test.Automated`, dashboard `npm run lint`, dashboard `npm run build`, C# SDK build, JavaScript syntax check, Python bytecode compile, Postman JSON parse, and `git diff --check`. The existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears during .NET restore/build.
+
 - [x] Cap persisted `ArgumentsJson`, `ResultJson`, and `ResultPreview`.
-  - Progress: non-streaming persisted records store `{}` for arguments and capped safe summaries/previews for results. Raw argument/result audit storage remains pending with `ToolAuditWriter`.
-- [ ] Redact obvious secrets in tool arguments and results:
+  - Progress: non-streaming persisted records store redacted/capped arguments when enabled, redacted/capped summaries by default, and redacted/capped full results only when `StoreFullToolResults` is enabled.
+- [x] Redact obvious secrets in tool arguments and results:
   - bearer tokens
   - API keys
   - passwords
   - environment variable values configured as secrets
 - [x] Store a redacted `ResultSummaryJson` even when full result persistence is disabled.
   - Include success, tool name, denied, truncated, output character count, duration, and safe error.
-- [ ] Do not persist full stdout/stderr, retrieved web HTML, or raw process output unless `StoreFullToolResults` is explicitly enabled.
+- [x] Do not persist full stdout/stderr, retrieved web HTML, or raw process output unless `StoreFullToolResults` is explicitly enabled.
 - [x] Ensure public chat response traces never use `ArgumentsJson`, `ResultJson`, or provider-specific raw identifiers.
   - Progress: non-streaming chat responses now remap tool traces to Wilson-generated internal tool-call IDs and omit raw arguments/results.
-- [ ] Add tests proving redaction happens before request history and tool call persistence.
-  - Progress: database persistence/linkage/isolation/retention tests are added; explicit secret-redaction corpus tests remain pending for `ToolAuditWriter`.
+- [x] Add tests proving redaction happens before request history and tool call persistence.
+  - Progress: `ToolAuditRedactionPersistenceAsync` verifies secret-like arguments, bearer tokens, API keys, passwords, and stdout/stderr result payloads are redacted before tool-call persistence and remain redacted after request-history linkage.
 
 ## Phase 5: REST API And SSE Contracts
 
@@ -1096,12 +1098,13 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Update `CHANGELOG.md`.
   - Add an unreleased entry after implementation.
 - [ ] Update Docker docs in `README.md` or `docker` docs if new volume mounts are needed for tool working directories.
-- [ ] Add security guidance.
+- [~] Add security guidance.
   - Recommended defaults.
   - Allowed roots.
   - Approval policies.
   - Process execution risks.
   - Secret redaction limitations.
+  - Progress, 2026-06-26: README and REST API docs now describe audit redaction, default full-result suppression, safe chat traces, and database parameterization. Docker volume guidance, model compatibility detail, and full operational hardening guidance remain pending.
 - [ ] Document model compatibility.
   - OpenAI-compatible tool calling required.
   - OpenAI-compatible providers should use `OpenAIChatCompletions`.
@@ -1177,11 +1180,12 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - per-call truncation returns valid JSON.
   - per-turn truncation returns valid JSON.
   - truncation flags and original character counts are set.
-- [ ] Test audit writer:
+- [~] Test audit writer:
   - persisted arguments can be suppressed by policy.
   - persisted outputs can be summarized by policy.
   - secret-like fields are redacted recursively.
   - public/model-visible redaction preserves safe continuation tokens.
+  - Progress, 2026-06-26: `ToolAuditRedactionPersistenceAsync` covers persisted argument redaction, summary-only output persistence, recursive secret-field redaction, and request-history-linked redacted reads. Explicit argument-suppression and model-visible continuation-token tests remain pending.
 - [ ] Test `WorkingDirectoryGuard`.
   - relative paths inside root pass.
   - absolute paths inside root pass.
@@ -1352,10 +1356,11 @@ Each superset tool must have:
 - [ ] All filesystem paths must resolve inside allowed roots.
 - [ ] Process execution must be disabled independently by default or marked approval-required by default.
 - [ ] Destructive tools must require approval unless an admin explicitly disables `DestructiveToolsRequireApproval`.
-- [ ] Secrets must be redacted before API responses, request history, logs, and dashboard display.
-- [ ] Public chat traces must be generated from safe `ToolTrace`/`ToolProgressEvent` payloads, not from persisted audit rows.
-- [ ] Admin audit rows must still be redacted before persistence unless a future explicit secure-secret-storage design is implemented.
-- [ ] Tool arguments and results must be size capped.
+- [~] Secrets must be redacted before API responses, request history, logs, and dashboard display.
+  - Progress: tool audit arguments/results/summaries/previews/error fields are redacted before persistence and API reads; chat traces are safe. Structured logging remains minimal and should be rechecked when tool lifecycle logging is added.
+- [x] Public chat traces must be generated from safe `ToolTrace`/`ToolProgressEvent` payloads, not from persisted audit rows.
+- [x] Admin audit rows must still be redacted before persistence unless a future explicit secure-secret-storage design is implemented.
+- [x] Tool arguments and results must be size capped.
 - [ ] MCP server environment variables must never be returned unredacted.
 - [ ] Web tools must restrict URL schemes to `http` and `https`.
 - [ ] Approval endpoint must enforce conversation ownership.
