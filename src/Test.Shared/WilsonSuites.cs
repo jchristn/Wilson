@@ -46,6 +46,7 @@ namespace Test.Shared
             await FilesystemDiscoveryToolsAsync().ConfigureAwait(false);
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
+            await WebRetrieveToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
             await ToolAgentLoopAsync().ConfigureAwait(false);
             await ToolAgentApprovalPolicyAsync().ConfigureAwait(false);
@@ -621,7 +622,7 @@ namespace Test.Shared
 
             Settings enabled = new Settings { Tools = new ToolsSettings { Enabled = true } };
             ToolService enabledService = new ToolService(enabled);
-            if (enabledService.ListTools(false).Count != 0) throw new InvalidOperationException("Tool service should not expose file tools without a working directory and allowed root.");
+            if (enabledService.ListTools(false).Any(tool => String.Equals(tool.Category, ToolCategories.Filesystem, StringComparison.OrdinalIgnoreCase) || String.Equals(tool.Category, ToolCategories.Process, StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Tool service should not expose file or process tools without a working directory and allowed root.");
             ToolDescriptor? unavailableRead = enabledService.GetTool("read_file");
             if (unavailableRead == null || unavailableRead.Available || String.IsNullOrWhiteSpace(unavailableRead.UnavailableReason)) throw new InvalidOperationException("Expected read_file to be unavailable until workspace settings are configured.");
 
@@ -1686,6 +1687,72 @@ namespace Test.Shared
             finally
             {
                 TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static async Task WebRetrieveToolAsync()
+        {
+            Settings settings = new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                    MaxToolOutputChars = 4096,
+                    ToolTimeoutMs = 5000
+                }
+            };
+            ToolService service = new ToolService(settings);
+            ToolDescriptor? descriptor = service.GetTool("web_retrieve");
+            if (descriptor == null || !descriptor.Available || descriptor.Dangerous || descriptor.RequiresApproval) throw new InvalidOperationException("Expected web_retrieve to be available as a safe tool.");
+
+            ToolResult unsupported = await ExecuteToolAsync(service, "web_retrieve", """{"url":"file:///etc/passwd"}""").ConfigureAwait(false);
+            if (unsupported.Success || !String.Equals(unsupported.ErrorCode, "unsupported_url_scheme", StringComparison.Ordinal)) throw new InvalidOperationException("Expected web_retrieve to reject non-http schemes.");
+
+            int port = GetFreePort();
+            string html = "<!doctype html><html><head><title>Local Test</title><style>.x{}</style><script>secret()</script></head><body><h1>Hello &amp; world</h1><p>Local paragraph text.</p></body></html>";
+            Task serverTask = RunSingleHttpResponseServerAsync(port, "text/html; charset=utf-8", html, CancellationToken.None);
+            ToolResult result = await ExecuteToolAsync(service, "web_retrieve", "{\"url\":\"http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/sample\"}").ConfigureAwait(false);
+            await serverTask.ConfigureAwait(false);
+            if (!result.Success) throw new InvalidOperationException("Expected web_retrieve HTML request to succeed.");
+            using (JsonDocument retrieved = JsonDocument.Parse(result.Content ?? "{}"))
+            {
+                string title = retrieved.RootElement.GetProperty("title").GetString() ?? String.Empty;
+                string text = retrieved.RootElement.GetProperty("text").GetString() ?? String.Empty;
+                if (!String.Equals(title, "Local Test", StringComparison.Ordinal) || !text.Contains("Hello & world", StringComparison.Ordinal) || text.Contains("secret()", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected web_retrieve to extract safe HTML text and title.");
+            }
+
+            int truncatePort = GetFreePort();
+            Task truncateServerTask = RunSingleHttpResponseServerAsync(truncatePort, "text/plain", "abcdefghijklmnopqrstuvwxyz", CancellationToken.None);
+            ToolResult truncated = await ExecuteToolAsync(service, "web_retrieve", "{\"url\":\"http://127.0.0.1:" + truncatePort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/text\",\"max_content_chars\":5}").ConfigureAwait(false);
+            await truncateServerTask.ConfigureAwait(false);
+            if (!truncated.Success) throw new InvalidOperationException("Expected web_retrieve truncation request to succeed.");
+            using (JsonDocument truncatedDocument = JsonDocument.Parse(truncated.Content ?? "{}"))
+            {
+                if (!truncatedDocument.RootElement.GetProperty("truncated").GetBoolean() || !String.Equals(truncatedDocument.RootElement.GetProperty("text").GetString(), "abcde", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected web_retrieve max_content_chars truncation.");
+            }
+        }
+
+        private static async Task RunSingleHttpResponseServerAsync(int port, string contentType, string body, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                using NetworkStream stream = client.GetStream();
+                await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+                string headers = "HTTP/1.1 200 OK\r\nContent-Type: " + contentType + "\r\nContent-Length: " + bodyBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\nConnection: close\r\n\r\n";
+                byte[] headerBytes = Encoding.UTF8.GetBytes(headers);
+                await stream.WriteAsync(headerBytes.AsMemory(0, headerBytes.Length), token).ConfigureAwait(false);
+                await stream.WriteAsync(bodyBytes.AsMemory(0, bodyBytes.Length), token).ConfigureAwait(false);
+            }
+            finally
+            {
+                listener.Stop();
             }
         }
 

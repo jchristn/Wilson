@@ -420,13 +420,14 @@ Progress, 2026-06-26: `run_process` executor slice is implemented. It executes a
 ### Web Tools
 
 - [ ] Add `Microsoft.Playwright` package to `src/Wilson.Core/Wilson.Core.csproj` or a new `Wilson.Tools` project.
-- [ ] Implement `web_retrieve`.
+- [~] Implement `web_retrieve`.
   - Parameters: `url`, `browser`, `wait_until`, `timeout_ms`, `max_content_chars`, `include_html`.
   - Allow only absolute `http` and `https` URLs.
   - Default to Chromium and `domcontentloaded`.
   - Install missing browser on first run only when allowed by settings.
   - Return URL, final URL, title, HTTP status, content type, text, truncation flags, and optional HTML.
   - Add a setting to disable automatic Playwright browser install in locked-down deployments.
+  - Progress, 2026-06-27: initial HTTP/HTTPS retrieval is implemented and registered as a safe `web` built-in. It rejects non-HTTP schemes, fetches text/HTML, extracts HTML title and readable text, enforces timeout/cancellation and output caps, and returns structured JSON. Browser-rendered retrieval, `browser`, `wait_until`, and optional HTML return remain pending unless Playwright is added.
 - [ ] Add web search models and services.
   - Either port Mux's search provider abstractions into `src/Wilson.Core/Search` or create `src/Wilson.Search`.
   - Implement provider clients for Tavily and You.com compatible with Mux semantics.
@@ -1246,9 +1247,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - output truncation.
   - working directory enforcement.
   - Progress, 2026-06-27: added cancellation coverage to verify token cancellation is captured in the structured process result, and adjusted `ToolService` to allow a bounded cleanup wait for tools that translate cancellation into a result. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
-- [ ] Test `web_retrieve` behind a local test HTTP server.
+- [x] Test `web_retrieve` behind a local test HTTP server.
   - No external network dependency.
   - Include optional HTML test.
+  - Progress, 2026-06-27: `WebRetrieveToolAsync` covers local HTML title/text extraction without scripts/styles, non-HTTP scheme rejection, and `max_content_chars` truncation. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears. Explicit failed-status and timeout cases remain future hardening.
 - [ ] Test `web_search` with mocked providers.
   - default provider.
   - fallback.
@@ -1401,7 +1403,8 @@ Each superset tool must have:
 - [x] Admin audit rows must still be redacted before persistence unless a future explicit secure-secret-storage design is implemented.
 - [x] Tool arguments and results must be size capped.
 - [ ] MCP server environment variables must never be returned unredacted.
-- [ ] Web tools must restrict URL schemes to `http` and `https`.
+- [x] Web tools must restrict URL schemes to `http` and `https`.
+  - Progress, 2026-06-27: `web_retrieve` rejects non-absolute and non-HTTP(S) URLs; automated coverage verifies `file://` rejection.
 - [ ] Approval endpoint must enforce conversation ownership.
 - [ ] Tool calls must be tenant-scoped in every database query.
 - [ ] Tool executors must recheck effective policy at execution time, even when the registry already filtered the model-visible tool list.

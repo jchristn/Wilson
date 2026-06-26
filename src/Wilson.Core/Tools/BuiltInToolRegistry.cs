@@ -32,6 +32,7 @@ namespace Wilson.Core.Tools
             Register(new GlobTool());
             Register(new GrepTool());
             Register(new RunProcessTool());
+            Register(new WebRetrieveTool());
         }
 
         /// <summary>

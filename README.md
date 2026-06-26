@@ -160,6 +160,7 @@ Implemented built-in tools:
 - Read/discover: `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
 - Modify files/directories: `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - Process execution: `run_process`
+- Web retrieval: `web_retrieve` for absolute `http` and `https` URLs
 
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 

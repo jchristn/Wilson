@@ -30,6 +30,7 @@ Implemented built-in tools:
 - `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
 - `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - `run_process`
+- `web_retrieve` for absolute `http` and `https` URLs
 
 Write, edit, delete, directory-management, and process tools are marked dangerous and approval-required. Use narrow `allowedRoots` and avoid automatic approval unless the deployment is trusted and admin-only.
 
