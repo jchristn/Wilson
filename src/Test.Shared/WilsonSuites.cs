@@ -44,6 +44,7 @@ namespace Test.Shared
                     {
                         CreateAsyncCase("database-round-trip", "Database round trip", DatabaseRoundTripAsync),
                         CreateAsyncCase("database-parameterization", "Database parameterization", DatabaseParameterizationAsync),
+                        CreateAsyncCase("postgres-database-path", "PostgreSQL database path", PostgresDatabasePathAsync, !DockerAvailable(), "Docker is not available; PostgreSQL integration test skipped."),
                         CreateAsyncCase("tool-persistence", "Tool persistence", ToolPersistenceAsync),
                         CreateAsyncCase("tool-audit-redaction-persistence", "Tool audit redaction persistence", ToolAuditRedactionPersistenceAsync),
                         CreateSyncCase("id-length", "Identifier length", IdLength),
@@ -89,7 +90,7 @@ namespace Test.Shared
                 throw new InvalidOperationException(String.Join("; ", failures));
         }
 
-        private static TestCaseDescriptor CreateAsyncCase(string caseId, string displayName, Func<Task> executeAsync)
+        private static TestCaseDescriptor CreateAsyncCase(string caseId, string displayName, Func<Task> executeAsync, bool skip = false, string? skipReason = null)
         {
             return new TestCaseDescriptor(
                 "wilson",
@@ -100,7 +101,11 @@ namespace Test.Shared
                     token.ThrowIfCancellationRequested();
                     await executeAsync().ConfigureAwait(false);
                 },
-                new[] { "wilson" });
+                new[] { "wilson" })
+            {
+                Skip = skip,
+                SkipReason = skip ? skipReason : null
+            };
         }
 
         private static TestCaseDescriptor CreateSyncCase(string caseId, string displayName, Action execute)
@@ -260,6 +265,96 @@ namespace Test.Shared
             {
                 SqliteConnection.ClearAllPools();
                 if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static async Task PostgresDatabasePathAsync()
+        {
+            int port = GetFreePort();
+            string containerName = "wilson-test-postgres-" + Guid.NewGuid().ToString("N");
+            string connectionString = "Host=127.0.0.1;Port=" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + ";Database=wilson_test;Username=wilson;Password=wilson";
+            ProcessResult run = await RunProcessAsync(
+                "docker",
+                new List<string>
+                {
+                    "run",
+                    "-d",
+                    "--rm",
+                    "--name",
+                    containerName,
+                    "-e",
+                    "POSTGRES_DB=wilson_test",
+                    "-e",
+                    "POSTGRES_USER=wilson",
+                    "-e",
+                    "POSTGRES_PASSWORD=wilson",
+                    "-p",
+                    "127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":5432",
+                    "postgres:16-alpine"
+                },
+                60000).ConfigureAwait(false);
+            if (run.ExitCode != 0) throw new InvalidOperationException("Unable to start PostgreSQL test container: " + run.Error);
+
+            try
+            {
+                DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Postgres", ConnectionString = connectionString });
+                await WaitForPostgresAsync(database).ConfigureAwait(false);
+                await database.SeedAsync(new SeedSettings { AccessKey = "postgres-token", UserEmail = "postgres@example.com" }).ConfigureAwait(false);
+                if ((await database.GetTenantsAsync().ConfigureAwait(false)).Count != 1) throw new InvalidOperationException("Expected one PostgreSQL seeded tenant.");
+
+                string tenantId = "tenant-postgres";
+                Conversation conversation = new Conversation { TenantId = tenantId, UserId = "user-postgres", Title = "PostgreSQL Tool Persistence", RunnerId = "runner-postgres", Model = "model-postgres" };
+                await database.CreateConversationAsync(conversation).ConfigureAwait(false);
+                ChatMessage message = new ChatMessage
+                {
+                    TenantId = tenantId,
+                    ConversationId = conversation.Id,
+                    Role = "assistant",
+                    Content = "answer",
+                    RunnerId = "runner-postgres",
+                    Model = "model-postgres",
+                    RunId = "toolrun-postgres"
+                };
+                await database.CreateMessageAsync(message).ConfigureAwait(false);
+
+                ToolRun toolRun = new ToolRun { RunId = message.RunId, TenantId = tenantId, UserId = "user-postgres", ConversationId = conversation.Id, RunnerId = "runner-postgres", Model = "model-postgres", Status = ToolStatuses.Running };
+                await database.CreateToolRunAsync(toolRun).ConfigureAwait(false);
+                toolRun.Status = ToolStatuses.Completed;
+                toolRun.CompletedUtc = DateTime.UtcNow;
+                toolRun.ToolCallCount = 1;
+                await database.UpdateToolRunAsync(toolRun).ConfigureAwait(false);
+
+                ToolExecutionRecord record = new ToolExecutionRecord
+                {
+                    TenantId = tenantId,
+                    UserId = "user-postgres",
+                    ConversationId = conversation.Id,
+                    RunId = toolRun.RunId,
+                    AssistantMessageId = message.Id,
+                    ToolCallId = "toolcall-postgres",
+                    ToolName = "read_file",
+                    Status = ToolStatuses.PendingApproval,
+                    ApprovalPolicy = ToolApprovalPolicies.Ask,
+                    ArgumentsJson = "{}",
+                    ResultJson = "{}",
+                    ResultSummaryJson = "{}",
+                    ResultPreview = "Waiting for approval."
+                };
+                await database.CreateToolCallAsync(record).ConfigureAwait(false);
+                record.Status = ToolStatuses.Completed;
+                record.Success = true;
+                record.ResultPreview = "Completed.";
+                await database.UpdateToolCallAsync(record).ConfigureAwait(false);
+
+                ToolRun? storedRun = await database.GetToolRunAsync(tenantId, toolRun.RunId).ConfigureAwait(false);
+                if (storedRun == null || !String.Equals(storedRun.Status, ToolStatuses.Completed, StringComparison.Ordinal)) throw new InvalidOperationException("Expected PostgreSQL tool run update to persist.");
+                ToolExecutionRecord? storedRecord = await database.GetToolCallAsync(tenantId, record.Id).ConfigureAwait(false);
+                if (storedRecord == null || !storedRecord.Success) throw new InvalidOperationException("Expected PostgreSQL tool call update to persist.");
+                if ((await database.GetToolCallsForConversationAsync("other-tenant", conversation.Id).ConfigureAwait(false)).Count != 0) throw new InvalidOperationException("PostgreSQL tool calls leaked across tenants.");
+            }
+            finally
+            {
+                await RunProcessAsync("docker", new List<string> { "stop", containerName }, 30000).ConfigureAwait(false);
             }
         }
 
@@ -930,12 +1025,12 @@ namespace Test.Shared
 
                         using (JsonDocument mcpStatus = await GetJsonDocumentAsync(adminClient, "/v1.0/api/mcp").ConfigureAwait(false))
                         {
-                            if (mcpStatus.RootElement.GetProperty("enabled").GetBoolean()) throw new InvalidOperationException("Expected MCP to be disabled in this test server settings.");
+                            if (!mcpStatus.RootElement.GetProperty("enabled").GetBoolean()) throw new InvalidOperationException("Expected MCP to be enabled by default in this test server settings.");
                             if (mcpStatus.RootElement.GetProperty("configuredServerCount").GetInt32() != 0) throw new InvalidOperationException("Expected no configured MCP servers.");
                         }
 
                         McpStatusResponse reloadedMcp = await PostJsonAsync<McpStatusResponse>(adminClient, "/v1.0/api/mcp/reload", new { }).ConfigureAwait(false);
-                        if (reloadedMcp.Enabled || reloadedMcp.ToolCount != 0) throw new InvalidOperationException("Expected empty MCP reload status.");
+                        if (!reloadedMcp.Enabled || reloadedMcp.ToolCount != 0) throw new InvalidOperationException("Expected enabled but empty MCP reload status.");
 
                         await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/mcp", HttpStatusCode.Unauthorized).ConfigureAwait(false);
 
@@ -1683,6 +1778,88 @@ namespace Test.Shared
             }
         }
 
+        private static bool DockerAvailable()
+        {
+            try
+            {
+                ProcessResult result = RunProcessAsync("docker", new List<string> { "version" }, 10000).GetAwaiter().GetResult();
+                return result.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static async Task WaitForPostgresAsync(DatabaseDriver database)
+        {
+            Exception? last = null;
+            for (int i = 0; i < 60; i++)
+            {
+                try
+                {
+                    await database.InitializeAsync().ConfigureAwait(false);
+                    return;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException || ex is TimeoutException || ex is Npgsql.NpgsqlException || ex is System.Net.Sockets.SocketException)
+                {
+                    last = ex;
+                    await Task.Delay(500).ConfigureAwait(false);
+                }
+            }
+
+            throw new InvalidOperationException("PostgreSQL test container did not become ready.", last);
+        }
+
+        private static async Task<ProcessResult> RunProcessAsync(string fileName, List<string> arguments, int timeoutMs)
+        {
+            ProcessStartInfo startInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (string argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            using Process process = new Process { StartInfo = startInfo };
+            if (!process.Start()) throw new InvalidOperationException("Unable to start process " + fileName + ".");
+            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> errorTask = process.StandardError.ReadToEndAsync();
+            Task waitTask = process.WaitForExitAsync();
+            Task completed = await Task.WhenAny(waitTask, Task.Delay(timeoutMs)).ConfigureAwait(false);
+            if (completed != waitTask)
+            {
+                try
+                {
+                    process.Kill(true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                throw new TimeoutException("Process timed out: " + fileName + ".");
+            }
+
+            return new ProcessResult
+            {
+                ExitCode = process.ExitCode,
+                Output = await outputTask.ConfigureAwait(false),
+                Error = await errorTask.ConfigureAwait(false)
+            };
+        }
+
+        private sealed class ProcessResult
+        {
+            public int ExitCode { get; set; } = 0;
+            public string Output { get; set; } = String.Empty;
+            public string Error { get; set; } = String.Empty;
+        }
+
         private static async Task WaitForHttpAsync(HttpClient client)
         {
             for (int i = 0; i < 50; i++)
@@ -2221,6 +2398,41 @@ namespace Test.Shared
                 approvalRequiredSettings.Tools.DestructiveToolsRequireApproval = false;
                 ToolDescriptor? noApprovalWriteDescriptor = new ToolService(approvalRequiredSettings).GetTool("write_file");
                 if (noApprovalWriteDescriptor == null || noApprovalWriteDescriptor.RequiresApproval) throw new InvalidOperationException("Expected destructive approval override to clear approval requirement.");
+
+                Settings askSettings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        DefaultApprovalPolicy = ToolApprovalPolicies.Ask,
+                        ApprovalTimeoutMs = 30000,
+                        MaxToolIterations = 2,
+                        MaxToolCallsPerTurn = 2
+                    }
+                };
+                bool approvalCalled = false;
+                List<ToolProgressEvent> progressEvents = new List<ToolProgressEvent>();
+                ToolAgentResponse askResponse = await RunSingleToolThenFinalAsync(
+                    askSettings,
+                    "read_file",
+                    """{"file_path":"sample.txt"}""",
+                    message =>
+                    {
+                        string content = message.Content ?? String.Empty;
+                        if (!content.Contains("approval policy content", StringComparison.Ordinal)) throw new InvalidOperationException("Expected approved ask tool to execute and return file content.");
+                    },
+                    (call, context, iteration, sequenceNumber, startedUtc, token) =>
+                    {
+                        approvalCalled = true;
+                        return Task.FromResult(new ToolApprovalDecision { Approved = true, UserId = "approver-test" });
+                    },
+                    progressEvents).ConfigureAwait(false);
+                if (!approvalCalled) throw new InvalidOperationException("Expected ask approval callback to be invoked.");
+                if (!askResponse.Success || askResponse.ToolCalls.Count != 1 || !askResponse.ToolCalls[0].Success || askResponse.ToolCalls[0].Denied) throw new InvalidOperationException("Expected approved ask tool call to succeed.");
+                if (!progressEvents.Any(item => String.Equals(item.StatusCode, ToolStatuses.PendingApproval, StringComparison.Ordinal))) throw new InvalidOperationException("Expected pending approval progress event.");
+                if (!progressEvents.Any(item => String.Equals(item.StatusCode, ToolStatuses.Approved, StringComparison.Ordinal))) throw new InvalidOperationException("Expected approved progress event.");
             }
             finally
             {
@@ -2228,7 +2440,13 @@ namespace Test.Shared
             }
         }
 
-        private static async Task<ToolAgentResponse> RunSingleToolThenFinalAsync(Settings settings, string toolName, string arguments, Action<ModelChatMessage> assertToolMessage)
+        private static async Task<ToolAgentResponse> RunSingleToolThenFinalAsync(
+            Settings settings,
+            string toolName,
+            string arguments,
+            Action<ModelChatMessage> assertToolMessage,
+            ToolAgentService.ToolApprovalHandler? approvalHandler = null,
+            List<ToolProgressEvent>? progressEvents = null)
         {
             ToolService toolService = new ToolService(settings);
             int modelCalls = 0;
@@ -2262,15 +2480,23 @@ namespace Test.Shared
                     if (toolMessage == null) throw new InvalidOperationException("Expected tool result message before final model call.");
                     assertToolMessage(toolMessage);
                     return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "approval checked", FinishReason = "stop" });
-                });
+                },
+                approvalHandler);
 
             ToolAgentResponse response = await agent.RunAsync(
                 new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "http://localhost", Models = new List<string> { "test-model" } },
                 "test-model",
                 new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "Run policy test." } },
                 new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
-                new ToolExecutionContext { Settings = settings },
-                CancellationToken.None).ConfigureAwait(false);
+                new ToolExecutionContext { RunId = "toolrun-policy", TenantId = "tenant-policy", UserId = "user-policy", ConversationId = "conversation-policy", Settings = settings },
+                CancellationToken.None,
+                progressEvents == null
+                    ? null
+                    : (progress, token) =>
+                    {
+                        progressEvents.Add(progress);
+                        return Task.CompletedTask;
+                    }).ConfigureAwait(false);
 
             if (modelCalls != 2) throw new InvalidOperationException("Expected denial result to be sent back to the model for a final answer.");
             return response;
@@ -2287,6 +2513,7 @@ namespace Test.Shared
 
                 Settings settings = AgentTestSettings(workspace);
                 await AssertNoToolPathAsync(settings).ConfigureAwait(false);
+                await AssertCustomToolSystemPromptAsync(settings).ConfigureAwait(false);
                 await AssertMultipleToolCallsAsync(settings).ConfigureAwait(false);
                 await AssertSequentialToolCallsAsync(settings).ConfigureAwait(false);
                 await AssertUnknownAndDisabledToolsAsync(settings, workspace).ConfigureAwait(false);
@@ -2324,18 +2551,57 @@ namespace Test.Shared
                 modelCalls++;
                 if (request.Tools.Count == 0) throw new InvalidOperationException("Expected available tool definitions in tool-capable request.");
                 if (!String.Equals(request.ToolChoice, ToolChoiceModes.Auto, StringComparison.Ordinal)) throw new InvalidOperationException("Expected tool choice to be sent with the provider request.");
+                if (request.Messages.Count(message => String.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase)) != 1)
+                    throw new InvalidOperationException("Expected a single system message in the provider request.");
                 ModelChatMessage? toolInstruction = request.Messages.FirstOrDefault(message => String.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) && (message.Content ?? String.Empty).Contains("Wilson tool instructions", StringComparison.Ordinal));
                 if (toolInstruction == null || !(toolInstruction.Content ?? String.Empty).Contains("untrusted", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("Do not reveal", StringComparison.Ordinal))
                     throw new InvalidOperationException("Expected Wilson tool behavior instructions in provider request.");
-                if (!(toolInstruction.Content ?? String.Empty).Contains("Available Wilson tools:", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file", StringComparison.Ordinal))
+                if (!(toolInstruction.Content ?? String.Empty).Contains("Tool definitions attached to this request:", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file", StringComparison.Ordinal))
                     throw new InvalidOperationException("Expected Wilson tool inventory in provider request.");
-                if (!(toolInstruction.Content ?? String.Empty).Contains("MCP means Model Context Protocol", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("No MCP tools are currently available", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file [filesystem]", StringComparison.Ordinal))
+                if (!(toolInstruction.Content ?? String.Empty).Contains("MCP means Model Context Protocol", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("No MCP tools are currently attached", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file [filesystem]", StringComparison.Ordinal))
                     throw new InvalidOperationException("Expected category-aware MCP guidance in provider request.");
+                if (!(toolInstruction.Content ?? String.Empty).Contains("How Wilson tools run:", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("parameters:", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("\"file_path\"", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected execution semantics and parameter schemas in provider request.");
+                if (!(toolInstruction.Content ?? String.Empty).Contains("write_file [filesystem] approval_required dangerous", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected approval and danger metadata in provider request.");
                 return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "plain answer", FinishReason = "stop" });
             });
 
             ToolAgentResponse response = await RunAgentAsync(agent, settings, "answer directly").ConfigureAwait(false);
             if (!response.Success || modelCalls != 1 || response.ToolCallCount != 0 || response.ToolCalls.Count != 0 || !String.Equals(response.Content, "plain answer", StringComparison.Ordinal)) throw new InvalidOperationException("Expected no-tool path to return the final assistant answer.");
+        }
+
+        private static async Task AssertCustomToolSystemPromptAsync(Settings settings)
+        {
+            const string mainSystemPrompt = "Visible main system prompt";
+            const string customToolPrompt = "CUSTOM VISIBLE TOOL PROMPT";
+            int modelCalls = 0;
+            ToolAgentService agent = new ToolAgentService(new ToolService(settings), (runner, request, token) =>
+            {
+                modelCalls++;
+                List<ModelChatMessage> systemMessages = request.Messages.Where(message => String.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (systemMessages.Count != 1) throw new InvalidOperationException("Expected visible system and tool prompts to be combined into one provider system message.");
+                string content = systemMessages[0].Content ?? String.Empty;
+                if (!content.Contains(mainSystemPrompt, StringComparison.Ordinal) || !content.Contains(customToolPrompt, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected provider request to contain both visible prompt fields.");
+                if (content.Contains("Tool definitions attached to this request:", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected custom visible tool prompt to replace generated tool instructions.");
+                return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "custom prompt answer", FinishReason = "stop" });
+            });
+
+            ToolAgentResponse response = await RunAgentAsync(
+                agent,
+                settings,
+                "answer with custom tool prompt",
+                new CompletionRequestSettings
+                {
+                    SystemPrompt = mainSystemPrompt,
+                    ToolSystemPrompt = customToolPrompt,
+                    MaxTokens = 128,
+                    Temperature = 0,
+                    TopP = 1
+                }).ConfigureAwait(false);
+            if (!response.Success || modelCalls != 1 || !String.Equals(response.Content, "custom prompt answer", StringComparison.Ordinal)) throw new InvalidOperationException("Expected custom tool prompt path to return the final assistant answer.");
         }
 
         private static async Task AssertMultipleToolCallsAsync(Settings settings)
@@ -2500,13 +2766,13 @@ namespace Test.Shared
             };
         }
 
-        private static async Task<ToolAgentResponse> RunAgentAsync(ToolAgentService agent, Settings settings, string prompt)
+        private static async Task<ToolAgentResponse> RunAgentAsync(ToolAgentService agent, Settings settings, string prompt, CompletionRequestSettings? completionSettings = null)
         {
             return await agent.RunAsync(
                 new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "http://localhost", Models = new List<string> { "test-model" } },
                 "test-model",
                 new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = prompt } },
-                new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
+                completionSettings ?? new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
                 new ToolExecutionContext { Settings = settings },
                 CancellationToken.None).ConfigureAwait(false);
         }

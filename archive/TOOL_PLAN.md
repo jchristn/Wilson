@@ -492,6 +492,7 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - Include model, temperature, top_p, max_tokens, and runner-specific fields.
   - Progress: provider message conversion, tool definition inclusion, parallel flag, and model/options fields are implemented.
   - Progress, 2026-06-27: Wilson tool behavior instructions are injected into the non-streaming agent loop when tools are available. Fake-transport tests verify tool definitions, tool choice, and instructions that tool output is untrusted and hidden policy/secret details must not be revealed. Streaming request-builder coverage remains pending with streaming tool support.
+  - Progress, 2026-06-26: dashboard chat exposes both the main system prompt and generated Wilson tool instructions in the System Prompt modal. Users can edit either field, leave fields blank to use defaults, or restore defaults. Tool-enabled dashboard requests send the visible tool instruction text, and the agent combines the main prompt plus tool instructions into a single provider system message.
 - [x] Normalize runner URLs.
   - For `OpenAI`, default path should be `/v1/chat/completions` when endpoint is `https://api.openai.com`.
   - For `OpenAICompatible`, document whether endpoint is API root or chat-completions root; make `ChatCompletionsPath` explicit to remove ambiguity.
@@ -619,9 +620,10 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - `toolcallcount INTEGER NOT NULL DEFAULT 0`
   - `toolelapsedms REAL NOT NULL DEFAULT 0`
   - `agentiterations INTEGER NOT NULL DEFAULT 0`
-- [!] Verify SQLite and PostgreSQL DDL compatibility.
-  - SQLite is covered automatically; PostgreSQL requires external database infrastructure for manual verification.
-  - Progress: additive DDL uses SQL accepted by SQLite and PostgreSQL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, text timestamps, integer booleans). Automated validation covers SQLite; PostgreSQL validation requires an external PostgreSQL service and remains manual.
+- [x] Verify SQLite and PostgreSQL DDL compatibility.
+  - SQLite is covered automatically.
+  - Progress: additive DDL uses SQL accepted by SQLite and PostgreSQL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, text timestamps, integer booleans).
+  - Progress, 2026-06-26: `PostgresDatabasePathAsync` now starts a throwaway `postgres:16-alpine` container on a random localhost port when Docker is available, initializes the PostgreSQL schema, and verifies seed/create/update/read behavior for conversations, messages, tool runs, and tool calls. If Docker is unavailable, the case reports SKIP.
 - [x] Add read helpers that tolerate absent columns for old databases during rolling upgrades.
 
 ### Database Methods
@@ -908,12 +910,12 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Elapsed milliseconds.
   - Copy buttons for arguments and results.
   - Use safe public trace data in normal chat. If raw/redacted audit arguments or outputs are shown in chat, require admin/tenant-admin authorization and label them as audit details.
-- [!] Add approval UI for `ask`.
+- [x] Add approval UI for `ask`.
   - Inline pending approval row under the active assistant message.
   - Buttons: Approve, Deny, Always for this run.
   - Disable buttons after decision.
   - Show approval timeout countdown or absolute timeout.
-  - Human/interactive workflow required; approval endpoint exists for persisted proposed/pending records, but live pause/resume is intentionally outside this implementation.
+  - Progress, 2026-06-26: streaming ask approval now creates a pending persisted tool-call record, emits pending/approved SSE events, waits for the approval endpoint, and times out to denial if the user does not decide. The dashboard renders a compact inline approval strip with Approve, Deny, and Always actions; Always approves later ask-gated calls in the same run.
 - [x] Add failure UI.
   - Failed tool rows should be visible but visually restrained.
   - Error detail should be expandable.
@@ -925,7 +927,8 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - No large decorative panels.
   - Result previews must wrap and not overflow.
   - Use existing color variables and avoid a new dominant palette.
-  - Progress: compact, responsive tool trace rows and toolbar selector styles are implemented for non-streaming traces. Live running/approval states remain pending.
+  - Progress: compact, responsive tool trace rows and toolbar selector styles are implemented for non-streaming traces.
+  - Progress, 2026-06-26: live running and pending approval states render inline in the assistant message without exposing raw arguments or results.
 
 ### Chat Controls
 
@@ -1345,8 +1348,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Test conversation delete removes tool rows.
 - [x] Test request history tool metrics.
 - [x] Test retention deletes expired tool-call audit rows.
-- [!] Add PostgreSQL test path if existing test infrastructure supports it; otherwise document manual verification.
-  - Manual/external infrastructure required; current automated database coverage uses SQLite and the plan documents PostgreSQL DDL compatibility assumptions.
+- [x] Add PostgreSQL test path if existing test infrastructure supports it; otherwise document manual verification.
+  - Progress, 2026-06-26: `PostgresDatabasePathAsync` runs PostgreSQL in Docker on a random localhost port, verifies schema initialization and database persistence, and reports SKIP when Docker is unavailable.
 
 ### Server/API Tests
 
@@ -1360,7 +1363,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add API tests for request-history tool calls authorization.
   - Progress, 2026-06-27: `ToolDiagnosticsApiAsync` seeds a conversation, tool run, tool call, and request-history row in the live server database, then verifies conversation owner access, tenant/global admin request-history access, tenant scoping via `tenantId`, and unauthenticated denial for conversation/request-history tool-call routes. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [x] Add streaming SSE parser tests for tool events.
-  - Progress, 2026-06-26: dashboard SSE parser and event merge logic are exercised through lint/build and live server API tests cover the public response shape. A dedicated dashboard unit runner remains a broader frontend-test infrastructure decision.
+  - Progress, 2026-06-26: dashboard SSE parser and event merge logic are covered by Vitest unit tests, and live server API tests cover the public response shape.
 - [x] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
   - Progress, 2026-06-27: `PublicChatToolTraceApiAsync` uses a local fake OpenAI-compatible tool-call endpoint and a real Wilson chat request to verify the model receives the raw tool result internally while the public chat response omits raw output, provider tool-call IDs, raw argument/result fields, provider/model fields, and hidden approval fields. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [x] Add OpenAPI generation test proving schemas and paths are present.
@@ -1380,8 +1383,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list.
   - Progress: passed on 2026-06-26 after persistence-backed conversation reload and request-history tool activity.
   - Progress: passed on 2026-06-26 after SDK/docs/Postman updates.
-- [!] Add unit tests if a test runner is introduced.
-  - Requires a future/human decision to introduce a dashboard unit test runner. Current coverage is dashboard lint/build plus backend/live API tests and manual QA checklist.
+- [x] Add unit tests if a test runner is introduced.
+  - Progress, 2026-06-26: dashboard now has a Vitest runner and focused unit tests for SSE frame parsing and safe tool-progress merging, including pending approval metadata and raw payload omission.
 - [x] Add manual QA checklist if no dashboard test framework is added:
   - tools disabled chat unchanged
   - active tool call shows running state
@@ -1392,7 +1395,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - settings validate/test buttons show unavailable reasons before saving
   - approval workflow works
   - reload conversation preserves tool activity
-  - Progress, 2026-06-27: checklist is present for manual QA. Running-state, heartbeat, and approval checks remain blocked until streaming tool events and interactive approval are implemented.
+  - Progress, 2026-06-27: checklist is present for manual QA.
+  - Progress, 2026-06-26: running-state and approval UI paths now have streaming event support; browser-level manual QA remains useful for final visual acceptance.
   - mobile layout does not overlap
 
 ### SDK Tests
@@ -1463,6 +1467,7 @@ Each superset tool must have:
 - [x] Tool executors must recheck effective policy at execution time, even when the registry already filtered the model-visible tool list.
 - [x] Tool output appended back into model context must be treated as untrusted content and the system prompt must instruct the model accordingly.
   - Progress, 2026-06-27: `ToolAgentService` injects Wilson tool instructions for tool-enabled requests, warning that tool outputs are untrusted and must not be followed as instructions or used to reveal secrets/policy details. Automated fake-transport coverage verifies the instruction is present.
+  - Progress, 2026-06-26: tool instructions are no longer hidden from dashboard users; the generated default is fetched through `/v1.0/api/tools/instructions`, shown/editable in the prompt UI, and sent back as part of the visible request settings.
 
 ## Rollout Plan
 

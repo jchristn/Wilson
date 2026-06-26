@@ -54,13 +54,14 @@ class ApiClient {
   conversationToolCalls(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/tool-calls`, null, params); }
   chat(payload, options = {}) { return this.request('POST', '/v1.0/api/chat', payload, null, options); }
   tools() { return this.request('GET', '/v1.0/api/tools'); }
+  toolInstructions() { return this.request('GET', '/v1.0/api/tools/instructions'); }
   validateTools(payload = {}) { return this.request('POST', '/v1.0/api/tools/validate', payload); }
   testTools(payload = {}) { return this.request('POST', '/v1.0/api/tools/test', payload); }
   mcpStatus() { return this.request('GET', '/v1.0/api/mcp'); }
   reloadMcp() { return this.request('POST', '/v1.0/api/mcp/reload', {}); }
   tool(name) { return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`); }
   toolRun(id, params = {}) { return this.request('GET', `/v1.0/api/tool-runs/${encodeURIComponent(id)}`, null, params); }
-  approveToolCall(runId, toolCallId, approved, reason = '', params = {}) { return this.request('POST', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}/tool-calls/${encodeURIComponent(toolCallId)}/approval`, { approved, reason }, params); }
+  approveToolCall(runId, toolCallId, approved, reason = '', params = {}, alwaysForRun = false) { return this.request('POST', `/v1.0/api/tool-runs/${encodeURIComponent(runId)}/tool-calls/${encodeURIComponent(toolCallId)}/approval`, { approved, reason, alwaysForRun }, params); }
   tenants(params = {}) { return this.request('GET', '/v1.0/api/tenants', null, params); }
   createTenant(payload) { return this.request('POST', '/v1.0/api/tenants', payload); }
   updateTenant(id, payload) { return this.request('PUT', `/v1.0/api/tenants/${id}`, payload); }

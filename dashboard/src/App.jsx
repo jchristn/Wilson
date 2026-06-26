@@ -9,6 +9,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ApiClient from './utils/api';
+import { mergeToolProgress, parseSseFrame } from './utils/sseTools';
 import './index.css';
 
 const text = {
@@ -351,40 +352,6 @@ function chatModelsForRunner(runner) {
   return runner.models || [];
 }
 
-function parseSseFrame(frame) {
-  let event = '';
-  const data = [];
-  frame.split(/\r?\n/).forEach(line => {
-    if (line.startsWith('event:')) event = line.slice(6).trim();
-    if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-  });
-  return { event, data: data.join('\n') };
-}
-
-function mergeToolProgress(calls, progress) {
-  if (!progress || !progress.toolCallId) return calls;
-  const nextCall = {
-    toolCallId: progress.toolCallId,
-    toolName: progress.toolName || '',
-    displayLabel: progress.displayLabel || progress.toolName || 'Tool',
-    iteration: progress.iteration || 0,
-    sequenceNumber: progress.sequenceNumber || 0,
-    success: progress.success,
-    denied: progress.denied,
-    truncated: progress.truncated,
-    outputCharacters: progress.outputCharacters || 0,
-    resultCount: progress.resultCount,
-    elapsedMs: progress.elapsedMs || 0,
-    summary: progress.summary || '',
-    startedUtc: progress.startedUtc || '',
-    completedUtc: progress.completedUtc || '',
-    statusCode: progress.statusCode || ''
-  };
-  const index = calls.findIndex(call => call.toolCallId === nextCall.toolCallId);
-  if (index < 0) return [...calls, nextCall];
-  return calls.map((call, callIndex) => callIndex === index ? { ...call, ...nextCall } : call);
-}
-
 function Chat({ api }) {
   const [runners, setRunners] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -400,6 +367,8 @@ function Chat({ api }) {
     return stored === 'deny' ? 'deny' : 'auto';
   });
   const [toolCatalog, setToolCatalog] = useState([]);
+  const [toolInstructions, setToolInstructions] = useState('');
+  const [toolSystemPrompt, setToolSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.toolSystemPrompt') || '');
   const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.systemPrompt') || defaultSystemPrompt);
   const [completionSettings, setCompletionSettings] = useState(() => {
     try { return { ...defaultCompletionSettings, ...JSON.parse(localStorage.getItem('wilson.chat.completionSettings') || '{}') }; }
@@ -467,12 +436,18 @@ function Chat({ api }) {
     area.style.height = `${area.scrollHeight}px`;
   }, [prompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.systemPrompt', systemPrompt); }, [systemPrompt]);
+  useEffect(() => { localStorage.setItem('wilson.chat.toolSystemPrompt', toolSystemPrompt); }, [toolSystemPrompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.completionSettings', JSON.stringify(completionSettings)); }, [completionSettings]);
   useEffect(() => { localStorage.setItem('wilson.chat.toolsEnabled', String(toolsEnabled)); }, [toolsEnabled]);
   useEffect(() => { localStorage.setItem('wilson.chat.toolApprovalPolicy', toolApprovalPolicy); }, [toolApprovalPolicy]);
   useEffect(() => {
     let cancelled = false;
     api.tools().then(items => { if (!cancelled) setToolCatalog(Array.isArray(items) ? items : []); }).catch(() => { if (!cancelled) setToolCatalog([]); });
+    return () => { cancelled = true; };
+  }, [api]);
+  useEffect(() => {
+    let cancelled = false;
+    api.toolInstructions().then(result => { if (!cancelled) setToolInstructions(result?.systemPrompt || ''); }).catch(() => { if (!cancelled) setToolInstructions(''); });
     return () => { cancelled = true; };
   }, [api]);
 
@@ -542,9 +517,14 @@ function Chat({ api }) {
 
   async function send() {
     if (!prompt.trim() || !model || busy) return;
+    if (toolRequestEnabled && !toolSystemPrompt && !effectiveToolInstructions) {
+      setModelError('Tool instructions are not loaded yet. Open System Prompt after the tool defaults load, or turn Tools off for this request.');
+      return;
+    }
     const controller = new AbortController();
     generationAbort.current = controller;
-    const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, completionSettings) };
+    const visibleToolSystemPrompt = toolRequestEnabled ? (toolSystemPrompt || effectiveToolInstructions) : '';
+    const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, visibleToolSystemPrompt, completionSettings) };
     body.toolsEnabled = toolRequestEnabled;
     if (toolRequestEnabled) body.approvalPolicy = toolApprovalPolicy;
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
@@ -673,6 +653,7 @@ function Chat({ api }) {
   const modelLoading = loadingModelKey === selectedModelKey;
   const availableTools = toolCatalog.filter(item => item.available);
   const toolRequestEnabled = toolsEnabled;
+  const effectiveToolInstructions = toolRequestEnabled ? toolInstructions : '';
   const toolToggleDisabled = busy;
   return (
     <div className="chat-layout">
@@ -727,19 +708,20 @@ function Chat({ api }) {
         <div className="chat-toolbar">
           <label title="Select the model server used for chat requests">{text.runner}<select title="Select the model server used for chat requests" value={runnerId} onChange={e => setRunnerId(e.target.value)}>{runners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label title="Select any model returned by the configured server">{text.model}<select title="Select the model to use for chat requests" value={model} onChange={e => setModel(e.target.value)} disabled={modelOptions.length < 1}>{modelOptions.length < 1 ? <option value="">{loadingModels ? 'Loading models' : text.noModels}</option> : modelOptions.map(item => <option key={item}>{item}</option>)}</select></label>
-          <button className="icon-button" title="Refresh model servers and query Ollama model lists" onClick={loadRunners}><RefreshCw size={16} /></button>
-          {canLoadModel && <button className="secondary toolbar-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}Load Model</button>}
-          {modelLoading && <span className="model-loading-note" title="Model loading may take several minutes depending on model size">Model loading may take several minutes depending on model size</span>}
-          <button className="secondary toolbar-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} />System Prompt</button>
-          <button className="secondary toolbar-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} />Settings</button>
-          <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
-          <button className="icon-button" title="Show available tool catalog" onClick={() => setToolCatalogOpen(true)}><ListFilter size={16} /></button>
-          <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
-            <option value="auto">Auto</option>
-            <option value="deny">Deny</option>
-            <option value="ask">Ask</option>
-          </select>
-          <label className="toggle" title="Enable streaming responses"><input title="Toggle streaming responses" type="checkbox" checked={streaming} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
+          <div className="chat-toolbar-actions">
+            <button className="icon-button" title="Refresh model servers and query Ollama model lists" onClick={loadRunners}><RefreshCw size={16} /></button>
+            {canLoadModel && <button className="secondary toolbar-button model-load-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}<span className="button-label">Load Model</span></button>}
+            <button className="secondary toolbar-button system-prompt-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} /><span className="button-label">System Prompt</span></button>
+            <button className="secondary toolbar-button settings-button" title="Edit generation settings used for chat completion requests" onClick={() => setCompletionSettingsOpen(true)}><Settings size={16} /><span className="button-label">Settings</span></button>
+            <label className="toggle" title={availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'}><input title="Toggle tools for chat requests" type="checkbox" checked={toolRequestEnabled} disabled={toolToggleDisabled} onChange={e => setToolsEnabled(e.target.checked)} />Tools</label>
+            <button className="icon-button" title="Show available tool catalog" onClick={() => setToolCatalogOpen(true)}><ListFilter size={16} /></button>
+            <select className="compact-select" title="Tool approval policy for this chat request" value={toolApprovalPolicy} disabled={!toolRequestEnabled || busy} onChange={e => setToolApprovalPolicy(e.target.value)}>
+              <option value="auto">Auto</option>
+              <option value="deny">Deny</option>
+              <option value="ask">Ask</option>
+            </select>
+            <label className="toggle" title="Enable streaming responses"><input title="Toggle streaming responses" type="checkbox" checked={streaming} onChange={e => setStreaming(e.target.checked)} />{text.streaming}</label>
+          </div>
         </div>
         {modelError && <div className="model-error" title="Model loading status">{modelError}</div>}
         <div className="messages">
@@ -759,9 +741,10 @@ function Chat({ api }) {
           <button className={busy ? 'send stop' : 'send'} onClick={busy ? stopGeneration : send} disabled={!busy && (!prompt.trim() || !model)} title={busy ? 'Stop the current model response' : 'Send this message to Wilson'}>{busy ? <Square size={18} /> : <Send size={20} />}</button>
         </div>
       </section>
-      {systemPromptOpen && <SystemPromptModal value={systemPrompt} onChange={setSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
+      {systemPromptOpen && <SystemPromptModal value={systemPrompt} toolsEnabled={toolRequestEnabled} toolValue={toolSystemPrompt || toolInstructions} defaultToolInstructions={toolInstructions} onChange={setSystemPrompt} onToolChange={setToolSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
       {completionSettingsOpen && <CompletionSettingsModal settings={completionSettings} runner={selectedRunner} onChange={setCompletionSettings} onClose={() => setCompletionSettingsOpen(false)} />}
       {toolCatalogOpen && <ToolCatalogModal tools={toolCatalog} onClose={() => setToolCatalogOpen(false)} />}
+      {modelLoading && <ModelLoadingModal model={model} runnerName={selectedRunner?.name || runnerId} />}
     </div>
   );
 }
@@ -780,7 +763,7 @@ function Message({ api, message, conversation }) {
   return (
     <div className={`message ${message.role}`}>
       <div className="bubble">{message.content ? <MarkdownMessage content={message.content} /> : (message.role === 'assistant' ? <ThinkingIndicator /> : '')}</div>
-      {message.role === 'assistant' && toolCalls.length > 0 && <ToolActivity toolCalls={toolCalls} metrics={message.toolMetrics} />}
+      {message.role === 'assistant' && toolCalls.length > 0 && <ToolActivity api={api} toolCalls={toolCalls} metrics={message.toolMetrics} />}
       {message.role === 'assistant' && <div className="rating">
         <button onClick={() => setFeedbackDraft({ rating: 1, comment: '' })} disabled={rated} title="Mark this assistant response as helpful and optionally explain why"><ThumbsUp size={15} /></button>
         <button onClick={() => setFeedbackDraft({ rating: -1, comment: '' })} disabled={rated} title="Mark this assistant response as not helpful and optionally explain why"><ThumbsDown size={15} /></button>
@@ -799,42 +782,67 @@ function Message({ api, message, conversation }) {
   );
 }
 
-function ToolActivity({ toolCalls, metrics }) {
-  const [open, setOpen] = useState(toolCalls.some(call => call.success === false || call.denied || call.statusCode === 'running'));
+function ToolActivity({ api, toolCalls, metrics }) {
+  const [open, setOpen] = useState(toolCalls.some(call => call.success === false || call.denied || call.statusCode === 'running' || call.statusCode === 'pending_approval'));
   const count = toolCalls.length;
   const failed = toolCalls.filter(call => call.success === false || call.denied).length;
   const running = toolCalls.filter(call => call.statusCode === 'running').length;
+  const pending = toolCalls.filter(call => call.statusCode === 'pending_approval').length;
   const runtime = metrics?.totalToolElapsedMs ?? toolCalls.reduce((sum, call) => sum + Number(call.elapsedMs || 0), 0);
-  const label = running > 0 ? `${running} running` : failed > 0 ? `${failed} failed` : 'Completed';
+  const label = pending > 0 ? `${pending} pending` : running > 0 ? `${running} running` : failed > 0 ? `${failed} failed` : 'Completed';
   return (
     <div className="tool-activity">
       <button className="tool-activity-summary" type="button" title="Show tool activity for this response" onClick={() => setOpen(value => !value)}>
         <Activity size={15} />
         <span>Tool activity</span>
         <span className="tool-activity-count">{count} tool{count === 1 ? '' : 's'}</span>
-        <span className={running > 0 ? 'tool-status running' : failed > 0 ? 'tool-status failed' : 'tool-status complete'}>{label}</span>
+        <span className={pending > 0 || running > 0 ? 'tool-status running' : failed > 0 ? 'tool-status failed' : 'tool-status complete'}>{label}</span>
         <span className="tool-runtime"><Clock size={13} />{formatNumber(runtime)} ms</span>
         <ChevronDown size={15} className={open ? 'open' : ''} />
       </button>
-      {open && <div className="tool-call-list">{toolCalls.map((call, index) => <ToolCallRow key={call.toolCallId || `${call.toolName}-${index}`} call={call} />)}</div>}
+      {open && <div className="tool-call-list">{toolCalls.map((call, index) => <ToolCallRow key={call.toolCallId || `${call.toolName}-${index}`} api={api} call={call} />)}</div>}
     </div>
   );
 }
 
-function ToolCallRow({ call }) {
+function ToolCallRow({ api, call }) {
   const [open, setOpen] = useState(false);
-  const running = call.statusCode === 'running';
-  const success = !running && call.success !== false && !call.denied;
-  const statusLabel = running ? 'running' : success ? 'completed' : call.denied ? 'denied' : 'failed';
+  const [decisionBusy, setDecisionBusy] = useState('');
+  const [localStatus, setLocalStatus] = useState('');
+  const statusCode = localStatus || call.statusCode || '';
+  const pending = statusCode === 'pending_approval';
+  const approved = statusCode === 'approved';
+  const running = statusCode === 'running';
+  const denied = statusCode === 'denied' || call.denied;
+  const success = !pending && !approved && !running && !denied && call.success !== false;
+  const statusLabel = pending ? 'pending' : approved ? 'approved' : running ? 'running' : success ? 'completed' : denied ? 'denied' : 'failed';
+  async function approve(approvedValue, alwaysForRun = false) {
+    if (!api || !call.runId || !call.toolCallId || decisionBusy) return;
+    setDecisionBusy(alwaysForRun ? 'always' : approvedValue ? 'approve' : 'deny');
+    try {
+      await api.approveToolCall(call.runId, call.toolCallId, approvedValue, approvedValue ? '' : 'Denied from chat.', {}, alwaysForRun);
+      setLocalStatus(approvedValue ? 'approved' : 'denied');
+    } finally {
+      setDecisionBusy('');
+    }
+  }
   return (
     <div className="tool-call-row">
       <button className="tool-call-main" type="button" title={`Show ${call.displayLabel || call.toolName || 'tool'} details`} onClick={() => setOpen(value => !value)}>
-        {running ? <RefreshCw size={14} className="spin" /> : success ? <Check size={14} /> : <AlertCircle size={14} />}
+        {pending || running ? <RefreshCw size={14} className="spin" /> : success || approved ? <Check size={14} /> : <AlertCircle size={14} />}
         <span className="tool-call-name">{call.displayLabel || call.toolName || 'Tool'}</span>
-        <span className={running ? 'tool-status running' : success ? 'tool-status complete' : 'tool-status failed'}>{statusLabel}</span>
+        <span className={pending || running ? 'tool-status running' : success || approved ? 'tool-status complete' : 'tool-status failed'}>{statusLabel}</span>
         <span className="tool-runtime">{formatNumber(call.elapsedMs || 0)} ms</span>
         <ChevronDown size={14} className={open ? 'open' : ''} />
       </button>
+      {pending && (
+        <div className="tool-approval-actions" title="Approve or deny this pending tool call">
+          <span>{call.approvalExpiresUtc ? `Expires ${formatDate(call.approvalExpiresUtc)}` : 'Waiting for approval'}</span>
+          <button className="secondary compact-button" disabled={!!decisionBusy} onClick={() => approve(false)}>{decisionBusy === 'deny' ? <RefreshCw size={14} className="spin" /> : <X size={14} />}Deny</button>
+          <button className="secondary compact-button" disabled={!!decisionBusy} onClick={() => approve(true, true)}>{decisionBusy === 'always' ? <RefreshCw size={14} className="spin" /> : <Check size={14} />}Always</button>
+          <button className="primary compact-button" disabled={!!decisionBusy} onClick={() => approve(true)}>{decisionBusy === 'approve' ? <RefreshCw size={14} className="spin" /> : <Check size={14} />}Approve</button>
+        </div>
+      )}
       {open && (
         <div className="tool-call-details">
           <KeyValueTable rows={[
@@ -899,10 +907,11 @@ function PageIntro({ title, description, actions = null }) {
   );
 }
 
-function normalizeCompletionSettings(systemPrompt, settings) {
+function normalizeCompletionSettings(systemPrompt, toolSystemPrompt, settings) {
   const numberOrNull = (value) => value === '' || value === null || value === undefined ? null : Number(value);
   return {
     systemPrompt: systemPrompt || defaultSystemPrompt,
+    toolSystemPrompt: toolSystemPrompt || '',
     temperature: numberOrNull(settings.temperature),
     topP: numberOrNull(settings.topP),
     maxTokens: numberOrNull(settings.maxTokens),
@@ -914,20 +923,40 @@ function normalizeCompletionSettings(systemPrompt, settings) {
   };
 }
 
-function SystemPromptModal({ value, onChange, onClose }) {
+function SystemPromptModal({ value, toolsEnabled, toolValue, defaultToolInstructions, onChange, onToolChange, onClose }) {
   const [draft, setDraft] = useState(value || defaultSystemPrompt);
+  const [toolDraft, setToolDraft] = useState(toolValue || '');
+  const [toolEdited, setToolEdited] = useState(false);
+  useEffect(() => {
+    if (!toolEdited) setToolDraft(toolValue || '');
+  }, [toolValue, toolEdited]);
   return (
     <Modal title="System Prompt" onClose={onClose} wide>
       <div className="chat-settings-form">
-        <label title="System prompt sent with each chat completion request">
-          System prompt
-          <textarea className="system-prompt-textarea" title="Instructions that define how the selected model should behave" value={draft} onChange={e => setDraft(e.target.value)} />
-        </label>
+        <div className="prompt-field-group">
+          <label title="System prompt sent with each chat completion request">
+            System prompt
+            <textarea className="system-prompt-textarea" title="Instructions that define how the selected model should behave. Leave blank to use the Wilson default." value={draft} onChange={e => setDraft(e.target.value)} />
+          </label>
+          <div className="prompt-field-actions">
+            <span>Leave blank to use the default Wilson system prompt.</span>
+            <button className="secondary compact-button" title="Restore the default Wilson system prompt" onClick={() => setDraft(defaultSystemPrompt)}>Restore Default</button>
+          </div>
+        </div>
+        <div className="prompt-field-group">
+          <label title={toolsEnabled ? 'Tool instructions appended to the system prompt when tools are enabled' : 'Tool instructions are visible and editable here, but are not sent while Tools is off'}>
+            Wilson tool instructions
+            <textarea className="system-prompt-textarea tool-instructions-textarea" title="Editable tool instructions appended to the model system prompt when tools are enabled. Leave blank to use the generated default." value={toolDraft} onChange={e => { setToolEdited(true); setToolDraft(e.target.value); }} />
+          </label>
+          <div className="prompt-field-actions">
+            <span>{toolsEnabled ? (defaultToolInstructions ? 'Leave blank to use the generated Wilson default for the current tool catalog.' : 'Default tool instructions are still loading or unavailable.') : 'Visible for editing; not sent while the Chat Tools toggle is off.'}</span>
+            <button className="secondary compact-button" title="Restore generated Wilson tool instructions" disabled={!defaultToolInstructions} onClick={() => { setToolEdited(true); setToolDraft(defaultToolInstructions); }}>Restore Default</button>
+          </div>
+        </div>
       </div>
       <div className="modal-actions">
-        <button className="secondary" title="Restore the default Wilson system prompt" onClick={() => setDraft(defaultSystemPrompt)}>Reset Default</button>
         <button className="secondary" title="Close without saving system prompt changes" onClick={onClose}>Cancel</button>
-        <button className="primary" title="Save this system prompt for future chat requests" onClick={() => { onChange(draft.trim() || defaultSystemPrompt); onClose(); }}><Save size={16} />Save</button>
+        <button className="primary" title="Save these prompt settings for future chat requests" onClick={() => { onChange(draft.trim() || defaultSystemPrompt); onToolChange(toolDraft.trim()); onClose(); }}><Save size={16} />Save</button>
       </div>
     </Modal>
   );
@@ -1069,6 +1098,7 @@ function defaultToolsSettings() {
     emitProgressEvents: true,
     exposeToolTracesToUsers: true,
     toolTimeoutMs: 30000,
+    approvalTimeoutMs: 300000,
     processTimeoutMs: 120000,
     maxReadFileBytes: 1048576,
     maxToolResultBytes: 102400,
@@ -2414,6 +2444,7 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
         <FormInput label="Max tool iterations" tooltip="Maximum tool execution loop iterations per request." type="number" value={tools.maxToolIterations ?? 20} onChange={v => setNumber('maxToolIterations', v)} />
         <FormInput label="Max tool calls" tooltip="Maximum tool calls per chat turn." type="number" value={tools.maxToolCallsPerTurn ?? 12} onChange={v => setNumber('maxToolCallsPerTurn', v)} />
         <FormInput label="Tool timeout (ms)" tooltip="Per-tool execution timeout in milliseconds." type="number" value={tools.toolTimeoutMs ?? 30000} onChange={v => setNumber('toolTimeoutMs', v)} />
+        <FormInput label="Approval timeout (ms)" tooltip="Milliseconds a streaming tool run waits for interactive approval before denying the call." type="number" value={tools.approvalTimeoutMs ?? 300000} onChange={v => setNumber('approvalTimeoutMs', v)} />
         <FormInput label="Process timeout (ms)" tooltip="Process tool timeout in milliseconds once process execution exists." type="number" value={tools.processTimeoutMs ?? 120000} onChange={v => setNumber('processTimeoutMs', v)} />
         <FormInput label="Max read bytes" tooltip="Maximum bytes read by read_file." type="number" value={tools.maxReadFileBytes ?? 1048576} onChange={v => setNumber('maxReadFileBytes', v)} />
         <FormInput label="Max result bytes" tooltip="Maximum model-visible result bytes per tool call." type="number" value={tools.maxToolResultBytes ?? 102400} onChange={v => setNumber('maxToolResultBytes', v)} />
@@ -2895,8 +2926,23 @@ function ConfirmModal({ title, message, onCancel, onConfirm }) {
   return <Modal title={title} onClose={onCancel}><p className="confirm-message" title={message}>{message}</p><div className="modal-actions"><button className="secondary" title="Cancel this action" onClick={onCancel}>Cancel</button><button className="danger-button" title="Confirm this destructive action" onClick={onConfirm}><Trash2 size={16} />Confirm</button></div></Modal>;
 }
 
-function Modal({ title, onClose, children, wide = false, full = false }) {
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={onClose}><div className={`${wide ? 'modal modal-wide' : 'modal'}${full ? ' modal-full' : ''}`} onMouseDown={e => e.stopPropagation()}><header><h2 title={title}>{title}</h2><button className="icon-button" title="Close this modal" onClick={onClose}><X size={18} /></button></header>{children}</div></div>;
+function ModelLoadingModal({ model, runnerName }) {
+  return (
+    <Modal title="Loading Model" onClose={() => {}} closeable={false}>
+      <div className="model-loading-modal">
+        <RefreshCw size={24} className="spin" />
+        <div>
+          <strong title={model}>{model}</strong>
+          <span title={runnerName ? `Loading on ${runnerName}` : 'Loading model'}>{runnerName ? `Loading on ${runnerName}` : 'Loading model'}</span>
+        </div>
+        <p>Model loading can take several minutes depending on model size. The chat controls will remain available when loading completes.</p>
+      </div>
+    </Modal>
+  );
+}
+
+function Modal({ title, onClose, children, wide = false, full = false, closeable = true }) {
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={closeable ? onClose : undefined}><div className={`${wide ? 'modal modal-wide' : 'modal'}${full ? ' modal-full' : ''}`} onMouseDown={e => e.stopPropagation()}><header><h2 title={title}>{title}</h2>{closeable && <button className="icon-button" title="Close this modal" onClick={onClose}><X size={18} /></button>}</header>{children}</div></div>;
 }
 
 function SettingsSection({ title, children, restart = false }) {

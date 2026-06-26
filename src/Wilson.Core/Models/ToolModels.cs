@@ -277,6 +277,8 @@ namespace Wilson.Core.Models
     /// </summary>
     public class ToolProgressEvent
     {
+        /// <summary>Tool run identifier.</summary>
+        public string? RunId { get; set; } = null;
         /// <summary>Stable event type.</summary>
         public string EventType { get; set; } = String.Empty;
         /// <summary>Tool-call identifier.</summary>
@@ -307,6 +309,23 @@ namespace Wilson.Core.Models
         public bool? Success { get; set; } = null;
         /// <summary>Safe summary.</summary>
         public string? Summary { get; set; } = null;
+        /// <summary>Approval endpoint for pending approval events.</summary>
+        public string? ApprovalEndpoint { get; set; } = null;
+        /// <summary>UTC timeout for pending approval events.</summary>
+        public DateTime? ApprovalExpiresUtc { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Result of an interactive approval decision.
+    /// </summary>
+    public class ToolApprovalDecision
+    {
+        /// <summary>Whether execution was approved.</summary>
+        public bool Approved { get; set; } = false;
+        /// <summary>Safe denial reason when execution was not approved.</summary>
+        public string? Reason { get; set; } = null;
+        /// <summary>User identifier that approved or denied the call.</summary>
+        public string? UserId { get; set; } = null;
     }
 
     /// <summary>
@@ -568,6 +587,10 @@ namespace Wilson.Core.Models
         public const string ToolIterationStopped = "tool_iteration.stopped";
         /// <summary>Tool call started.</summary>
         public const string ToolCallStarted = "tool_call.started";
+        /// <summary>Tool call is waiting for approval.</summary>
+        public const string ToolCallPendingApproval = "tool_call.pending_approval";
+        /// <summary>Tool call was approved.</summary>
+        public const string ToolCallApproved = "tool_call.approved";
         /// <summary>Tool call heartbeat.</summary>
         public const string ToolCallHeartbeat = "tool_call.heartbeat";
         /// <summary>Tool call completed.</summary>

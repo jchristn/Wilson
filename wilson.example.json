@@ -41,6 +41,7 @@
     "emitProgressEvents": true,
     "exposeToolTracesToUsers": true,
     "toolTimeoutMs": 30000,
+    "approvalTimeoutMs": 300000,
     "processTimeoutMs": 120000,
     "maxReadFileBytes": 1048576,
     "maxToolResultBytes": 102400,
@@ -68,7 +69,7 @@
       ]
     },
     "mcp": {
-      "enabled": false,
+      "enabled": true,
       "servers": []
     }
   },

@@ -1,6 +1,7 @@
 namespace Wilson.Server
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
@@ -32,6 +33,7 @@ namespace Wilson.Server
         private readonly JsonSerializerOptions _Json;
         private readonly string _SettingsFile;
         private readonly CancellationTokenSource _TokenSource = new CancellationTokenSource();
+        private readonly ConcurrentDictionary<string, string> _ApprovedToolRuns = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Settings.
@@ -195,6 +197,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             tools.MaxToolCallsPerTurn = Math.Clamp(tools.MaxToolCallsPerTurn, 1, 50);
             tools.MaxParallelToolCalls = tools.AllowParallelToolCalls ? Math.Clamp(tools.MaxParallelToolCalls, 1, 16) : 1;
             tools.ToolTimeoutMs = Math.Clamp(tools.ToolTimeoutMs, 1000, 300000);
+            tools.ApprovalTimeoutMs = Math.Clamp(tools.ApprovalTimeoutMs, 10000, 3600000);
             tools.ProcessTimeoutMs = Math.Clamp(tools.ProcessTimeoutMs, 1000, 600000);
             tools.MaxReadFileBytes = Math.Clamp(tools.MaxReadFileBytes, 1, 104857600);
             tools.MaxToolResultBytes = Math.Clamp(tools.MaxToolResultBytes, 1024, 10485760);
@@ -507,6 +510,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (path == "/v1.0/api/tools" && method == "GET")
             {
                 await SendJsonAsync(ctx, ToolService.ListTools(true)).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/tools/instructions" && method == "GET")
+            {
+                await SendJsonAsync(ctx, new ToolInstructionsResponse { SystemPrompt = ToolAgentService.BuildToolSystemInstruction(ToolService) }).ConfigureAwait(false);
                 return;
             }
 
@@ -959,7 +968,29 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 Settings = toolPlan.Settings
             };
 
-            ToolAgentService agent = new ToolAgentService(toolPlan.ToolService, Inference);
+            ToolRun toolRun = new ToolRun
+            {
+                RunId = executionContext.RunId,
+                TenantId = requestContext.TenantId ?? String.Empty,
+                UserId = requestContext.UserId ?? String.Empty,
+                ConversationId = conversation.Id,
+                RunnerId = body.RunnerId,
+                Model = body.Model,
+                Status = ToolStatuses.Running,
+                StartedUtc = DateTime.UtcNow,
+                CreatedUtc = DateTime.UtcNow
+            };
+            await Database.CreateToolRunAsync(toolRun, ctx.Token).ConfigureAwait(false);
+
+            ToolAgentService agent = new ToolAgentService(
+                toolPlan.ToolService,
+                Inference.ChatWithToolsAsync,
+                progressHandler == null
+                    ? null
+                    : async (call, approvalContext, iteration, sequenceNumber, startedUtc, token) =>
+                    {
+                        return await WaitForToolApprovalAsync(call, approvalContext, toolRun, iteration, sequenceNumber, startedUtc, token).ConfigureAwait(false);
+                    });
             List<ModelChatMessage> modelMessages = previousMessages
                 .Select(message => new ModelChatMessage { Role = message.Role, Content = message.Content })
                 .ToList();
@@ -976,23 +1007,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             string answer = agentResponse.Content ?? String.Empty;
             int outputTokens = InferenceService.EstimateTokens(answer);
             int inputTokens = modelMessages.Sum(message => InferenceService.EstimateTokens(message.Content ?? String.Empty));
-            ToolRun toolRun = new ToolRun
-            {
-                RunId = executionContext.RunId,
-                TenantId = requestContext.TenantId ?? String.Empty,
-                UserId = requestContext.UserId ?? String.Empty,
-                ConversationId = conversation.Id,
-                RunnerId = body.RunnerId,
-                Model = body.Model,
-                Status = ToolStatuses.Completed,
-                StartedUtc = DateTime.UtcNow.AddMilliseconds(-total.Elapsed.TotalMilliseconds),
-                CompletedUtc = DateTime.UtcNow,
-                ElapsedMs = total.Elapsed.TotalMilliseconds,
-                IterationCount = agentResponse.IterationCount,
-                ToolCallCount = agentResponse.ToolCallCount,
-                ErrorCount = agentResponse.ErrorCount,
-                CreatedUtc = DateTime.UtcNow.AddMilliseconds(-total.Elapsed.TotalMilliseconds)
-            };
+            toolRun.Status = ToolStatuses.Completed;
+            toolRun.CompletedUtc = DateTime.UtcNow;
+            toolRun.ElapsedMs = total.Elapsed.TotalMilliseconds;
+            toolRun.IterationCount = agentResponse.IterationCount;
+            toolRun.ToolCallCount = agentResponse.ToolCallCount;
+            toolRun.ErrorCount = agentResponse.ErrorCount;
             ChatToolMetrics metrics = new ChatToolMetrics
             {
                 ToolsEnabled = true,
@@ -1022,11 +1042,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             assistantMessage.MetadataJson = JsonSerializer.Serialize(metrics, _Json);
 
             await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
-            await Database.CreateToolRunAsync(toolRun, ctx.Token).ConfigureAwait(false);
-            foreach (ToolExecutionRecord record in toolRecords)
-            {
-                await Database.CreateToolCallAsync(record, ctx.Token).ConfigureAwait(false);
-            }
+            await Database.UpdateToolRunAsync(toolRun, ctx.Token).ConfigureAwait(false);
+            await UpsertToolRecordsAsync(toolRun, toolRecords, ctx.Token).ConfigureAwait(false);
 
             conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
             SetRequestCapture(assistantMessage, answer, toolRun, metrics);
@@ -1041,6 +1058,99 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ToolCalls = safeToolCalls,
                 ToolMetrics = metrics
             };
+        }
+
+        private async Task<ToolApprovalDecision> WaitForToolApprovalAsync(ModelToolCall call, ToolExecutionContext executionContext, ToolRun run, int iteration, int sequenceNumber, DateTime startedUtc, CancellationToken token)
+        {
+            if (_ApprovedToolRuns.TryGetValue(ToolRunApprovalKey(executionContext.TenantId, executionContext.RunId), out string? approvedByUserId))
+            {
+                return new ToolApprovalDecision { Approved = true, UserId = approvedByUserId ?? String.Empty };
+            }
+
+            string toolCallId = String.IsNullOrWhiteSpace(call.Id) ? IdGenerator.ToolCall() : call.Id!;
+            string toolName = call.Function?.Name ?? String.Empty;
+            int maxPayloadCharacters = Math.Clamp(executionContext.Settings.Tools.MaxToolResultBytes, 1024, 200000);
+            string argumentsJson = executionContext.Settings.Tools.StoreToolArguments
+                ? ToolAuditSanitizer.RedactAndCapJson(call.Function?.Arguments ?? "{}", maxPayloadCharacters)
+                : "{}";
+            DateTime expiresUtc = DateTime.UtcNow.AddMilliseconds(executionContext.Settings.Tools.ApprovalTimeoutMs);
+            ToolExecutionRecord record = new ToolExecutionRecord
+            {
+                TenantId = executionContext.TenantId,
+                UserId = executionContext.UserId,
+                ConversationId = executionContext.ConversationId,
+                RunId = executionContext.RunId,
+                TraceId = executionContext.RunId + ":" + sequenceNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Origin = "chat",
+                ProviderToolCallId = call.Id,
+                ToolCallId = toolCallId,
+                ToolName = toolName,
+                Iteration = iteration,
+                SequenceNumber = sequenceNumber,
+                Status = ToolStatuses.PendingApproval,
+                ApprovalPolicy = executionContext.Settings.Tools.DefaultApprovalPolicy,
+                ArgumentsJson = argumentsJson,
+                ResultJson = "{}",
+                ResultSummaryJson = JsonSerializer.Serialize(new { status = ToolStatuses.PendingApproval, summary = "Waiting for approval." }, _Json),
+                ResultPreview = "Waiting for approval.",
+                Success = false,
+                Denied = false,
+                InputBytes = Encoding.UTF8.GetByteCount(argumentsJson),
+                Model = run.Model,
+                StartedUtc = startedUtc,
+                CreatedUtc = startedUtc,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            await Database.CreateToolCallAsync(record, token).ConfigureAwait(false);
+
+            while (DateTime.UtcNow < expiresUtc)
+            {
+                token.ThrowIfCancellationRequested();
+                await Task.Delay(500, token).ConfigureAwait(false);
+                ToolExecutionRecord? latest = await Database.GetToolCallAsync(executionContext.TenantId, record.Id, token).ConfigureAwait(false);
+                if (latest == null) continue;
+                if (String.Equals(latest.Status, ToolStatuses.Approved, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new ToolApprovalDecision { Approved = true, UserId = latest.ApprovedByUserId };
+                }
+
+                if (String.Equals(latest.Status, ToolStatuses.Denied, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new ToolApprovalDecision { Approved = false, Reason = latest.ErrorMessage ?? "Tool execution was denied.", UserId = latest.ApprovedByUserId };
+                }
+            }
+
+            record.Status = ToolStatuses.TimedOut;
+            record.Denied = true;
+            record.ErrorCode = "tool_call_approval_timeout";
+            record.ErrorMessage = "Tool execution was denied because approval timed out.";
+            record.CompletedUtc = DateTime.UtcNow;
+            record.ElapsedMs = (record.CompletedUtc.Value - startedUtc).TotalMilliseconds;
+            await Database.UpdateToolCallAsync(record, CancellationToken.None).ConfigureAwait(false);
+            return new ToolApprovalDecision { Approved = false, Reason = record.ErrorMessage };
+        }
+
+        private async Task UpsertToolRecordsAsync(ToolRun run, List<ToolExecutionRecord> records, CancellationToken token)
+        {
+            List<ToolExecutionRecord> existing = await Database.GetToolCallsForConversationAsync(run.TenantId, run.ConversationId, token).ConfigureAwait(false);
+            foreach (ToolExecutionRecord record in records)
+            {
+                ToolExecutionRecord? current = existing.FirstOrDefault(item =>
+                    String.Equals(item.RunId, run.RunId, StringComparison.OrdinalIgnoreCase)
+                    && (String.Equals(item.ToolCallId, record.ToolCallId, StringComparison.OrdinalIgnoreCase)
+                        || item.SequenceNumber == record.SequenceNumber));
+                if (current == null)
+                {
+                    await Database.CreateToolCallAsync(record, token).ConfigureAwait(false);
+                    continue;
+                }
+
+                record.Id = current.Id;
+                record.ApprovedByUserId = current.ApprovedByUserId;
+                await Database.UpdateToolCallAsync(record, token).ConfigureAwait(false);
+            }
+
+            _ApprovedToolRuns.TryRemove(ToolRunApprovalKey(run.TenantId, run.RunId), out _);
         }
 
         private async Task HandleToolApprovalAsync(HttpContextBase ctx, RequestContext requestContext)
@@ -1077,8 +1187,17 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             record.ErrorCode = body.Approved ? record.ErrorCode : "tool_call_denied";
             record.ErrorMessage = body.Approved ? record.ErrorMessage : String.IsNullOrWhiteSpace(body.Reason) ? "Tool execution was denied by the user." : body.Reason;
             await Database.UpdateToolCallAsync(record, ctx.Token).ConfigureAwait(false);
+            if (body.Approved && body.AlwaysForRun)
+            {
+                _ApprovedToolRuns[ToolRunApprovalKey(tenantId, run.RunId)] = requestContext.UserId ?? String.Empty;
+            }
 
             await SendJsonAsync(ctx, new ToolApprovalResponse { ToolCall = record }).ConfigureAwait(false);
+        }
+
+        private static string ToolRunApprovalKey(string tenantId, string runId)
+        {
+            return (tenantId ?? String.Empty) + ":" + (runId ?? String.Empty);
         }
 
         private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
@@ -1214,7 +1333,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             if (String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
             {
-                result.Warnings.Add("Interactive approval requires the future streaming approval flow; non-streaming tool chat rejects ask approval.");
+                result.Warnings.Add("Interactive approval requires streaming chat; non-streaming tool chat rejects ask approval.");
             }
 
             if (tools.WebSearch.Enabled)
@@ -1353,6 +1472,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 EmitProgressEvents = source.EmitProgressEvents,
                 ExposeToolTracesToUsers = source.ExposeToolTracesToUsers,
                 ToolTimeoutMs = source.ToolTimeoutMs,
+                ApprovalTimeoutMs = source.ApprovalTimeoutMs,
                 ProcessTimeoutMs = source.ProcessTimeoutMs,
                 MaxReadFileBytes = source.MaxReadFileBytes,
                 MaxToolResultBytes = source.MaxToolResultBytes,
@@ -1557,6 +1677,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (String.Equals(eventType, ToolEventTypes.ToolIterationStarted, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(eventType, ToolEventTypes.ToolIterationStopped, StringComparison.OrdinalIgnoreCase))
                 return "tool_iteration";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallPendingApproval, StringComparison.OrdinalIgnoreCase)) return "tool_call_pending_approval";
+            if (String.Equals(eventType, ToolEventTypes.ToolCallApproved, StringComparison.OrdinalIgnoreCase)) return "tool_call_approved";
             if (String.Equals(eventType, ToolEventTypes.ToolCallStarted, StringComparison.OrdinalIgnoreCase)) return "tool_call_running";
             if (String.Equals(eventType, ToolEventTypes.ToolCallHeartbeat, StringComparison.OrdinalIgnoreCase)) return "tool_call_heartbeat";
             if (String.Equals(eventType, ToolEventTypes.ToolCallCompleted, StringComparison.OrdinalIgnoreCase)) return "tool_call_completed";
@@ -1710,6 +1832,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Operation("get", "getSettings", "Administration", "Read settings", "Returns the active Wilson settings. Requires a global administrator bearer token.", "Settings", true),
                         Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
                     { "/v1.0/api/tools", Path(Operation("get", "listTools", "Tools", "List effective tools", "Lists effective tool descriptors for the authenticated principal, including unavailable diagnostics when tools or prerequisites are disabled.", "ToolDescriptorArray", true)) },
+                    { "/v1.0/api/tools/instructions", Path(Operation("get", "getToolInstructions", "Tools", "Get default tool system instructions", "Returns the generated Wilson tool instruction block that users can review, edit, or restore in tool-enabled chat.", "ToolInstructionsResponse", true)) },
                     { "/v1.0/api/mcp", Path(Operation("get", "getMcpStatus", "Tools", "Get MCP status", "Returns redacted MCP server connection status and discovered tool counts. Requires a global administrator bearer token.", "McpStatusResponse", true)) },
                     { "/v1.0/api/mcp/reload", Path(Operation("post", "reloadMcp", "Tools", "Reload MCP servers", "Reconnects configured MCP servers and rediscovers MCP tools. Requires a global administrator bearer token.", "McpStatusResponse", true)) },
                     { "/v1.0/api/tools/validate", Path(Operation("post", "validateTools", "Tools", "Validate draft tool policy", "Validates draft tool settings without saving them. Requires a global administrator bearer token.", "ToolPolicyValidationResult", true, requestSchema: "ToolPolicyValidationRequest")) },
@@ -1942,7 +2065,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 { "HealthResponse", ObjectSchema(Property("status", StringSchema()), Property("service", StringSchema())) },
                 { "OpenApiDocument", new Dictionary<string, object> { { "type", "object" }, { "description", "OpenAPI 3.0 document." } } },
                 { "HtmlDocument", new Dictionary<string, object> { { "type", "string" }, { "description", "HTML document." } } },
-                { "SseEventStream", new Dictionary<string, object> { { "type", "string" }, { "description", "Server-sent event stream containing conversation, truncation, chunk, run_started, tool_iteration, tool_call_running, tool_call_completed, tool_call_failed, tool_call_denied, run_completed, done, or error events." } } },
+                { "SseEventStream", new Dictionary<string, object> { { "type", "string" }, { "description", "Server-sent event stream containing conversation, truncation, chunk, run_started, tool_iteration, tool_call_running, tool_call_pending_approval, tool_call_approved, tool_call_completed, tool_call_failed, tool_call_denied, run_completed, done, or error events." } } },
                 {
                     "AuthTokenRequest",
                     ObjectSchema(
@@ -1991,6 +2114,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ToolPolicyValidationResult));
             AddComponentSchema(schemas, typeof(ToolPolicyTestRequest));
             AddComponentSchema(schemas, typeof(ToolPolicyTestResult));
+            AddComponentSchema(schemas, typeof(ToolInstructionsResponse));
             AddComponentSchema(schemas, typeof(McpServerStatus));
             AddComponentSchema(schemas, typeof(McpStatusResponse));
             AddComponentSchema(schemas, typeof(ModelToolDefinition));
@@ -2266,6 +2390,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public bool Approved { get; set; } = false;
         /// <summary>Optional user-visible reason for denial.</summary>
         public string Reason { get; set; } = String.Empty;
+        /// <summary>Approve later ask-gated tool calls in this same run.</summary>
+        public bool AlwaysForRun { get; set; } = false;
     }
 
     /// <summary>
@@ -2275,6 +2401,15 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
     {
         /// <summary>Updated tool-call audit record.</summary>
         public ToolExecutionRecord? ToolCall { get; set; } = null;
+    }
+
+    /// <summary>
+    /// Generated Wilson tool system instructions.
+    /// </summary>
+    public sealed class ToolInstructionsResponse
+    {
+        /// <summary>Generated default tool instruction block.</summary>
+        public string SystemPrompt { get; set; } = String.Empty;
     }
 
     /// <summary>

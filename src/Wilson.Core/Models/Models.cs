@@ -567,6 +567,8 @@ namespace Wilson.Core.Models
         public const string DefaultSystemPrompt = "Use prior turns only as context. Respond only to the latest user message, and do not replay or quote earlier assistant responses unless the user explicitly asks for them.";
         /// <summary>System prompt.</summary>
         public string SystemPrompt { get; set; } = DefaultSystemPrompt;
+        /// <summary>Tool system prompt. Leave blank to use Wilson's generated tool instructions.</summary>
+        public string ToolSystemPrompt { get; set; } = String.Empty;
         /// <summary>Sampling temperature.</summary>
         public double? Temperature { get; set; } = 0.7;
         /// <summary>Nucleus sampling threshold.</summary>

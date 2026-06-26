@@ -40,6 +40,8 @@ namespace Wilson.Core.Settings
         public bool ExposeToolTracesToUsers { get; set; } = true;
         /// <summary>Per-tool timeout in milliseconds.</summary>
         public int ToolTimeoutMs { get; set; } = 30000;
+        /// <summary>Interactive approval timeout in milliseconds.</summary>
+        public int ApprovalTimeoutMs { get; set; } = 300000;
         /// <summary>Process tool timeout in milliseconds.</summary>
         public int ProcessTimeoutMs { get; set; } = 120000;
         /// <summary>Maximum bytes read by read_file.</summary>
@@ -115,7 +117,7 @@ namespace Wilson.Core.Settings
         /// <summary>Provider API key or environment reference.</summary>
         public string ApiKey { get; set; } = String.Empty;
         /// <summary>Enable provider.</summary>
-        public bool Enabled { get; set; } = false;
+        public bool Enabled { get; set; } = true;
         /// <summary>Whether this is the default provider.</summary>
         public bool IsDefault { get; set; } = false;
         /// <summary>Provider timeout in milliseconds.</summary>
@@ -128,7 +130,7 @@ namespace Wilson.Core.Settings
     public class McpToolSettings
     {
         /// <summary>Enable MCP tools.</summary>
-        public bool Enabled { get; set; } = false;
+        public bool Enabled { get; set; } = true;
         /// <summary>Configured MCP servers.</summary>
         public List<McpServerSettings> Servers { get; set; } = new List<McpServerSettings>();
     }

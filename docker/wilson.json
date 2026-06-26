@@ -59,6 +59,7 @@
     "emitProgressEvents": true,
     "exposeToolTracesToUsers": true,
     "toolTimeoutMs": 30000,
+    "approvalTimeoutMs": 300000,
     "processTimeoutMs": 120000,
     "maxReadFileBytes": 1048576,
     "maxToolResultBytes": 102400,
@@ -86,7 +87,7 @@
       ]
     },
     "mcp": {
-      "enabled": false,
+      "enabled": true,
       "servers": []
     }
   },
@@ -95,7 +96,7 @@
       "id": "local-ollama",
       "name": "Local Ollama",
       "apiType": "Ollama",
-      "endpoint": "http://192.168.86.250:11434",
+      "endpoint": "http://view.homedns.org:11434",
       "apiKey": null,
       "models": [],
       "contextWindowTokens": 63556,
@@ -106,7 +107,7 @@
       "supportsStreamingToolCalls": true,
       "chatCompletionsPath": "",
       "healthCheckEnabled": true,
-      "healthCheckUrl": "http://192.168.86.250:11434/api/tags",
+      "healthCheckUrl": "http://view.homedns.org:11434/api/tags",
       "healthCheckMethod": "GET",
       "healthCheckIntervalMs": 5000,
       "healthCheckTimeoutMs": 2000,

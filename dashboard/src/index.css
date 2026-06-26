@@ -84,12 +84,17 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .conversation-row .icon-button, .new-chat .icon-button { background: transparent; border-color: transparent; }
 .conversation-error { border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); border-radius: 7px; padding: 8px; font-size: 12px; overflow-wrap: anywhere; }
 .chat-main { min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow: hidden; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; background: var(--panel); }
-.chat-toolbar { min-height: 64px; border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: flex-end; gap: 12px; }
-.chat-toolbar label { width: 220px; }
+.chat-toolbar { min-height: 64px; border-bottom: 1px solid var(--line); padding: 10px 16px; display: grid; grid-template-columns: minmax(220px, 320px) minmax(220px, 320px); align-items: end; justify-content: start; gap: 10px 12px; }
+.chat-toolbar label { width: auto; min-width: 0; }
 .chat-toolbar label select { height: 34px; padding: 6px 8px; }
-.chat-toolbar .toolbar-button { height: 34px; min-height: 34px; padding-top: 0; padding-bottom: 0; }
-.chat-toolbar .toggle { width: auto; height: 34px; display: flex; align-items: center; gap: 8px; margin-left: auto; padding-bottom: 0; align-self: flex-end; }
-.model-loading-note { color: var(--muted); font-size: 12px; max-width: 260px; padding-bottom: 9px; }
+.chat-toolbar-actions { grid-column: 1 / -1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; }
+.chat-toolbar .toolbar-button { height: 34px; min-height: 34px; max-height: 34px; min-width: max-content; padding: 0 12px; white-space: nowrap; flex: 0 0 auto; line-height: 1; }
+.chat-toolbar .toolbar-button, .chat-toolbar .toolbar-button .button-label { white-space: nowrap; overflow-wrap: normal; word-break: keep-all; }
+.chat-toolbar .toolbar-button .button-label { display: inline-block; min-width: max-content; }
+.chat-toolbar .toolbar-button svg { flex: 0 0 auto; width: 16px; height: 16px; }
+.chat-toolbar .model-load-button { min-width: 142px; }
+.chat-toolbar .system-prompt-button { min-width: 146px; }
+.chat-toolbar .toggle { width: auto; height: 34px; display: flex; align-items: center; gap: 8px; margin-left: 0; padding-bottom: 0; align-self: flex-end; white-space: nowrap; flex: 0 0 auto; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .model-error { border-bottom: 1px solid var(--line); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); padding: 9px 16px; font-size: 13px; }
@@ -130,6 +135,9 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .tool-call-main { grid-template-columns: auto minmax(0, 1fr) auto auto auto; background: var(--panel-2); }
 .tool-call-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-call-details { max-width: 100%; overflow: auto; }
+.tool-approval-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--warn) 8%, var(--panel)); padding: 6px 8px; font-size: 12px; color: var(--muted); }
+.tool-approval-actions span { margin-right: auto; overflow-wrap: anywhere; }
+.tool-approval-actions .compact-button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
 .tool-catalog-modal { display: grid; gap: 12px; }
 .tool-catalog-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .tool-catalog-list { display: grid; gap: 8px; }
@@ -150,6 +158,9 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .feedback-detail-header { margin-bottom: 16px; }
 .chat-settings-form { display: grid; gap: 14px; }
 .system-prompt-textarea { min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.5; }
+.tool-instructions-textarea { min-height: 260px; }
+.prompt-field-group { display: grid; gap: 8px; }
+.prompt-field-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
 .muted-settings { opacity: .72; }
 .settings-note { margin: 0; color: var(--muted); font-size: 13px; }
 .compact-select { width: auto; min-width: 92px; height: 34px; padding: 6px 8px; align-self: flex-end; margin-bottom: 0; }
@@ -262,6 +273,12 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .modal header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 14px 16px; position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .modal h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
 .modal > :not(header) { margin: 16px; }
+.model-loading-modal { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; }
+.model-loading-modal > svg { color: var(--accent); }
+.model-loading-modal div { min-width: 0; display: grid; gap: 3px; }
+.model-loading-modal strong, .model-loading-modal span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-loading-modal span, .model-loading-modal p { color: var(--muted); font-size: 13px; }
+.model-loading-modal p { grid-column: 1 / -1; margin: 0; line-height: 1.45; }
 .record-grid, .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .entity-modal { display: grid; gap: 16px; }
 .entity-hero { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 14px; }
@@ -457,8 +474,8 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .nav { min-height: 40px; justify-content: center; padding: 8px; gap: 0; }
   .chat-layout { grid-template-columns: 1fr; }
   .conversation-list { display: none; }
-  .chat-toolbar { flex-wrap: wrap; }
-  .chat-toolbar label { width: calc(50% - 8px); }
+  .chat-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .chat-toolbar label { width: 100%; }
   .explorer-grid { grid-template-columns: 1fr; }
   .cors-editor { grid-template-columns: 1fr; }
   .auth-editor { grid-template-columns: 1fr; }
@@ -490,15 +507,15 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .page-actions, .modal-actions, .model-server-actions, .payload-actions { flex-wrap: wrap; justify-content: flex-start; }
   .request-summary-grid { grid-template-columns: 1fr; }
   .metric-card { min-height: 74px; }
-  .chat-toolbar { align-items: stretch; gap: 8px; padding: 10px; }
+  .chat-toolbar { grid-template-columns: 1fr; align-items: stretch; gap: 8px; padding: 10px; }
   .chat-toolbar label { width: 100%; }
+  .chat-toolbar-actions { grid-column: 1; }
   .chat-toolbar .toggle { margin-left: 0; padding-bottom: 0; }
   .compact-select { width: 100%; align-self: stretch; margin-bottom: 0; }
   .tool-activity-summary { grid-template-columns: auto minmax(0, 1fr) auto; }
   .tool-activity-count, .tool-status, .tool-runtime { grid-column: 2 / -1; justify-self: start; }
   .tool-call-main { grid-template-columns: auto minmax(0, 1fr) auto; }
   .tool-call-main .tool-status, .tool-call-main .tool-runtime { grid-column: 2 / -1; justify-self: start; }
-  .model-loading-note { max-width: none; padding-bottom: 0; }
   .messages { padding: 18px 12px; }
   .composer { padding: 10px; grid-template-columns: minmax(0, 1fr) 42px; }
   .send { width: 42px; height: 42px; }
