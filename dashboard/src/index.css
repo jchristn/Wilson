@@ -275,6 +275,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .modal header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 14px 16px; position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .modal h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
 .modal > :not(header) { margin: 16px; }
+.response-details-modal { min-width: 0; overflow: hidden; }
 .model-loading-modal { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; }
 .model-loading-modal > svg { color: var(--accent); }
 .model-loading-modal div { min-width: 0; display: grid; gap: 3px; }
@@ -326,10 +327,10 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .timing-table th, .timing-table td { padding: 9px 12px; }
 .timing-table th { width: 240px; color: var(--muted); background: var(--panel-2); }
 .timing-table td { background: var(--panel); }
-.key-value-table { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: 8px; border-spacing: 0; overflow: hidden; }
+.key-value-table { min-width: 0; width: 100%; table-layout: fixed; border: 1px solid var(--line); border-radius: 8px; border-spacing: 0; overflow: hidden; }
 .key-value-table th, .key-value-table td { padding: 10px 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
 .key-value-table tr:last-child th, .key-value-table tr:last-child td { border-bottom: 0; }
-.key-value-table th { width: 240px; color: var(--muted); background: var(--panel-2); font-weight: 650; }
+.key-value-table th { width: 240px; color: var(--muted); background: var(--panel-2); font-weight: 650; overflow-wrap: anywhere; }
 .key-value-table td { background: var(--panel); color: var(--text); overflow-wrap: anywhere; }
 .payload-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
 .payload-body .code-block { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 12px; max-height: 40vh; overflow: auto; color: var(--text); }

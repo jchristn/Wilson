@@ -143,9 +143,11 @@ const fieldMeta = {
   path: ['Path', 'HTTP path that was requested.'],
   statusCode: ['Status', 'HTTP response status code.'],
   durationMs: ['Latency', 'Request duration in milliseconds.'],
+  elapsedMs: ['Elapsed (ms)', 'Elapsed time in milliseconds.'],
   timeToFirstTokenMs: ['Time to first token (ms)', 'Milliseconds from request start until the first generated token was received.'],
   streamingTimeMs: ['Streaming time (ms)', 'Milliseconds spent receiving generated tokens.'],
   totalTimeMs: ['Total time (ms)', 'Total model inference time in milliseconds.'],
+  totalToolElapsedMs: ['Total tool elapsed (ms)', 'Total time spent executing tools in milliseconds.'],
   tokensUsed: ['Tokens used', 'Estimated prompt and response tokens used by this message or request.'],
   tokenEstimate: ['Token estimate', 'Estimated token count for this message.'],
   requestHeaders: ['Request headers', 'HTTP request headers captured for this request.'],
@@ -862,7 +864,7 @@ function ToolCallRow({ api, call }) {
             ['denied', String(Boolean(call.denied))],
             ['truncated', String(Boolean(call.truncated))],
             ['outputCharacters', call.outputCharacters || 0],
-            ['elapsedMs', formatNumber(call.elapsedMs || 0)],
+            ['elapsedMs', `${formatNumber(call.elapsedMs || 0)} ms`],
             ['startedUtc', call.startedUtc || ''],
             ['completedUtc', call.completedUtc || ''],
             ['summary', call.summary || '']
@@ -884,8 +886,8 @@ function ThinkingIndicator() {
 function MessageInfoModal({ message, onClose }) {
   const rows = [
     ['timeToFirstTokenMs', message.timeToFirstTokenMs || 0],
-    ['streamingTimeMs', message.streamingTimeMs || 0],
-    ['totalTimeMs', message.totalTimeMs || 0],
+    ['streamingTimeMs', `${formatNumber(message.streamingTimeMs || 0)} ms`],
+    ['totalTimeMs', `${formatNumber(message.totalTimeMs || 0)} ms`],
     ['tokensUsed', message.tokensUsed || message.tokenEstimate || 0]
   ];
   if (message.toolMetrics) {
@@ -898,7 +900,9 @@ function MessageInfoModal({ message, onClose }) {
   }
   return (
     <Modal title="Response Details" onClose={onClose}>
-      <KeyValueTable rows={rows} />
+      <div className="response-details-modal">
+        <KeyValueTable rows={rows} />
+      </div>
     </Modal>
   );
 }
