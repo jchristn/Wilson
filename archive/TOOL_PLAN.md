@@ -866,7 +866,7 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
 
 ### Admin Settings UI
 
-- [ ] Add a Tools section to `SettingsAdmin`.
+- [~] Add a Tools section to `SettingsAdmin`.
   - Enabled toggle.
   - Built-ins enabled toggle.
   - Default approval policy select.
@@ -883,6 +883,11 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - Validate Policy button.
   - Test Diagnostics button.
   - Descriptor list showing enabled, available, category, approval requirement, and unavailable reason.
+  - Progress: adding first dashboard controls for global enablement, built-ins, approval policy, safety limits, working directory, allowed roots, enabled/disabled tool names, and trace/progress flags.
+  - Progress: initial `SettingsAdmin` Tools section is implemented and validated for the currently supported global settings; validate/test diagnostics and descriptor list remain pending.
+  - Progress: continuing with the descriptor list in the Tools settings section so admins can see effective tool availability and unavailable reasons.
+  - Progress: effective tool descriptor list is implemented in `SettingsAdmin` using `/v1.0/api/tools`, with refresh after settings save and a manual refresh button. Validate/test diagnostics remain pending.
+  - Progress: descriptor-list and dependency-refresh slice validated on 2026-06-26 with solution build, automated tests, dashboard lint, and dashboard production build.
 - [ ] Add Web Search subsection.
   - Enabled toggle.
   - Allow fallback toggle.
@@ -897,11 +902,12 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - http fields: URL, MCP path.
   - Status display and reload button.
   - Redact env/API secret values in display.
-- [ ] Update Model Server editor.
+- [x] Update Model Server editor.
   - Add tools enabled toggle per runner.
   - Add supports tools toggle.
   - Add supports parallel tool calls toggle.
   - Add chat completions path input.
+  - Progress: both model-server edit paths now expose tools enabled, supports tools, tool API format, chat completions path, parallel tool calls, and streaming tool calls. Validated with dashboard lint/build.
 - [ ] Update API Explorer.
   - Add tool catalog endpoints.
   - Add tool validate/test endpoints.
@@ -1198,8 +1204,12 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
 
 - [x] Run existing `npm run lint`.
   - Progress: passed on 2026-06-25 using `npm.cmd run lint` because local PowerShell execution policy blocks `npm.ps1`.
+  - Progress: passed on 2026-06-26 after adding global/runner tool settings controls.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list.
 - [x] Run existing `npm run build`.
   - Progress: passed on 2026-06-25 using `npm.cmd run build`.
+  - Progress: passed on 2026-06-26 after adding global/runner tool settings controls.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list.
 - [ ] Add unit tests if a test runner is introduced.
 - [ ] Add manual QA checklist if no dashboard test framework is added:
   - tools disabled chat unchanged
@@ -1250,7 +1260,9 @@ Each superset tool must have:
 - [ ] Global admins can configure tools.
 - [ ] Tenant admins can view tool calls for their tenant.
 - [ ] Normal users can view and approve only their own active tool calls.
-- [ ] File/process tools cannot run unless `Settings.Tools.Enabled` is true and `WorkingDirectory` plus `AllowedRoots` are configured.
+- [~] File/process tools cannot run unless `Settings.Tools.Enabled` is true and `WorkingDirectory` plus `AllowedRoots` are configured.
+  - Progress: tightening chat request resolution so global `Settings.Tools.Enabled = false` is a hard server-side disable even when a request explicitly sends `toolsEnabled: true`.
+  - Progress: server chat resolution now rejects explicit tool requests while global tools are disabled; dashboard chat sends `toolsEnabled: false` when the user toggle is off. Validated with solution build and automated tests.
 - [ ] All filesystem paths must resolve inside allowed roots.
 - [ ] Process execution must be disabled independently by default or marked approval-required by default.
 - [ ] Destructive tools must require approval unless an admin explicitly disables `DestructiveToolsRequireApproval`.
@@ -1297,12 +1309,24 @@ Each superset tool must have:
 - [ ] Postman collection includes the new APIs.
 - [x] `dotnet build src\Wilson.slnx` passes.
   - Progress: passed on 2026-06-25 after the dashboard tool-trace slice, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
+  - Progress: passed on 2026-06-26 after global tool hard-disable and dashboard settings controls, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
+  - Progress: dependency refresh started on 2026-06-26; NuGet and npm package updates are being checked before the next validation run.
+  - Progress: latest package check found NuGet updates for `Microsoft.Data.Sqlite`, `Npgsql`, `PolyPrompt`, `PrettyId`, and `Watson`, plus dashboard npm updates for React/Vite/ESLint/i18next/lucide-related packages. Applying direct dependency updates now.
+  - Progress: NuGet direct references are updated; dashboard `react`, `react-dom`, and `@types/react` are updated. Continuing remaining npm packages with smaller exact-version installs because bulk npm installs timed out.
+  - Progress: direct NuGet references and dashboard npm dependencies are now current according to `dotnet list package --outdated` and `npm outdated`. The existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears during restore.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list, with existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
 - [x] `dotnet run --project src\Test.Automated` passes.
   - Progress: passed on 2026-06-25 after the dashboard tool-trace slice, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
+  - Progress: passed on 2026-06-26 after global tool hard-disable and dashboard settings controls, with existing NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list, with existing transitive NU1903 `SQLitePCLRaw.lib.e_sqlite3` advisory warnings.
 - [x] `cd dashboard && npm run lint` passes.
   - Progress: passed on 2026-06-25 using `npm.cmd run lint` because local PowerShell execution policy blocks `npm.ps1`.
+  - Progress: passed on 2026-06-26 using `npm.cmd run lint`.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list.
 - [x] `cd dashboard && npm run build` passes.
   - Progress: passed on 2026-06-25 using `npm.cmd run build`.
+  - Progress: passed on 2026-06-26 using `npm.cmd run build`.
+  - Progress: passed on 2026-06-26 after dependency refresh and Tools descriptor list using Vite 8.1.0.
 
 ## Known Risks And Decisions To Make
 

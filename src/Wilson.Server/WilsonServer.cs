@@ -828,6 +828,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
         private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
         {
+            if (!Settings.Tools.Enabled)
+            {
+                if (body.ToolsEnabled == true)
+                    throw new ArgumentException("Tools are disabled by server settings.");
+                return ChatToolPlan.Disabled();
+            }
+
             if (streaming)
             {
                 if (body.ToolsEnabled == true)

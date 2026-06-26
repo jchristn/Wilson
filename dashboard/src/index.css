@@ -336,6 +336,12 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .token-list-row .icon-button { background: var(--panel); }
 .runner-editor { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .runner-editor-header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.tool-descriptor-list { grid-column: 1 / -1; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; }
+.tool-descriptor-row { min-width: 0; display: grid; grid-template-columns: minmax(150px, 1.3fr) auto auto auto minmax(160px, 1.2fr); gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px; }
+.tool-descriptor-row > div { min-width: 0; display: grid; gap: 2px; }
+.tool-descriptor-row strong, .tool-descriptor-row span { min-width: 0; overflow-wrap: anywhere; }
+.tool-descriptor-row > div span, .tool-descriptor-meta, .tool-descriptor-reason { color: var(--muted); font-size: 12px; }
+.tool-descriptor-reason { color: var(--text); }
 .model-server-editor .string-list-field { grid-column: 1 / -1; }
 .string-list-field { display: grid; gap: 8px; }
 .string-list-field > label { color: var(--muted); font-size: 13px; }
@@ -392,8 +398,8 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .health-timestamp-label { color: var(--muted); font-size: 12px; }
 .health-timestamp-value { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
 .health-config-table .key-value-table { margin-top: 2px; }
-.health-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
-.health-editor-block .runner-editor-header { grid-column: 1 / -1; }
+.health-editor-block, .tool-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.health-editor-block .runner-editor-header, .tool-editor-block .runner-editor-header { grid-column: 1 / -1; }
 .model-pull-form { display: grid; gap: 14px; }
 .model-pull-form p { margin: 0; color: var(--muted); }
 .progress-bar { height: 10px; border-radius: 999px; background: var(--panel-2); overflow: hidden; border: 1px solid var(--line); }
@@ -481,7 +487,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .modal-full { height: calc(100dvh - 16px); }
   .modal header { padding: 12px; }
   .modal > :not(header) { margin: 12px; }
-  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
+  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
   .entity-hero, .detail-hero { grid-template-columns: 1fr; align-items: start; }
   .key-value-table th, .key-value-table td, .timing-table th, .timing-table td { display: block; width: 100%; }
   .key-value-table th, .timing-table th { border-bottom: 0; }

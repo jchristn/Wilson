@@ -459,10 +459,8 @@ function Chat({ api }) {
     const controller = new AbortController();
     generationAbort.current = controller;
     const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, completionSettings) };
-    if (toolRequestEnabled) {
-      body.toolsEnabled = true;
-      body.approvalPolicy = toolApprovalPolicy;
-    }
+    body.toolsEnabled = toolRequestEnabled;
+    if (toolRequestEnabled) body.approvalPolicy = toolApprovalPolicy;
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
     setMessages(prev => [...prev, user]);
     setPrompt('');
@@ -910,6 +908,52 @@ function defaultHealthCheckSettings(apiType = 'Ollama', endpoint = 'http://local
   };
 }
 
+function defaultRunnerToolSettings(apiType = 'Ollama') {
+  const normalized = String(apiType || '').toLowerCase();
+  const isOllama = normalized === 'ollama';
+  const supported = isOllama || normalized === 'openai' || normalized === 'openaicompatible';
+  return {
+    toolsEnabled: true,
+    supportsTools: supported,
+    toolCallingApiFormat: isOllama ? 'OllamaChat' : (supported ? 'OpenAIChatCompletions' : ''),
+    supportsParallelToolCalls: false,
+    supportsStreamingToolCalls: false,
+    chatCompletionsPath: isOllama ? '' : '/v1/chat/completions'
+  };
+}
+
+function defaultToolsSettings() {
+  return {
+    enabled: false,
+    builtInsEnabled: true,
+    defaultApprovalPolicy: 'ask',
+    destructiveToolsRequireApproval: true,
+    blockSecretPaths: true,
+    workingDirectory: '',
+    allowedRoots: [],
+    maxAgentIterations: 25,
+    maxToolIterations: 20,
+    maxToolCallsPerTurn: 12,
+    toolChoiceMode: 'auto',
+    allowParallelToolCalls: false,
+    maxParallelToolCalls: 1,
+    emitProgressEvents: true,
+    exposeToolTracesToUsers: true,
+    toolTimeoutMs: 30000,
+    processTimeoutMs: 120000,
+    maxReadFileBytes: 1048576,
+    maxToolResultBytes: 102400,
+    storeToolResults: true,
+    storeFullToolResults: false,
+    storeToolArguments: true,
+    maxToolOutputChars: 12000,
+    maxToolOutputCharsPerTurn: 50000,
+    maxToolResultItems: 20,
+    enabledToolNames: [],
+    disabledToolNames: []
+  };
+}
+
 function newModelRunner() {
   return {
     id: `runner-${Date.now()}`,
@@ -919,17 +963,25 @@ function newModelRunner() {
     apiKey: '',
     models: [],
     contextWindowTokens: 8192,
+    ...defaultRunnerToolSettings('Ollama'),
     ...defaultHealthCheckSettings('Ollama', 'http://localhost:11434')
   };
 }
 
 function normalizeRunnerForSave(runner) {
   const defaults = defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey);
+  const toolDefaults = defaultRunnerToolSettings(runner.apiType);
   return {
     ...runner,
     models: runner.models || [],
     contextWindowTokens: Number(runner.contextWindowTokens || 8192),
     apiKey: runner.apiKey || null,
+    toolsEnabled: runner.toolsEnabled !== false,
+    supportsTools: runner.supportsTools ?? toolDefaults.supportsTools,
+    toolCallingApiFormat: runner.toolCallingApiFormat || toolDefaults.toolCallingApiFormat,
+    supportsParallelToolCalls: Boolean(runner.supportsParallelToolCalls),
+    supportsStreamingToolCalls: Boolean(runner.supportsStreamingToolCalls),
+    chatCompletionsPath: runner.chatCompletionsPath ?? toolDefaults.chatCompletionsPath,
     healthCheckEnabled: runner.healthCheckEnabled !== false,
     healthCheckUrl: runner.healthCheckUrl || defaults.healthCheckUrl,
     healthCheckMethod: runner.healthCheckMethod || defaults.healthCheckMethod,
@@ -1392,6 +1444,15 @@ function ModelServerEditModal({ server, onClose, onSave }) {
         <FormInput label="Endpoint" tooltip="Base URL for this model server" value={draft.endpoint} onChange={v => set('endpoint', v)} />
         <FormInput label="API key" tooltip="Optional API key sent to this model server" value={draft.apiKey || ''} onChange={v => set('apiKey', v)} />
         <FormInput label="Context window tokens" tooltip="Maximum context window used for prompt truncation" type="number" value={draft.contextWindowTokens || 8192} onChange={v => set('contextWindowTokens', v)} />
+        <div className="tool-editor-block">
+          <div className="runner-editor-header"><strong>Tool Calling</strong></div>
+          <FormCheck label="Tools enabled" tooltip="Allow this model server to be selected for tool-enabled chat when global tools are enabled" checked={draft.toolsEnabled !== false} onChange={v => set('toolsEnabled', v)} />
+          <FormCheck label="Supports tools" tooltip="Whether this model server API can accept tool definitions and return tool calls" checked={draft.supportsTools !== false} onChange={v => set('supportsTools', v)} />
+          <FormInput label="Tool API format" tooltip="Tool-call wire format, for example OllamaChat or OpenAIChatCompletions" value={draft.toolCallingApiFormat || defaultRunnerToolSettings(draft.apiType).toolCallingApiFormat} onChange={v => set('toolCallingApiFormat', v)} />
+          <FormInput label="Chat completions path" tooltip="OpenAI-compatible chat completions path used for tool-enabled requests. Ollama can leave this blank." value={draft.chatCompletionsPath ?? defaultRunnerToolSettings(draft.apiType).chatCompletionsPath} onChange={v => set('chatCompletionsPath', v)} />
+          <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn" checked={!!draft.supportsParallelToolCalls} onChange={v => set('supportsParallelToolCalls', v)} />
+          <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={!!draft.supportsStreamingToolCalls} onChange={v => set('supportsStreamingToolCalls', v)} />
+        </div>
         <div className="health-editor-block">
           <div className="runner-editor-header"><strong>Health Checks</strong></div>
           <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server" checked={draft.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
@@ -1953,12 +2014,21 @@ function FeedbackDetailModal({ row, onClose }) {
 function SettingsAdmin({ api }) {
   const [settings, setSettings] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [toolDescriptors, setToolDescriptors] = useState([]);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [jsonOpen, setJsonOpen] = useState(false);
-  const load = useCallback(async () => {
-    try { setError(''); const data = await api.settings(); setSettings(data); setDraft(structuredCloneSafe(data)); } catch (err) { setError(String(err.message || err)); }
+  const loadTools = useCallback(async () => {
+    try {
+      const items = await api.tools();
+      setToolDescriptors(Array.isArray(items) ? items : []);
+    } catch {
+      setToolDescriptors([]);
+    }
   }, [api]);
+  const load = useCallback(async () => {
+    try { setError(''); const data = await api.settings(); setSettings(data); setDraft(structuredCloneSafe(data)); await loadTools(); } catch (err) { setError(String(err.message || err)); }
+  }, [api, loadTools]);
   useEffect(() => { load(); }, [load]);
 
   async function save() {
@@ -1967,6 +2037,7 @@ function SettingsAdmin({ api }) {
       const updated = await api.settings(draft);
       setSettings(updated);
       setDraft(structuredCloneSafe(updated));
+      await loadTools();
       setSaved('Settings saved and applied to the running server where supported. Listener and database changes require a server restart.');
     } catch (err) {
       setError(String(err.message || err));
@@ -1977,6 +2048,7 @@ function SettingsAdmin({ api }) {
 
   const set = (path, value) => setDraft(prev => setPath(prev, path, value));
   const runners = draft.modelRunners || [];
+  const toolSettings = { ...defaultToolsSettings(), ...(draft.tools || {}) };
 
   return (
     <div className="page settings-page">
@@ -2020,6 +2092,9 @@ function SettingsAdmin({ api }) {
           <FormCheck label="Capture enabled" tooltip="Enable request history capture for API requests." checked={!!draft.requestHistory?.enabled} onChange={v => set(['requestHistory', 'enabled'], v)} />
           <FormInput label="Retention days" tooltip="Number of days request history should be retained." type="number" value={draft.requestHistory?.retentionDays ?? 30} onChange={v => set(['requestHistory', 'retentionDays'], Number(v))} />
         </SettingsSection>
+        <SettingsSection title="Tools">
+          <ToolsSettingsEditor tools={toolSettings} descriptors={toolDescriptors} onRefresh={loadTools} onChange={(key, value) => set(['tools', key], value)} />
+        </SettingsSection>
         <SettingsSection title="Model Servers">
           {runners.map((runner, index) => <ModelRunnerEditor key={index} runner={runner} index={index} onChange={(next) => set(['modelRunners', index], next)} onDelete={() => set(['modelRunners'], runners.filter((_, i) => i !== index))} />)}
           <button className="secondary" title="Add a new model server definition" onClick={() => set(['modelRunners'], [...runners, { ...newModelRunner(), id: '' }])}><Plus size={16} />Add Server</button>
@@ -2037,6 +2112,60 @@ function SettingsAdmin({ api }) {
   );
 }
 
+function ToolsSettingsEditor({ tools, descriptors, onRefresh, onChange }) {
+  const setNumber = (key, value) => onChange(key, Number(value));
+  return (
+    <>
+      <FormCheck label="Tools enabled" tooltip="Global server-side switch for model-directed tools. When off, explicit tool requests are rejected." checked={!!tools.enabled} onChange={v => onChange('enabled', v)} />
+      <FormCheck label="Built-ins enabled" tooltip="Expose Wilson built-in tools when global tools are enabled." checked={tools.builtInsEnabled !== false} onChange={v => onChange('builtInsEnabled', v)} />
+      <FormSelect label="Default approval" tooltip="Default approval policy for tool calls." value={tools.defaultApprovalPolicy || 'ask'} options={['ask', 'auto', 'deny']} onChange={v => onChange('defaultApprovalPolicy', v)} />
+      <FormSelect label="Tool choice mode" tooltip="Model-facing tool-choice mode for tool-enabled chat requests." value={tools.toolChoiceMode || 'auto'} options={['auto', 'required', 'none', 'allowed_only']} onChange={v => onChange('toolChoiceMode', v)} />
+      <FormCheck label="Require approval for destructive tools" tooltip="Force approval for tools marked destructive even if the default approval policy is more permissive." checked={tools.destructiveToolsRequireApproval !== false} onChange={v => onChange('destructiveToolsRequireApproval', v)} />
+      <FormCheck label="Block secret paths" tooltip="Block known secret-bearing files such as .env and key files." checked={tools.blockSecretPaths !== false} onChange={v => onChange('blockSecretPaths', v)} />
+      <FormCheck label="Expose safe traces" tooltip="Show safe tool trace metadata in chat responses." checked={tools.exposeToolTracesToUsers !== false} onChange={v => onChange('exposeToolTracesToUsers', v)} />
+      <FormCheck label="Progress events" tooltip="Emit safe tool progress events when streaming tool support is added." checked={tools.emitProgressEvents !== false} onChange={v => onChange('emitProgressEvents', v)} />
+      <FormInput label="Working directory" tooltip="Default working directory for file and process tools." value={tools.workingDirectory || ''} onChange={v => onChange('workingDirectory', v)} />
+      <FormList label="Allowed roots" tooltip="Filesystem roots that tools may access. File and process tools are unavailable without at least one allowed root." value={tools.allowedRoots || []} onChange={v => onChange('allowedRoots', v)} />
+      <FormList label="Enabled tool names" tooltip="Optional allow-list of tool names. Leave empty to allow every eligible tool not explicitly disabled." value={tools.enabledToolNames || []} onChange={v => onChange('enabledToolNames', v)} />
+      <FormList label="Disabled tool names" tooltip="Tool names that must never be exposed or executed." value={tools.disabledToolNames || []} onChange={v => onChange('disabledToolNames', v)} />
+      <div className="tool-editor-block">
+        <div className="runner-editor-header"><strong>Limits and Storage</strong></div>
+        <FormInput label="Max agent iterations" tooltip="Maximum agent loop iterations per tool-enabled chat request." type="number" value={tools.maxAgentIterations ?? 25} onChange={v => setNumber('maxAgentIterations', v)} />
+        <FormInput label="Max tool iterations" tooltip="Maximum tool execution loop iterations per request." type="number" value={tools.maxToolIterations ?? 20} onChange={v => setNumber('maxToolIterations', v)} />
+        <FormInput label="Max tool calls" tooltip="Maximum tool calls per chat turn." type="number" value={tools.maxToolCallsPerTurn ?? 12} onChange={v => setNumber('maxToolCallsPerTurn', v)} />
+        <FormInput label="Tool timeout (ms)" tooltip="Per-tool execution timeout in milliseconds." type="number" value={tools.toolTimeoutMs ?? 30000} onChange={v => setNumber('toolTimeoutMs', v)} />
+        <FormInput label="Process timeout (ms)" tooltip="Process tool timeout in milliseconds once process execution exists." type="number" value={tools.processTimeoutMs ?? 120000} onChange={v => setNumber('processTimeoutMs', v)} />
+        <FormInput label="Max read bytes" tooltip="Maximum bytes read by read_file." type="number" value={tools.maxReadFileBytes ?? 1048576} onChange={v => setNumber('maxReadFileBytes', v)} />
+        <FormInput label="Max result bytes" tooltip="Maximum model-visible result bytes per tool call." type="number" value={tools.maxToolResultBytes ?? 102400} onChange={v => setNumber('maxToolResultBytes', v)} />
+        <FormInput label="Max output chars" tooltip="Maximum model-visible characters from one tool call." type="number" value={tools.maxToolOutputChars ?? 12000} onChange={v => setNumber('maxToolOutputChars', v)} />
+        <FormInput label="Max output chars per turn" tooltip="Maximum aggregate tool output characters per chat turn." type="number" value={tools.maxToolOutputCharsPerTurn ?? 50000} onChange={v => setNumber('maxToolOutputCharsPerTurn', v)} />
+        <FormInput label="Max result items" tooltip="Maximum result items returned by tools that support item limits." type="number" value={tools.maxToolResultItems ?? 20} onChange={v => setNumber('maxToolResultItems', v)} />
+        <FormCheck label="Store tool results" tooltip="Persist tool result records when persistence support is added." checked={tools.storeToolResults !== false} onChange={v => onChange('storeToolResults', v)} />
+        <FormCheck label="Store full results" tooltip="Persist full tool results instead of summaries/previews when persistence support is added." checked={!!tools.storeFullToolResults} onChange={v => onChange('storeFullToolResults', v)} />
+        <FormCheck label="Store arguments" tooltip="Persist redacted tool arguments when persistence support is added." checked={tools.storeToolArguments !== false} onChange={v => onChange('storeToolArguments', v)} />
+        <FormCheck label="Parallel tool calls" tooltip="Allow parallel tool execution when both Wilson and the selected runner support it." checked={!!tools.allowParallelToolCalls} onChange={v => onChange('allowParallelToolCalls', v)} />
+        <FormInput label="Max parallel calls" tooltip="Maximum parallel tool calls when parallel execution is enabled." type="number" value={tools.maxParallelToolCalls ?? 1} onChange={v => setNumber('maxParallelToolCalls', v)} />
+      </div>
+      <div className="tool-descriptor-list">
+        <div className="runner-editor-header"><strong>Effective Tools</strong><button className="icon-button" title="Refresh effective tool descriptors" onClick={onRefresh}><RefreshCw size={15} /></button></div>
+        {descriptors.length < 1 && <div className="empty-cell" title="No tool descriptors were returned">No tool descriptors returned.</div>}
+        {descriptors.map(tool => (
+          <div key={tool.name} className={tool.available ? 'tool-descriptor-row available' : 'tool-descriptor-row unavailable'} title={tool.unavailableReason || `${tool.displayName || tool.name} is available`}>
+            <div>
+              <strong>{tool.displayName || tool.name}</strong>
+              <span>{tool.name}</span>
+            </div>
+            <span className={tool.available ? 'tool-status complete' : 'tool-status failed'}>{tool.available ? 'available' : 'blocked'}</span>
+            <span className="tool-descriptor-meta">{tool.category || 'tool'}</span>
+            <span className="tool-descriptor-meta">{tool.requiresApproval ? 'approval' : 'no approval'}</span>
+            <span className="tool-descriptor-reason">{tool.unavailableReason || 'Ready'}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
   const set = (key, value) => onChange({ ...runner, [key]: value });
   return (
@@ -2049,6 +2178,15 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
       <FormInput label="API key" tooltip="Optional API key for the model server." value={runner.apiKey || ''} onChange={v => set('apiKey', v || null)} />
       <FormList label="Configured models" tooltip="Known model names. Leave empty for Ollama to let Wilson query the Ollama server." value={runner.models || []} onChange={v => set('models', v)} />
       <FormInput label="Context window tokens" tooltip="Context window used for prompt truncation." type="number" value={runner.contextWindowTokens ?? 8192} onChange={v => set('contextWindowTokens', Number(v))} />
+      <div className="tool-editor-block">
+        <div className="runner-editor-header"><strong>Tool Calling</strong></div>
+        <FormCheck label="Tools enabled" tooltip="Allow this model server to be selected for tool-enabled chat when global tools are enabled." checked={runner.toolsEnabled !== false} onChange={v => set('toolsEnabled', v)} />
+        <FormCheck label="Supports tools" tooltip="Whether this model server API can accept tool definitions and return tool calls." checked={runner.supportsTools !== false} onChange={v => set('supportsTools', v)} />
+        <FormInput label="Tool API format" tooltip="Tool-call wire format, for example OllamaChat or OpenAIChatCompletions." value={runner.toolCallingApiFormat || defaultRunnerToolSettings(runner.apiType).toolCallingApiFormat} onChange={v => set('toolCallingApiFormat', v)} />
+        <FormInput label="Chat completions path" tooltip="OpenAI-compatible chat completions path used for tool-enabled requests. Ollama can leave this blank." value={runner.chatCompletionsPath ?? defaultRunnerToolSettings(runner.apiType).chatCompletionsPath} onChange={v => set('chatCompletionsPath', v)} />
+        <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn." checked={!!runner.supportsParallelToolCalls} onChange={v => set('supportsParallelToolCalls', v)} />
+        <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={!!runner.supportsStreamingToolCalls} onChange={v => set('supportsStreamingToolCalls', v)} />
+      </div>
       <div className="health-editor-block">
         <div className="runner-editor-header"><strong>Health Checks</strong></div>
         <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server." checked={runner.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
