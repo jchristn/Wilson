@@ -195,6 +195,7 @@ Chat tool activity is safe by default: raw model arguments, raw tool output, pro
 ```powershell
 dotnet build src\Wilson.slnx
 dotnet run --project src\Test.Automated
+dotnet test src\Wilson.slnx
 cd dashboard
 npm run lint
 npm run build

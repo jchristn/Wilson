@@ -3,6 +3,7 @@ namespace Test.Automated
     using System;
     using System.Threading.Tasks;
     using Test.Shared;
+    using Touchstone.Cli;
 
     /// <summary>
     /// Automated test runner.
@@ -14,17 +15,23 @@ namespace Test.Automated
         /// </summary>
         public static async Task<int> Main(string[] args)
         {
-            try
+            return await ConsoleRunner.RunAsync(
+                TouchstoneSuiteCatalog.GetSuites(),
+                resultsPath: ParseResultsPath(args)).ConfigureAwait(false);
+        }
+
+        private static string? ParseResultsPath(string[] args)
+        {
+            if (args == null || args.Length < 2)
+                return null;
+
+            for (int i = 0; i < args.Length - 1; i++)
             {
-                await WilsonSuites.RunAllAsync().ConfigureAwait(false);
-                Console.WriteLine("PASS Wilson automated tests");
-                return 0;
+                if (String.Equals(args[i], "--results", StringComparison.Ordinal))
+                    return args[i + 1];
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("FAIL " + ex.Message);
-                return 1;
-            }
+
+            return null;
         }
     }
 }

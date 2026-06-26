@@ -15,6 +15,7 @@ namespace Test.Shared
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Data.Sqlite;
+    using Touchstone.Core;
     using Wilson.Core.Database;
     using Wilson.Core.Models;
     using Wilson.Core.Services;
@@ -28,34 +29,90 @@ namespace Test.Shared
     public static class WilsonSuites
     {
         /// <summary>
-        /// Run all tests.
+        /// Get the shared Touchstone test suites.
+        /// </summary>
+        /// <returns>Test suite descriptors.</returns>
+        public static IReadOnlyList<TestSuiteDescriptor> GetSuites()
+        {
+            return new List<TestSuiteDescriptor>
+            {
+                new TestSuiteDescriptor(
+                    "wilson",
+                    "Wilson Shared Suite",
+                    new List<TestCaseDescriptor>
+                    {
+                        CreateAsyncCase("database-round-trip", "Database round trip", DatabaseRoundTripAsync),
+                        CreateAsyncCase("database-parameterization", "Database parameterization", DatabaseParameterizationAsync),
+                        CreateAsyncCase("tool-persistence", "Tool persistence", ToolPersistenceAsync),
+                        CreateAsyncCase("tool-audit-redaction-persistence", "Tool audit redaction persistence", ToolAuditRedactionPersistenceAsync),
+                        CreateSyncCase("id-length", "Identifier length", IdLength),
+                        CreateSyncCase("tool-settings-defaults", "Tool settings defaults", ToolSettingsDefaults),
+                        CreateAsyncCase("tool-service-foundation", "Tool service foundation", ToolServiceFoundationAsync),
+                        CreateAsyncCase("tool-diagnostics-api", "Tool diagnostics API", ToolDiagnosticsApiAsync),
+                        CreateAsyncCase("public-chat-tool-trace-api", "Public chat tool trace API", PublicChatToolTraceApiAsync),
+                        CreateAsyncCase("working-directory-guard", "Working directory guard", WorkingDirectoryGuardAsync),
+                        CreateAsyncCase("tool-argument-validation-and-output-limiter", "Tool argument validation and output limiter", ToolArgumentValidationAndOutputLimiterAsync),
+                        CreateAsyncCase("filesystem-discovery-tools", "Filesystem discovery tools", FilesystemDiscoveryToolsAsync),
+                        CreateAsyncCase("filesystem-mutation-tools", "Filesystem mutation tools", FilesystemMutationToolsAsync),
+                        CreateAsyncCase("run-process-tool", "Run process tool", RunProcessToolAsync),
+                        CreateAsyncCase("web-retrieve-tool", "Web retrieve tool", WebRetrieveToolAsync),
+                        CreateAsyncCase("web-search-tool", "Web search tool", WebSearchToolAsync),
+                        CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
+                        CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
+                        CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
+                        CreateAsyncCase("tool-agent-loop-coverage", "Tool agent loop coverage", ToolAgentLoopCoverageAsync),
+                        CreateAsyncCase("tool-agent-per-turn-output-limit", "Tool agent per-turn output limit", ToolAgentPerTurnOutputLimitAsync),
+                        CreateSyncCase("context-truncation", "Context truncation", ContextTruncationAsync),
+                        CreateSyncCase("health-check-defaults", "Health check defaults", HealthCheckDefaults),
+                        CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
+                    })
+            };
+        }
+
+        /// <summary>
+        /// Run all tests through Touchstone.
         /// </summary>
         public static async Task RunAllAsync()
         {
-            await DatabaseRoundTripAsync().ConfigureAwait(false);
-            await DatabaseParameterizationAsync().ConfigureAwait(false);
-            await ToolPersistenceAsync().ConfigureAwait(false);
-            await ToolAuditRedactionPersistenceAsync().ConfigureAwait(false);
-            IdLength();
-            ToolSettingsDefaults();
-            await ToolServiceFoundationAsync().ConfigureAwait(false);
-            await ToolDiagnosticsApiAsync().ConfigureAwait(false);
-            await PublicChatToolTraceApiAsync().ConfigureAwait(false);
-            await WorkingDirectoryGuardAsync().ConfigureAwait(false);
-            await ToolArgumentValidationAndOutputLimiterAsync().ConfigureAwait(false);
-            await FilesystemDiscoveryToolsAsync().ConfigureAwait(false);
-            await FilesystemMutationToolsAsync().ConfigureAwait(false);
-            await RunProcessToolAsync().ConfigureAwait(false);
-            await WebRetrieveToolAsync().ConfigureAwait(false);
-            await WebSearchToolAsync().ConfigureAwait(false);
-            ToolCapableInferenceParsing();
-            await ToolAgentLoopAsync().ConfigureAwait(false);
-            await ToolAgentApprovalPolicyAsync().ConfigureAwait(false);
-            await ToolAgentLoopCoverageAsync().ConfigureAwait(false);
-            await ToolAgentPerTurnOutputLimitAsync().ConfigureAwait(false);
-            ContextTruncationAsync();
-            HealthCheckDefaults();
-            HealthStatusSnapshot();
+            List<string> failures = new List<string>();
+            foreach (TestSuiteDescriptor suite in GetSuites())
+            {
+                TestRunSummary summary = await TestExecutor.RunSuiteAsync(suite).ConfigureAwait(false);
+                if (summary.Failed > 0)
+                    failures.Add(suite.SuiteId + " failed " + summary.Failed.ToString(System.Globalization.CultureInfo.InvariantCulture) + " test(s).");
+            }
+
+            if (failures.Count > 0)
+                throw new InvalidOperationException(String.Join("; ", failures));
+        }
+
+        private static TestCaseDescriptor CreateAsyncCase(string caseId, string displayName, Func<Task> executeAsync)
+        {
+            return new TestCaseDescriptor(
+                "wilson",
+                caseId,
+                displayName,
+                async token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    await executeAsync().ConfigureAwait(false);
+                },
+                new[] { "wilson" });
+        }
+
+        private static TestCaseDescriptor CreateSyncCase(string caseId, string displayName, Action execute)
+        {
+            return new TestCaseDescriptor(
+                "wilson",
+                caseId,
+                displayName,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    execute();
+                    return Task.CompletedTask;
+                },
+                new[] { "wilson" });
         }
 
         private static async Task DatabaseRoundTripAsync()

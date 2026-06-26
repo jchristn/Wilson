@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Touchstone.Core" Version="0.1.12" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Wilson.Core\Wilson.Core.csproj" />
     <ProjectReference Include="..\Wilson.Server\Wilson.Server.csproj" />
   </ItemGroup>
