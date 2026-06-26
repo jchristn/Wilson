@@ -80,7 +80,7 @@ namespace Wilson.Core.Services
             ArgumentNullException.ThrowIfNull(settings);
 
             DateTime now = DateTime.UtcNow;
-            HashSet<string> enabledRunnerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> configuredRunnerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             lock (_Sync)
             {
@@ -89,21 +89,29 @@ namespace Wilson.Core.Services
                 {
                     if (String.IsNullOrWhiteSpace(runner.Id)) continue;
                     ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
-                    if (!runner.HealthCheckEnabled) continue;
 
-                    enabledRunnerIds.Add(runner.Id);
+                    configuredRunnerIds.Add(runner.Id);
                     EndpointHealthState state = _States.GetOrAdd(runner.Id, _ => CreateState(runner, now));
                     lock (state.Lock)
                     {
                         state.EndpointName = String.IsNullOrWhiteSpace(runner.Name) ? runner.Id : runner.Name;
+                        state.HealthCheckEnabled = runner.HealthCheckEnabled;
                     }
 
-                    _NextChecksUtc[runner.Id] = DateTime.MinValue;
+                    if (runner.HealthCheckEnabled)
+                    {
+                        _NextChecksUtc[runner.Id] = DateTime.MinValue;
+                    }
+                    else
+                    {
+                        MarkDisabledRunnerAvailable(state, now);
+                        _NextChecksUtc.Remove(runner.Id);
+                    }
                 }
 
                 foreach (string id in _States.Keys)
                 {
-                    if (enabledRunnerIds.Contains(id)) continue;
+                    if (configuredRunnerIds.Contains(id)) continue;
                     _States.TryRemove(id, out _);
                     _NextChecksUtc.Remove(id);
                 }
@@ -265,6 +273,7 @@ namespace Wilson.Core.Services
             lock (state.Lock)
             {
                 state.EndpointName = String.IsNullOrWhiteSpace(runner.Name) ? runner.Id : runner.Name;
+                state.HealthCheckEnabled = true;
                 state.LastCheckUtc = now;
 
                 if (success)
@@ -329,9 +338,34 @@ namespace Wilson.Core.Services
             {
                 EndpointId = runner.Id,
                 EndpointName = String.IsNullOrWhiteSpace(runner.Name) ? runner.Id : runner.Name,
+                HealthCheckEnabled = runner.HealthCheckEnabled,
                 FirstCheckUtc = now,
                 LastStateChangeUtc = now
             };
+        }
+
+        private static void MarkDisabledRunnerAvailable(EndpointHealthState state, DateTime now)
+        {
+            lock (state.Lock)
+            {
+                state.HealthCheckEnabled = false;
+                state.LastError = null;
+                state.ConsecutiveSuccesses = 0;
+                state.ConsecutiveFailures = 0;
+                if (!state.IsHealthy)
+                {
+                    if (state.LastStateChangeUtc.HasValue)
+                    {
+                        long downtimeMs = (long)(now - state.LastStateChangeUtc.Value).TotalMilliseconds;
+                        if (downtimeMs > 0) state.TotalDowntimeMs += downtimeMs;
+                    }
+
+                    state.IsHealthy = true;
+                    state.LastStateChangeUtc = now;
+                }
+
+                if (!state.LastHealthyUtc.HasValue) state.LastHealthyUtc = now;
+            }
         }
 
         private static ModelRunnerSettings CopyRunner(ModelRunnerSettings runner)

@@ -160,8 +160,10 @@ namespace Wilson.Core.Services
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
                     status.Models = new List<string>(status.ChatModels);
-                    status.Online = false;
-                    status.StatusMessage = "Live model status timed out after " + runnerDefaults.HealthCheckTimeoutMs + "ms.";
+                    status.Online = !runnerDefaults.HealthCheckEnabled;
+                    status.StatusMessage = runnerDefaults.HealthCheckEnabled
+                        ? "Live model status timed out after " + runnerDefaults.HealthCheckTimeoutMs + "ms."
+                        : "Health checks are disabled; configured model server is treated as available.";
                 }
                 catch (Exception ex)
                 {
@@ -169,8 +171,10 @@ namespace Wilson.Core.Services
                     status.ChatModels = classification.ChatModels;
                     status.EmbeddingModels = classification.EmbeddingModels;
                     status.Models = new List<string>(status.ChatModels);
-                    status.Online = false;
-                    status.StatusMessage = ex.Message;
+                    status.Online = !runnerDefaults.HealthCheckEnabled;
+                    status.StatusMessage = runnerDefaults.HealthCheckEnabled
+                        ? ex.Message
+                        : "Health checks are disabled; configured model server is treated as available.";
                 }
 
                 statuses.Add(status);

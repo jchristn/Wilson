@@ -394,7 +394,7 @@ function Chat({ api }) {
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [streaming, setStreaming] = useState(true);
-  const [toolsEnabled, setToolsEnabled] = useState(() => localStorage.getItem('wilson.chat.toolsEnabled') === 'true');
+  const [toolsEnabled, setToolsEnabled] = useState(() => localStorage.getItem('wilson.chat.toolsEnabled') !== 'false');
   const [toolApprovalPolicy, setToolApprovalPolicy] = useState(() => {
     const stored = localStorage.getItem('wilson.chat.toolApprovalPolicy');
     return stored === 'deny' ? 'deny' : 'auto';
@@ -671,8 +671,8 @@ function Chat({ api }) {
   const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
   const modelLoading = loadingModelKey === selectedModelKey;
   const availableTools = toolCatalog.filter(item => item.available);
-  const toolRequestEnabled = toolsEnabled && availableTools.length > 0;
-  const toolToggleDisabled = availableTools.length < 1 || busy;
+  const toolRequestEnabled = toolsEnabled;
+  const toolToggleDisabled = busy;
   return (
     <div className="chat-layout">
       <aside className="conversation-list">
@@ -1129,7 +1129,7 @@ function healthMapFromList(items) {
 }
 
 function modelServerHealthPresentation(server) {
-  if (server.healthCheckEnabled === false) return { label: 'Disabled', tone: 'status-redirect', title: 'Health checks are disabled for this model server.' };
+  if (server.healthCheckEnabled === false) return { label: 'Available', tone: 'status-ok', title: 'Health checks are disabled; Wilson treats this model server as available.' };
   const health = server.health;
   if (!health || !healthField(health, 'lastCheckUtc')) return { label: 'Awaiting Check', tone: 'status-warn', title: 'Awaiting the first background health check.' };
   if (healthField(health, 'isHealthy')) return { label: 'Healthy', tone: 'status-ok', title: `Healthy since ${formatDate(healthField(health, 'lastHealthyUtc')) || 'the latest passing checks'}.` };
@@ -1339,7 +1339,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       <div className="server-health-line" title="Recent background health checks for this model server">
         <div>
           <label>Health history</label>
-          <span>{history.length ? `${compactHistoryCount} recent check${compactHistoryCount === 1 ? '' : 's'}` : (server.healthCheckEnabled === false ? 'Disabled' : 'Awaiting check')}</span>
+          <span>{history.length ? `${compactHistoryCount} recent check${compactHistoryCount === 1 ? '' : 's'}` : (server.healthCheckEnabled === false ? 'Monitoring off' : 'Awaiting check')}</span>
         </div>
         <HealthHistogram history={history} width={150} height={20} />
         <button className="secondary compact-button" title={`Open health details for ${server.name || server.id}`} onClick={() => setHealthOpen(true)}><Activity size={15} />Details</button>

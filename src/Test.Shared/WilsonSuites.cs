@@ -64,6 +64,7 @@ namespace Test.Shared
                         CreateAsyncCase("tool-agent-per-turn-output-limit", "Tool agent per-turn output limit", ToolAgentPerTurnOutputLimitAsync),
                         CreateSyncCase("context-truncation", "Context truncation", ContextTruncationAsync),
                         CreateSyncCase("health-check-defaults", "Health check defaults", HealthCheckDefaults),
+                        CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
                         CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
                     })
             };
@@ -2199,6 +2200,10 @@ namespace Test.Shared
                 ModelChatMessage? toolInstruction = request.Messages.FirstOrDefault(message => String.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) && (message.Content ?? String.Empty).Contains("Wilson tool instructions", StringComparison.Ordinal));
                 if (toolInstruction == null || !(toolInstruction.Content ?? String.Empty).Contains("untrusted", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("Do not reveal", StringComparison.Ordinal))
                     throw new InvalidOperationException("Expected Wilson tool behavior instructions in provider request.");
+                if (!(toolInstruction.Content ?? String.Empty).Contains("Available Wilson tools:", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected Wilson tool inventory in provider request.");
+                if (!(toolInstruction.Content ?? String.Empty).Contains("MCP means Model Context Protocol", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("No MCP tools are currently available", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("read_file [filesystem]", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected category-aware MCP guidance in provider request.");
                 return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "plain answer", FinishReason = "stop" });
             });
 
@@ -2468,6 +2473,46 @@ namespace Test.Shared
             ModelRunnerSettings.ApplyHealthCheckDefaults(openAi);
             if (!String.Equals(openAi.HealthCheckUrl, "https://api.openai.com/v1/models", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected OpenAI health check URL.");
             if (!openAi.HealthCheckUseAuth) throw new InvalidOperationException("Expected OpenAI health checks to use auth when an API key is configured.");
+        }
+
+        private static async Task DisabledHealthChecksReportAvailableAsync()
+        {
+            int unusedPort = GetFreePort();
+            Settings settings = new Settings
+            {
+                ModelRunners = new List<ModelRunnerSettings>
+                {
+                    new ModelRunnerSettings
+                    {
+                        Id = "disabled-health-runner",
+                        Name = "Disabled Health Runner",
+                        ApiType = "Ollama",
+                        Endpoint = "http://127.0.0.1:" + unusedPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        Models = new List<string> { "llama3" },
+                        HealthCheckEnabled = false,
+                        HealthCheckTimeoutMs = 10
+                    }
+                }
+            };
+
+            using (ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings))
+            {
+                EndpointHealthStatus? health = healthChecks.GetHealthStatus("disabled-health-runner");
+                if (health == null) throw new InvalidOperationException("Expected disabled health checks to still expose model server health status.");
+                if (!health.IsHealthy) throw new InvalidOperationException("Expected disabled health checks to report the model server as healthy.");
+                if (health.HealthCheckEnabled) throw new InvalidOperationException("Expected health status to record that active health checks are disabled.");
+                if (health.History.Count != 0) throw new InvalidOperationException("Disabled health checks should not create probe history.");
+
+                List<EndpointHealthStatus> allHealth = healthChecks.GetAllHealthStatuses();
+                if (!allHealth.Any(item => String.Equals(item.EndpointId, "disabled-health-runner", StringComparison.OrdinalIgnoreCase) && item.IsHealthy))
+                    throw new InvalidOperationException("Expected disabled health-check model server in aggregate health status.");
+            }
+
+            InferenceService inference = new InferenceService(settings);
+            List<ModelRunnerStatus> statuses = await inference.GetRunnerStatusesAsync(true).ConfigureAwait(false);
+            ModelRunnerStatus status = statuses.Single(item => String.Equals(item.Id, "disabled-health-runner", StringComparison.OrdinalIgnoreCase));
+            if (!status.Online) throw new InvalidOperationException("Disabled health checks should not make an unreachable model status endpoint report offline.");
+            if (!status.ChatModels.Contains("llama3", StringComparer.OrdinalIgnoreCase)) throw new InvalidOperationException("Expected configured chat model to remain available when health checks are disabled.");
         }
 
         private static void HealthStatusSnapshot()

@@ -356,6 +356,8 @@ namespace Wilson.Core.Models
         public string TenantId { get; set; } = String.Empty;
         /// <summary>Current health state. Starts false until enough successful checks occur.</summary>
         public bool IsHealthy { get; set; } = false;
+        /// <summary>Whether active background health monitoring is enabled.</summary>
+        public bool HealthCheckEnabled { get; set; } = true;
         /// <summary>When monitoring began.</summary>
         public DateTime FirstCheckUtc { get; set; } = DateTime.UtcNow;
         /// <summary>Most recent check time.</summary>
@@ -399,6 +401,8 @@ namespace Wilson.Core.Models
         public string TenantId { get; set; } = String.Empty;
         /// <summary>Current health state.</summary>
         public bool IsHealthy { get; set; }
+        /// <summary>Whether active background health monitoring is enabled.</summary>
+        public bool HealthCheckEnabled { get; set; } = true;
         /// <summary>When monitoring began.</summary>
         public DateTime FirstCheckUtc { get; set; }
         /// <summary>Most recent check time.</summary>
@@ -441,6 +445,7 @@ namespace Wilson.Core.Models
                 status.EndpointName = state.EndpointName;
                 status.TenantId = state.TenantId;
                 status.IsHealthy = state.IsHealthy;
+                status.HealthCheckEnabled = state.HealthCheckEnabled;
                 status.FirstCheckUtc = state.FirstCheckUtc;
                 status.LastCheckUtc = state.LastCheckUtc;
                 status.LastHealthyUtc = state.LastHealthyUtc;
