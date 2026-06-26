@@ -1288,8 +1288,9 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add API tests for tool validate/test diagnostics.
   - Progress, 2026-06-26: `ToolDiagnosticsApiAsync` covers validation success/failure, missing allowed roots, unknown enabled tool names, runner readiness success, disabled runner, unsupported runner, missing runner, admin-only access, and OpenAPI path/schema presence.
 - [ ] Add API tests for approval endpoint authorization.
-- [ ] Add API tests for conversation tool calls authorization.
-- [ ] Add API tests for request-history tool calls authorization.
+- [x] Add API tests for conversation tool calls authorization.
+- [x] Add API tests for request-history tool calls authorization.
+  - Progress, 2026-06-27: `ToolDiagnosticsApiAsync` seeds a conversation, tool run, tool call, and request-history row in the live server database, then verifies conversation owner access, tenant/global admin request-history access, tenant scoping via `tenantId`, and unauthenticated denial for conversation/request-history tool-call routes. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [ ] Add streaming SSE parser tests for tool events.
 - [ ] Add tests proving public chat `toolCalls` omit raw arguments, raw output, provider request IDs, and hidden policy fields.
 - [x] Add OpenAPI generation test proving schemas and paths are present.

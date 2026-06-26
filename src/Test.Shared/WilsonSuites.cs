@@ -809,6 +809,8 @@ namespace Test.Shared
                             new ToolPolicyTestRequest { Tools = validTools, RunnerId = "missing-runner" }).ConfigureAwait(false);
                         if (missingRunner.Success || missingRunner.RunnerFound || !missingRunner.Errors.Any(error => error.Contains("not found", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected missing runner readiness to fail.");
 
+                        await SeedAndVerifyToolCallApiAuthorizationAsync(server, userClient, adminClient, anonymousClient).ConfigureAwait(false);
+
                         await ExpectStatusAsync(
                             anonymousClient,
                             "/v1.0/api/tools/validate",
@@ -851,6 +853,99 @@ namespace Test.Shared
                 SqliteConnection.ClearAllPools();
                 if (Directory.Exists(workspace)) Directory.Delete(workspace, true);
             }
+        }
+
+        private static async Task SeedAndVerifyToolCallApiAuthorizationAsync(WilsonServer server, HttpClient userClient, HttpClient adminClient, HttpClient anonymousClient)
+        {
+            Tenant tenant = (await server.Database.GetTenantsAsync().ConfigureAwait(false)).First();
+            User user = (await server.Database.GetUsersAsync(tenant.Id).ConfigureAwait(false)).First(item => String.Equals(item.Email, "test-user@example.com", StringComparison.OrdinalIgnoreCase));
+            Conversation conversation = new Conversation
+            {
+                Id = "conversation-tool-api",
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                Title = "Tool API auth",
+                RunnerId = "tool-runner",
+                Model = "test-model"
+            };
+            await server.Database.CreateConversationAsync(conversation).ConfigureAwait(false);
+
+            ToolRun run = new ToolRun
+            {
+                RunId = "toolrun-api-auth",
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                ConversationId = conversation.Id,
+                RunnerId = "tool-runner",
+                Model = "test-model",
+                Status = ToolStatuses.Completed,
+                StartedUtc = DateTime.UtcNow.AddMilliseconds(-20),
+                CompletedUtc = DateTime.UtcNow,
+                ToolCallCount = 1,
+                IterationCount = 1
+            };
+            await server.Database.CreateToolRunAsync(run).ConfigureAwait(false);
+
+            ToolExecutionRecord record = new ToolExecutionRecord
+            {
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                ConversationId = conversation.Id,
+                RunId = run.RunId,
+                TraceId = run.RunId + ":1",
+                ToolCallId = "toolcall-api-auth",
+                ToolName = "read_file",
+                Iteration = 1,
+                SequenceNumber = 1,
+                Status = ToolStatuses.Completed,
+                ApprovalPolicy = ToolApprovalPolicies.Auto,
+                ArgumentsJson = "{}",
+                ResultJson = """{"summary":"Completed."}""",
+                ResultSummaryJson = """{"success":true,"summary":"Completed."}""",
+                ResultPreview = "Completed.",
+                Success = true,
+                StartedUtc = run.StartedUtc,
+                CompletedUtc = run.CompletedUtc,
+                CreatedUtc = run.StartedUtc,
+                UpdatedUtc = run.CompletedUtc ?? DateTime.UtcNow
+            };
+            await server.Database.CreateToolCallAsync(record).ConfigureAwait(false);
+
+            RequestHistoryEntry history = new RequestHistoryEntry
+            {
+                Id = "request-tool-api-auth",
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                CreatedUtc = DateTime.UtcNow,
+                Method = "POST",
+                Path = "/v1.0/api/chat",
+                StatusCode = 200,
+                ToolRunId = run.RunId,
+                ToolCallCount = 1,
+                ToolElapsedMs = 12,
+                AgentIterations = 1
+            };
+            await server.Database.CreateRequestHistoryAsync(history).ConfigureAwait(false);
+            await server.Database.AttachToolCallsToRequestHistoryByRunIdAsync(tenant.Id, run.RunId, history.Id).ConfigureAwait(false);
+
+            using (JsonDocument conversationCalls = await GetJsonDocumentAsync(userClient, "/v1.0/api/conversations/" + conversation.Id + "/tool-calls").ConfigureAwait(false))
+            {
+                AssertEnumerationCount(conversationCalls, 1, "conversation tool calls");
+            }
+
+            await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/conversations/" + conversation.Id + "/tool-calls", HttpStatusCode.Unauthorized).ConfigureAwait(false);
+
+            using (JsonDocument requestHistoryCalls = await GetJsonDocumentAsync(userClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls").ConfigureAwait(false))
+            {
+                AssertEnumerationCount(requestHistoryCalls, 1, "request-history tool calls for tenant admin");
+            }
+
+            using (JsonDocument adminRequestHistoryCalls = await GetJsonDocumentAsync(adminClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls?tenantId=" + tenant.Id).ConfigureAwait(false))
+            {
+                AssertEnumerationCount(adminRequestHistoryCalls, 1, "request-history tool calls for global admin");
+            }
+
+            await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/request-history/" + history.Id + "/tool-calls", HttpStatusCode.Unauthorized).ConfigureAwait(false);
         }
 
         private static async Task WorkingDirectoryGuardAsync()
@@ -1270,6 +1365,18 @@ namespace Test.Shared
             }
         }
 
+        private static async Task ExpectGetStatusAsync(HttpClient client, string path, HttpStatusCode expectedStatus)
+        {
+            using (HttpResponseMessage response = await client.GetAsync(path).ConfigureAwait(false))
+            {
+                if (response.StatusCode != expectedStatus)
+                {
+                    string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    throw new InvalidOperationException("Expected " + (int)expectedStatus + " from " + path + " but received " + (int)response.StatusCode + ": " + payload);
+                }
+            }
+        }
+
         private static async Task<JsonDocument> GetJsonDocumentAsync(HttpClient client, string path)
         {
             using (HttpResponseMessage response = await client.GetAsync(path).ConfigureAwait(false))
@@ -1278,6 +1385,15 @@ namespace Test.Shared
                 if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Expected success from " + path + " but received " + (int)response.StatusCode + ": " + payload);
                 return JsonDocument.Parse(payload);
             }
+        }
+
+        private static void AssertEnumerationCount(JsonDocument document, int expectedCount, string label)
+        {
+            JsonElement root = document.RootElement;
+            if (!root.TryGetProperty("objects", out JsonElement objects) || objects.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Expected " + label + " enumeration objects array.");
+            if (objects.GetArrayLength() != expectedCount)
+                throw new InvalidOperationException("Expected " + expectedCount + " " + label + " but received " + objects.GetArrayLength() + ".");
         }
 
         private static async Task RunProcessToolAsync()
