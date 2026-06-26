@@ -14,6 +14,7 @@
     <PackageReference Include="PrettyId" Version="2.0.1" />
     <PackageReference Include="SourceGear.sqlite3" Version="3.50.4.5" />
     <PackageReference Include="SQLitePCLRaw.config.e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="Voltaic" Version="0.1.11" />
   </ItemGroup>
 
 </Project>

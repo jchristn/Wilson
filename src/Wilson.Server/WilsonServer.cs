@@ -54,6 +54,11 @@ namespace Wilson.Server
         public ToolService ToolService { get; private set; }
 
         /// <summary>
+        /// MCP tool manager.
+        /// </summary>
+        public McpToolManager McpTools { get; private set; }
+
+        /// <summary>
         /// Model runner health check service.
         /// </summary>
         public ModelRunnerHealthCheckService HealthChecks { get; }
@@ -71,7 +76,8 @@ namespace Wilson.Server
             _Json.Converters.Add(new JsonStringEnumConverter());
             Database = new DatabaseDriver(settings.Database);
             Inference = new InferenceService(settings);
-            ToolService = new ToolService(settings);
+            McpTools = new McpToolManager();
+            ToolService = new ToolService(settings, McpTools);
             HealthChecks = new ModelRunnerHealthCheckService(settings);
             WebserverSettings webserverSettings = new WebserverSettings(settings.Rest.Hostname, settings.Rest.Port, settings.Rest.Ssl);
             Server = new Webserver(webserverSettings, DefaultRouteAsync);
@@ -101,6 +107,7 @@ namespace Wilson.Server
             WilsonServer server = new WilsonServer(settings, settingsFile);
             await server.Database.InitializeAsync().ConfigureAwait(false);
             await server.Database.SeedAsync(settings.Seed).ConfigureAwait(false);
+            await server.ReloadMcpAsync(CancellationToken.None).ConfigureAwait(false);
             return server;
         }
 
@@ -475,10 +482,25 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 NormalizeSettings(updated);
                 Settings = updated;
                 Inference = new InferenceService(Settings);
-                ToolService = new ToolService(Settings);
+                await ReloadMcpAsync(ctx.Token).ConfigureAwait(false);
                 HealthChecks.UpdateSettings(Settings);
                 File.WriteAllText(_SettingsFile, JsonSerializer.Serialize(Settings, _Json));
                 await SendJsonAsync(ctx, Settings).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/mcp" && method == "GET")
+            {
+                RequireAdmin(requestContext);
+                await SendJsonAsync(ctx, McpTools.GetStatus(Settings)).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/mcp/reload" && method == "POST")
+            {
+                RequireAdmin(requestContext);
+                await ReloadMcpAsync(ctx.Token).ConfigureAwait(false);
+                await SendJsonAsync(ctx, McpTools.GetStatus(Settings)).ConfigureAwait(false);
                 return;
             }
 
@@ -1122,7 +1144,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 throw new ArgumentException("Non-streaming tool approval is not implemented. Set approvalPolicy to 'auto' for safe tools, or disable tools for this request.");
 
             Settings effectiveSettings = new Settings { Tools = tools };
-            ToolService effectiveToolService = new ToolService(effectiveSettings);
+            ToolService effectiveToolService = new ToolService(effectiveSettings, McpTools);
             if (effectiveToolService.GetModelToolDefinitions().Count == 0)
             {
                 if (body.ToolsEnabled == true) throw new ArgumentException("No executable tools are available for this request. Check tool working directory, allowed roots, and enabled tool names.");
@@ -1142,7 +1164,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ToolsSettings tools = draftTools == null ? CloneTools(Settings.Tools) : CloneTools(draftTools);
             NormalizeTools(tools);
             Settings validationSettings = new Settings { Tools = tools };
-            ToolService service = new ToolService(validationSettings);
+            ToolService service = new ToolService(validationSettings, McpTools);
             List<ToolDescriptor> descriptors = service.ListTools(true);
             List<ToolDescriptor> available = descriptors.Where(tool => tool.Available).ToList();
             HashSet<string> registeredNames = new HashSet<string>(descriptors.Select(tool => tool.Name), StringComparer.OrdinalIgnoreCase);
@@ -1209,8 +1231,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 {
                     result.Warnings.Add("MCP is enabled, but no enabled MCP server is configured.");
                 }
-
-                result.Warnings.Add("MCP settings are configured, but MCP execution and connection diagnostics are not registered in this Wilson build.");
             }
 
             result.Success = result.Errors.Count == 0;
@@ -1274,6 +1294,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             result.Success = result.Errors.Count == 0;
             return result;
+        }
+
+        private async Task ReloadMcpAsync(CancellationToken token)
+        {
+            await McpTools.InitializeAsync(Settings, token).ConfigureAwait(false);
+            ToolService = new ToolService(Settings, McpTools);
         }
 
         private static ModelRunnerSettings CloneRunner(ModelRunnerSettings source)
@@ -1684,6 +1710,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Operation("get", "getSettings", "Administration", "Read settings", "Returns the active Wilson settings. Requires a global administrator bearer token.", "Settings", true),
                         Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
                     { "/v1.0/api/tools", Path(Operation("get", "listTools", "Tools", "List effective tools", "Lists effective tool descriptors for the authenticated principal, including unavailable diagnostics when tools or prerequisites are disabled.", "ToolDescriptorArray", true)) },
+                    { "/v1.0/api/mcp", Path(Operation("get", "getMcpStatus", "Tools", "Get MCP status", "Returns redacted MCP server connection status and discovered tool counts. Requires a global administrator bearer token.", "McpStatusResponse", true)) },
+                    { "/v1.0/api/mcp/reload", Path(Operation("post", "reloadMcp", "Tools", "Reload MCP servers", "Reconnects configured MCP servers and rediscovers MCP tools. Requires a global administrator bearer token.", "McpStatusResponse", true)) },
                     { "/v1.0/api/tools/validate", Path(Operation("post", "validateTools", "Tools", "Validate draft tool policy", "Validates draft tool settings without saving them. Requires a global administrator bearer token.", "ToolPolicyValidationResult", true, requestSchema: "ToolPolicyValidationRequest")) },
                     { "/v1.0/api/tools/test", Path(Operation("post", "testTools", "Tools", "Test tool readiness", "Runs dry-run tool readiness diagnostics against draft tool settings and an optional model runner. Requires a global administrator bearer token.", "ToolPolicyTestResult", true, requestSchema: "ToolPolicyTestRequest")) },
                     { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
@@ -1963,6 +1991,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ToolPolicyValidationResult));
             AddComponentSchema(schemas, typeof(ToolPolicyTestRequest));
             AddComponentSchema(schemas, typeof(ToolPolicyTestResult));
+            AddComponentSchema(schemas, typeof(McpServerStatus));
+            AddComponentSchema(schemas, typeof(McpStatusResponse));
             AddComponentSchema(schemas, typeof(ModelToolDefinition));
             AddComponentSchema(schemas, typeof(ModelToolFunctionDefinition));
             AddComponentSchema(schemas, typeof(ModelToolCall));

@@ -153,7 +153,7 @@ Tools are enabled by default for tool-capable runners. If `tools.workingDirector
 
 Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
 
-The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, and Test adds selected-runner readiness checks without calling a model or executing tools.
+The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, Test adds selected-runner readiness checks without calling a model or executing tools, and MCP controls reconnect configured servers and show discovered tools.
 
 Implemented built-in tools:
 
@@ -161,6 +161,7 @@ Implemented built-in tools:
 - Modify files/directories: `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - Process execution: `run_process`
 - Web retrieval/search: `web_retrieve` for absolute `http` and `https` URLs, and `web_search` through the default DuckDuckGo HTML provider or configured Tavily/You.com-compatible providers
+- MCP: external tools discovered from enabled stdio or streamable HTTP MCP servers. Wilson exposes them with OpenAI-safe server-prefixed names such as `docs__search`.
 
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 

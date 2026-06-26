@@ -58,6 +58,7 @@ namespace Test.Shared
                         CreateAsyncCase("run-process-tool", "Run process tool", RunProcessToolAsync),
                         CreateAsyncCase("web-retrieve-tool", "Web retrieve tool", WebRetrieveToolAsync),
                         CreateAsyncCase("web-search-tool", "Web search tool", WebSearchToolAsync),
+                        CreateAsyncCase("mcp-tools", "MCP tools", McpToolsAsync),
                         CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
@@ -927,6 +928,17 @@ namespace Test.Shared
                             new ToolPolicyTestRequest { Tools = validTools, RunnerId = "missing-runner" }).ConfigureAwait(false);
                         if (missingRunner.Success || missingRunner.RunnerFound || !missingRunner.Errors.Any(error => error.Contains("not found", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected missing runner readiness to fail.");
 
+                        using (JsonDocument mcpStatus = await GetJsonDocumentAsync(adminClient, "/v1.0/api/mcp").ConfigureAwait(false))
+                        {
+                            if (mcpStatus.RootElement.GetProperty("enabled").GetBoolean()) throw new InvalidOperationException("Expected MCP to be disabled in this test server settings.");
+                            if (mcpStatus.RootElement.GetProperty("configuredServerCount").GetInt32() != 0) throw new InvalidOperationException("Expected no configured MCP servers.");
+                        }
+
+                        McpStatusResponse reloadedMcp = await PostJsonAsync<McpStatusResponse>(adminClient, "/v1.0/api/mcp/reload", new { }).ConfigureAwait(false);
+                        if (reloadedMcp.Enabled || reloadedMcp.ToolCount != 0) throw new InvalidOperationException("Expected empty MCP reload status.");
+
+                        await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/mcp", HttpStatusCode.Unauthorized).ConfigureAwait(false);
+
                         await SeedAndVerifyToolCallApiAuthorizationAsync(server, userClient, adminClient, anonymousClient).ConfigureAwait(false);
 
                         await ExpectStatusAsync(
@@ -941,11 +953,14 @@ namespace Test.Shared
                             JsonElement root = openApi.RootElement;
                             if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/tools/validate", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI tools validate path.");
                             if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/tools/test", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI tools test path.");
+                            if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/mcp", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI MCP status path.");
+                            if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/mcp/reload", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI MCP reload path.");
                             JsonElement schemas = root.GetProperty("components").GetProperty("schemas");
                             if (!schemas.TryGetProperty("ToolPolicyValidationRequest", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI validation request schema.");
                             if (!schemas.TryGetProperty("ToolPolicyValidationResult", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI validation result schema.");
                             if (!schemas.TryGetProperty("ToolPolicyTestRequest", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI test request schema.");
                             if (!schemas.TryGetProperty("ToolPolicyTestResult", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI test result schema.");
+                            if (!schemas.TryGetProperty("McpStatusResponse", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI MCP status response schema.");
                         }
                         finally
                         {
@@ -1931,6 +1946,67 @@ namespace Test.Shared
             ToolDescriptor? disabledDescriptor = new ToolService(disabled).GetTool("web_search");
             if (disabledDescriptor == null || disabledDescriptor.Available || !String.Equals(disabledDescriptor.UnavailableReason, "Web search is disabled.", StringComparison.Ordinal))
                 throw new InvalidOperationException("Expected web_search to explain disabled settings.");
+        }
+
+        private static async Task McpToolsAsync()
+        {
+            using TestMcpHttpServer mcpServer = new TestMcpHttpServer();
+            await mcpServer.StartAsync().ConfigureAwait(false);
+
+            Settings settings = new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                    Mcp = new McpToolSettings
+                    {
+                        Enabled = true,
+                        Servers = new List<McpServerSettings>
+                        {
+                            new McpServerSettings
+                            {
+                                Name = "test-mcp",
+                                Transport = "http",
+                                Url = mcpServer.BaseUrl,
+                                McpPath = mcpServer.McpPath,
+                                Enabled = true
+                            }
+                        }
+                    }
+                }
+            };
+
+            using McpToolManager manager = new McpToolManager();
+            await manager.InitializeAsync(settings, CancellationToken.None).ConfigureAwait(false);
+            McpStatusResponse status = manager.GetStatus(settings);
+            if (!status.Enabled || status.ConnectedServerCount != 1 || status.ToolCount < 1)
+                throw new InvalidOperationException("Expected MCP status to report one connected server with tools.");
+            if (status.Servers.Any(server => server.Error != null && server.Error.Contains("secret", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("MCP status should not expose secret-like error data.");
+
+            ToolService service = new ToolService(settings, manager);
+            ToolDescriptor? descriptor = service.GetTool("test-mcp__echo");
+            if (descriptor == null || !descriptor.Available || !String.Equals(descriptor.Category, ToolCategories.Mcp, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP echo tool to be model-visible.");
+            if (!service.GetModelToolDefinitions().Any(tool => tool.Function != null && String.Equals(tool.Function.Name, "test-mcp__echo", StringComparison.Ordinal)))
+                throw new InvalidOperationException("Expected MCP echo model tool definition.");
+
+            ToolResult result = await ExecuteToolAsync(service, "test-mcp__echo", """{"text":"hello mcp"}""").ConfigureAwait(false);
+            if (!result.Success || !result.Content.Contains("hello mcp", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP echo execution to succeed.");
+
+            Settings disabledMcp = new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    Enabled = true,
+                    Mcp = new McpToolSettings { Enabled = false }
+                }
+            };
+            ToolDescriptor? disabledDescriptor = new ToolService(disabledMcp, manager).GetTool("test-mcp__echo");
+            if (disabledDescriptor == null || disabledDescriptor.Available || !String.Equals(disabledDescriptor.UnavailableReason, "MCP tools are disabled.", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected disabled MCP policy to hide MCP tool.");
         }
 
         private static async Task RunSingleHttpResponseServerAsync(int port, string contentType, string body, CancellationToken token)

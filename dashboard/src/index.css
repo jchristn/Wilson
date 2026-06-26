@@ -350,6 +350,13 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .tool-diagnostics-message { min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; align-items: start; font-size: 12px; overflow-wrap: anywhere; }
 .tool-diagnostics-message.error { color: var(--danger); }
 .tool-diagnostics-message.warning { color: var(--warn); }
+.mcp-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.mcp-editor-block .runner-editor-header { grid-column: 1 / -1; }
+.mcp-status-summary, .mcp-server-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+.mcp-server-row { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.mcp-server-row .runner-editor-header, .mcp-server-status, .mcp-tool-list { grid-column: 1 / -1; }
+.mcp-tool-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.mcp-tool-list code { border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; background: var(--panel-2); overflow-wrap: anywhere; }
 .tool-descriptor-list { grid-column: 1 / -1; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; }
 .tool-descriptor-row { min-width: 0; display: grid; grid-template-columns: minmax(150px, 1.3fr) auto auto auto minmax(160px, 1.2fr); gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px; }
 .tool-descriptor-row > div { min-width: 0; display: grid; gap: 2px; }
@@ -501,7 +508,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .modal-full { height: calc(100dvh - 16px); }
   .modal header { padding: 12px; }
   .modal > :not(header) { margin: 12px; }
-  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-diagnostics-panel, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
+  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-diagnostics-panel, .mcp-editor-block, .mcp-server-row, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
   .entity-hero, .detail-hero { grid-template-columns: 1fr; align-items: start; }
   .key-value-table th, .key-value-table td, .timing-table th, .timing-table td { display: block; width: 100%; }
   .key-value-table th, .timing-table th { border-bottom: 0; }

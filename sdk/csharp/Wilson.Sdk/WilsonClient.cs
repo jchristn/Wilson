@@ -108,6 +108,26 @@ namespace Wilson.Sdk
         }
 
         /// <summary>
+        /// Get redacted MCP server status.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>MCP status response.</returns>
+        public Task<McpStatusResponse> GetMcpStatusAsync(CancellationToken token = default)
+        {
+            return SendAsync<McpStatusResponse>(HttpMethod.Get, "/v1.0/api/mcp", null, token);
+        }
+
+        /// <summary>
+        /// Reconnect MCP servers and rediscover tools.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>MCP status response.</returns>
+        public Task<McpStatusResponse> ReloadMcpAsync(CancellationToken token = default)
+        {
+            return SendAsync<McpStatusResponse>(HttpMethod.Post, "/v1.0/api/mcp/reload", new { }, token);
+        }
+
+        /// <summary>
         /// Get one effective Wilson tool descriptor.
         /// </summary>
         /// <param name="name">Tool name.</param>

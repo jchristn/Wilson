@@ -73,6 +73,14 @@ export class WilsonClient {
     return this.request('POST', '/v1.0/api/tools/test', payload);
   }
 
+  mcpStatus() {
+    return this.request('GET', '/v1.0/api/mcp');
+  }
+
+  reloadMcp() {
+    return this.request('POST', '/v1.0/api/mcp/reload', {});
+  }
+
   tool(name) {
     return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`);
   }

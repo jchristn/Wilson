@@ -74,6 +74,12 @@ class WilsonClient:
     def test_tools(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.request("POST", "/v1.0/api/tools/test", payload or {})
 
+    def mcp_status(self) -> dict[str, Any]:
+        return self.request("GET", "/v1.0/api/mcp")
+
+    def reload_mcp(self) -> dict[str, Any]:
+        return self.request("POST", "/v1.0/api/mcp/reload", {})
+
     def tool(self, name: str) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/tools/{quote(name, safe='')}")
 

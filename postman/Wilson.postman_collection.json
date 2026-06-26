@@ -184,6 +184,35 @@
           }
         },
         {
+          "name": "MCP Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/mcp",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "mcp" ]
+            }
+          }
+        },
+        {
+          "name": "Reload MCP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/mcp/reload",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "mcp", "reload" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          }
+        },
+        {
           "name": "Validate Tool Policy",
           "request": {
             "method": "POST",

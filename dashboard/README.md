@@ -24,7 +24,7 @@ The Model Servers view shows:
 
 ## Tool Activity
 
-When Wilson tools are enabled by the server and by the selected model runner, Chat shows a compact tool toggle and approval-policy selector. Non-streaming tool responses render a low-profile "Tool activity" disclosure under assistant messages. Reopened conversations reload persisted tool calls, and request-history details show linked tool activity for administrators.
+When Wilson tools are enabled by the server and by the selected model runner, Chat shows a compact tool toggle and approval-policy selector. Non-streaming tool responses render a low-profile "Tool activity" disclosure under assistant messages. Reopened conversations reload persisted tool calls, and request-history details show linked tool activity for administrators. Settings includes MCP server configuration, status, and reload controls for discovered external tools.
 
 The Settings page exposes the global tool switch, built-in tool policy, working directory, allowed roots, limits, and per-runner tool capability flags. Tools remain disabled until the server settings and runner capability checks allow them.
 

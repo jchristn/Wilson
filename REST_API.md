@@ -23,7 +23,7 @@ Content-Type: application/json
 
 ## Tool APIs
 
-Tools are disabled by default. Administrators enable them in settings and each model runner must advertise a supported tool-call format before Wilson sends tools to a model.
+Tools are enabled by default for tool-capable runners. Administrators can disable them in settings, and each model runner must advertise a supported tool-call format before Wilson sends tools to a model.
 
 Implemented built-in tools:
 
@@ -31,6 +31,8 @@ Implemented built-in tools:
 - `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - `run_process`
 - `web_retrieve` for absolute `http` and `https` URLs
+- `web_search` through the default DuckDuckGo HTML provider or configured provider APIs
+- MCP tools discovered from enabled stdio or streamable HTTP MCP servers
 
 Write, edit, delete, directory-management, and process tools are marked dangerous and approval-required. Use narrow `allowedRoots` and avoid automatic approval unless the deployment is trusted and admin-only.
 
@@ -51,6 +53,22 @@ GET /v1.0/api/tools/{name}
 ```
 
 Returns one tool descriptor by name.
+
+### MCP Status
+
+```http
+GET /v1.0/api/mcp
+```
+
+Requires a global administrator bearer token. Returns redacted MCP server status, connection state, discovered tool counts, and model-facing MCP tool names. Environment values and other configured secrets are not returned.
+
+### Reload MCP
+
+```http
+POST /v1.0/api/mcp/reload
+```
+
+Requires a global administrator bearer token. Reconnects configured MCP servers, calls `tools/list`, refreshes effective tool descriptors, and returns the same redacted status shape as `GET /v1.0/api/mcp`.
 
 ### Validate Draft Tool Policy
 

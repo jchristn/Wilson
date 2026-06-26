@@ -15,6 +15,8 @@ Each SDK exposes authentication, model-server enumeration, model-server health, 
 - `GET /v1.0/api/tools`
 - `POST /v1.0/api/tools/validate`
 - `POST /v1.0/api/tools/test`
+- `GET /v1.0/api/mcp`
+- `POST /v1.0/api/mcp/reload`
 - `GET /v1.0/api/tools/{name}`
 - `GET /v1.0/api/tool-runs/{id}`
 - `GET /v1.0/api/conversations/{id}/tool-calls`

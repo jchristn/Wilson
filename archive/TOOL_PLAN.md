@@ -138,7 +138,8 @@ AssistantHub learnings to carry into Wilson:
   - Progress, 2026-06-26: repeated identical tool calls are stopped on the fourth repeat and followed by a tool-disabled final model request.
 - [x] Add endpoint capability metadata and diagnostics so admins can validate that a selected runner actually supports the intended tool-call wire format before users chat.
 - [~] Cover chat UI, history/request modals, analytics/request history, SDKs, REST docs, OpenAPI, MCP docs if applicable, Postman, and tests in the same feature rollout.
-  - Progress, 2026-06-26: built-ins, web search, tool SSE, approval API, SDK methods, OpenAPI, dashboard rendering, and automated tests are updated. MCP remains blocked on a human dependency/protocol decision.
+  - Progress, 2026-06-26: built-ins, web search, tool SSE, approval API, SDK methods, OpenAPI, dashboard rendering, and automated tests are updated.
+  - Progress, 2026-06-26: MCP dependency strategy is decided; Wilson now uses Voltaic, exposes MCP status/reload APIs, includes dashboard status/config controls, and has automated HTTP MCP discovery/execution coverage.
 
 ## Product Goals
 
@@ -148,11 +149,11 @@ AssistantHub learnings to carry into Wilson:
 - [x] Expanded tool activity shows the tool name, status, arguments, approval state, start/end timestamps, runtime, success/failure, result preview, and error details.
 - [x] Public chat users see safe tool progress and summaries; admins can inspect redacted arguments and outputs in a deeper audit view.
 - [x] Tool calls and results are persisted with conversation history and remain visible after reload.
-- [~] Admins can configure tool availability, safety limits, working directories, allowed roots, web search, MCP servers, and default approval behavior.
-  - Progress: settings and diagnostics cover these fields; MCP execution/status remains blocked.
+- [x] Admins can configure tool availability, safety limits, working directories, allowed roots, web search, MCP servers, and default approval behavior.
+  - Progress: settings, diagnostics, MCP server configuration, MCP status, and MCP reload controls are implemented.
 - [x] Existing chat behavior remains compatible for users with tools disabled.
 - [~] REST API, OpenAPI, SDKs, Postman, README, dashboard README, and tests all reflect the feature.
-  - Progress: REST/OpenAPI/SDK/tests are current for implemented endpoints. MCP endpoints and SDK streaming helpers are deferred.
+  - Progress: REST/OpenAPI/SDK/tests are current for implemented endpoints, including MCP status/reload. SDK streaming helpers remain deferred.
 
 ## Explicit Non-Goals For The First Implementation
 
@@ -446,29 +447,29 @@ Progress, 2026-06-26: `run_process` executor slice is implemented. It executes a
 
 ### MCP Tools
 
-- [!] Decide dependency strategy for MCP.
+- [x] Decide dependency strategy for MCP.
   - Preferred: add `Voltaic` package to Wilson and port Mux's `McpToolManager`.
   - Alternative: implement minimal JSON-RPC stdio/HTTP client in Wilson-owned code.
-  - Human decision required before implementation.
+  - Progress, 2026-06-26: decided to use Voltaic and port/adapt Mux MCP runtime behavior into Wilson.
 - [x] Add MCP transport enum: `stdio`, `http`.
-- [!] Implement MCP server initialization when `Settings.Tools.Mcp.Enabled`.
+- [x] Implement MCP server initialization when `Settings.Tools.Mcp.Enabled`.
   - Launch enabled stdio servers.
   - Connect to enabled HTTP servers.
   - Discover tools with `tools/list`.
   - Prefix names as `{serverName}.{toolName}`.
   - Redact secrets in status responses.
-  - Blocked on MCP dependency strategy.
-- [!] Implement MCP tool execution.
+  - Progress, 2026-06-26: Voltaic-backed stdio and streamable HTTP connection, discovery, status, and OpenAI-safe tool-name prefixing are implemented.
+- [x] Implement MCP tool execution.
   - Route prefixed tool calls to the correct server.
   - Call `tools/call`.
   - Enforce timeouts.
   - Return structured failure when server is disconnected.
-  - Blocked on MCP dependency strategy.
-- [!] Add lifecycle handling.
+  - Progress, 2026-06-26: Wilson routes MCP tool calls to `tools/call`, enforces tool timeout/cancellation, and returns structured tool results/errors.
+- [x] Add lifecycle handling.
   - Start MCP connections during server startup.
   - Refresh when settings are updated.
   - Dispose/stop MCP clients on shutdown.
-  - Blocked on MCP dependency strategy.
+  - Progress, 2026-06-26: MCP initializes during server startup, reloads on settings save or explicit reload API, and disposes/reconnects managed clients during reload.
 
 ## Phase 3: Tool-Aware Inference And Agent Loop
 
@@ -770,14 +771,14 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Only the user who initiated the chat, tenant admin, or global admin may approve.
   - Returns updated tool call record.
   - Progress, 2026-06-26: endpoint enforces tenant/conversation ownership, updates proposed/pending audit rows, is included in OpenAPI, and has authorization coverage.
-- [!] Add `GET /v1.0/api/mcp`.
+- [x] Add `GET /v1.0/api/mcp`.
   - Admin required.
   - Returns configured MCP server status with secrets redacted.
-  - Blocked on MCP dependency strategy.
-- [!] Add `POST /v1.0/api/mcp/reload`.
+  - Progress, 2026-06-26: implemented with redacted status response and OpenAPI/SDK/Postman coverage.
+- [x] Add `POST /v1.0/api/mcp/reload`.
   - Admin required.
   - Reloads MCP connections after settings changes without restarting the whole server if feasible.
-  - Blocked on MCP dependency strategy.
+  - Progress, 2026-06-26: implemented with reconnect/discover behavior and redacted status response.
 
 ### OpenAPI
 
@@ -878,9 +879,9 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - `approveToolCall(runId, toolCallId, approved, rememberForRun)`
   - `mcpStatus()`
   - `reloadMcp()`
-  - Progress: `tools()`, `tool(name)`, `conversationToolCalls`, `requestHistoryToolCalls`, and `toolRun` are implemented. Diagnostics, approval, and MCP methods remain pending with their endpoints.
+  - Progress: `tools()`, `tool(name)`, `conversationToolCalls`, `requestHistoryToolCalls`, `toolRun`, `mcpStatus()`, and `reloadMcp()` are implemented.
   - Progress, 2026-06-26: dashboard diagnostics client methods for `validateTools` and `testTools` are being added with the server diagnostics endpoint slice.
-  - Progress, 2026-06-26: `validateTools`, `testTools`, and `approveToolCall` are implemented in the dashboard API client and validated by dashboard lint/build. MCP methods remain blocked with MCP endpoints.
+  - Progress, 2026-06-26: `validateTools`, `testTools`, `approveToolCall`, `mcpStatus`, and `reloadMcp` are implemented in the dashboard API client and validated by dashboard lint/build.
 
 ### Visual Design
 
@@ -980,8 +981,7 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - Provider list with add/edit/delete.
   - Provider type select: Tavily, You.
   - Endpoint, API key/env ref, timeout, enabled, default.
-- [!] Add MCP subsection.
-  - Blocked on MCP implementation.
+- [x] Add MCP subsection.
   - Enabled toggle.
   - Server list with add/edit/delete.
   - Transport select: stdio, http.
@@ -989,6 +989,7 @@ Progress, 2026-06-26: diagnostics slice implementation is complete and validated
   - http fields: URL, MCP path.
   - Status display and reload button.
   - Redact env/API secret values in display.
+  - Progress, 2026-06-26: dashboard Tools settings now includes MCP enablement, server rows for stdio/http, status, discovered tools, and reload.
 - [x] Update Model Server editor.
   - Add tools enabled toggle per runner.
   - Add supports tools toggle.
@@ -1044,10 +1045,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - `ApproveToolCall`
   - `GetMcpStatus`
   - `ReloadMcp`
-  - Progress: implemented `ListTools`, `GetTool`, `GetConversationToolCalls`, `GetRequestHistoryToolCalls`, and `GetToolRun` equivalents in JavaScript, Python, and C#. Validate/test, approval, and MCP methods remain pending with their server endpoints.
+  - Progress: implemented `ListTools`, `GetTool`, `GetConversationToolCalls`, `GetRequestHistoryToolCalls`, and `GetToolRun` equivalents in JavaScript, Python, and C#. Validate/test, approval, and MCP status/reload methods are also implemented.
   - Progress, 2026-06-26: `ValidateTools` and `TestTools` SDK methods are being added now that the matching server endpoints are underway.
   - Progress, 2026-06-26: `ValidateTools`/`TestTools` equivalents are implemented in JavaScript, Python, and C#. C# includes typed diagnostics request/result models; JavaScript and Python follow the existing parsed-JSON payload convention. SDK validation passed with C# build, JavaScript syntax check, and Python bytecode compile.
-  - Progress, 2026-06-26: `ApproveToolCall` equivalents are implemented in JavaScript, Python, and C#; MCP methods remain blocked with MCP endpoints.
+  - Progress, 2026-06-26: `ApproveToolCall`, MCP status, and MCP reload equivalents are implemented in JavaScript, Python, and C#.
 - [x] Add admin audit methods where appropriate:
   - `ListToolCalls`
   - `GetToolCall`
@@ -1191,10 +1192,10 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Delete Audit Tool Call.
   - Progress: added List Tools, Get Tool, Get Tool Run, Get Conversation Tool Calls, and Get Request History Tool Calls. Validation, approval, and audit delete/read requests remain pending until endpoints exist.
   - Progress, 2026-06-26: added Validate Tool Policy and Test Tool Readiness requests. Approval and audit delete/read requests remain pending until endpoints exist.
-- [!] Add folder `MCP`.
-  - Blocked on MCP implementation.
-  - MCP Status.
-  - Reload MCP.
+- [x] Add folder `MCP`.
+- MCP Status.
+- Reload MCP.
+  - Progress, 2026-06-26: Postman collection now includes MCP Status and Reload MCP requests under Tools.
 - [x] Update Chat requests.
   - Non-streaming chat with tools disabled.
   - Non-streaming chat with tools auto/deny.
@@ -1292,8 +1293,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - fallback.
   - provider failure.
   - Progress, 2026-06-26: automated test uses a local generic JSON provider and verifies configured-provider availability. Fallback/failure cases remain future hardening.
-- [!] Test MCP manager with test MCP server from Mux test fixtures or a Wilson-owned minimal fixture.
-  - Blocked on MCP implementation.
+- [x] Test MCP manager with test MCP server from Mux test fixtures or a Wilson-owned minimal fixture.
+  - Progress, 2026-06-26: `McpToolsAsync` uses a Wilson-owned Voltaic HTTP MCP fixture to verify discovery, status, model definition exposure, execution, and disabled-policy filtering.
 
 ### Agent Loop Tests
 
@@ -1449,8 +1450,8 @@ Each superset tool must have:
 - [x] Public chat traces must be generated from safe `ToolTrace`/`ToolProgressEvent` payloads, not from persisted audit rows.
 - [x] Admin audit rows must still be redacted before persistence unless a future explicit secure-secret-storage design is implemented.
 - [x] Tool arguments and results must be size capped.
-- [!] MCP server environment variables must never be returned unredacted.
-  - Blocked on MCP status/execution implementation; current settings cloning does not expose MCP status endpoints.
+- [x] MCP server environment variables must never be returned unredacted.
+  - Progress, 2026-06-26: MCP status responses expose only name, transport, enabled/connected state, tool counts, tool names, safe errors, and timestamps; environment dictionaries are not returned.
 - [x] Web tools must restrict URL schemes to `http` and `https`.
   - Progress, 2026-06-27: `web_retrieve` rejects non-absolute and non-HTTP(S) URLs; automated coverage verifies `file://` rejection.
 - [x] Brand-new tool-capable deployments expose the complete implemented built-in tool list without dashboard repair clicks.
@@ -1469,7 +1470,8 @@ Each superset tool must have:
 - [!] PR 3: Tool-aware chat-completions transport and agent loop with fake backend tests.
 - [!] PR 4: Database persistence and API endpoints.
 - [!] PR 5: Dashboard chat tool activity UI and settings UI.
-- [!] PR 6: Web search and MCP.
+- [x] PR 6: Web search and MCP.
+  - Progress, 2026-06-26: web_search and MCP runtime/API/UI/SDK/test coverage are implemented in the working tree.
 - [!] PR 7: SDKs, Postman, REST docs, README updates.
 - [!] PR 8: Hardening pass, compatibility pass, and manual QA.
   - Human repository workflow required for PR packaging; implementation and validation are in the working tree.
@@ -1492,7 +1494,7 @@ Each superset tool must have:
 - [x] Tool output is truncated according to settings before persistence and model feedback.
 - [x] Per-turn output limits and loop guards stop repeated tool cycles and produce a best-effort final answer.
 - [~] Tool diagnostics catch non-tool-capable runners, unsupported wire formats, missing working directories, missing allowed roots, missing search providers, and disconnected MCP servers before chat.
-  - Progress: implemented for runners, working directory, allowed roots, and search provider configuration. MCP disconnected-server diagnostics remain blocked on MCP implementation.
+  - Progress: implemented for runners, working directory, allowed roots, search provider configuration, and MCP status/reload APIs. Draft disconnected-MCP validation for unsaved server definitions remains future hardening.
 - [x] OpenAPI includes all new tool-related endpoints and schemas.
 - [x] JavaScript, Python, and C# SDKs expose the new APIs.
 - [!] Postman collection includes the new APIs.
@@ -1532,8 +1534,8 @@ Each superset tool must have:
   - Recommendation: registered but disabled by name in default settings, or enabled only with explicit approval-required policy.
 - [!] Decide whether Playwright browser auto-install is acceptable in server deployments.
   - Recommendation: default to enabled for developer installs, configurable off for locked-down deployments.
-- [!] Decide MCP support priority.
-  - Recommendation: ship built-ins first, then MCP once persistence and UI are stable.
+- [x] Decide MCP support priority.
+  - Progress, 2026-06-26: MCP support is prioritized and implemented with Voltaic after built-ins, persistence, diagnostics, and UI foundations.
 - [x] Decide if Wilson should add `REST_API.md`.
   - Recommendation: yes, because the feature adds multi-step SSE and approval workflows that are easier to understand in prose than OpenAPI alone.
 - [!] Decide whether Wilson uses a single response runner for tool routing or adds a dedicated tool-routing runner.

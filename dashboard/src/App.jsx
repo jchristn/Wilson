@@ -2158,6 +2158,8 @@ function SettingsAdmin({ api }) {
   const [toolDiagnostics, setToolDiagnostics] = useState(null);
   const [toolDiagnosticsBusy, setToolDiagnosticsBusy] = useState('');
   const [diagnosticRunnerId, setDiagnosticRunnerId] = useState('');
+  const [mcpStatus, setMcpStatus] = useState(null);
+  const [mcpBusy, setMcpBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -2169,6 +2171,14 @@ function SettingsAdmin({ api }) {
       setToolDescriptors([]);
     }
   }, [api]);
+  const loadMcp = useCallback(async () => {
+    try {
+      const status = await api.mcpStatus();
+      setMcpStatus(status || null);
+    } catch {
+      setMcpStatus(null);
+    }
+  }, [api]);
   const load = useCallback(async () => {
     try {
       setError('');
@@ -2177,10 +2187,11 @@ function SettingsAdmin({ api }) {
       setDraft(structuredCloneSafe(data));
       setDiagnosticRunnerId(current => current || (data.modelRunners || []).find(runner => runner.id)?.id || '');
       await loadTools();
+      await loadMcp();
     } catch (err) {
       setError(String(err.message || err));
     }
-  }, [api, loadTools]);
+  }, [api, loadTools, loadMcp]);
   useEffect(() => { load(); }, [load]);
 
   async function save() {
@@ -2190,6 +2201,7 @@ function SettingsAdmin({ api }) {
       setSettings(updated);
       setDraft(structuredCloneSafe(updated));
       await loadTools();
+      await loadMcp();
       setSaved('Settings saved and applied to the running server where supported. Listener and database changes require a server restart.');
     } catch (err) {
       setError(String(err.message || err));
@@ -2230,6 +2242,20 @@ function SettingsAdmin({ api }) {
       setError(String(err.message || err));
     } finally {
       setToolDiagnosticsBusy('');
+    }
+  }
+
+  async function reloadMcp() {
+    try {
+      setError('');
+      setMcpBusy(true);
+      const status = await api.reloadMcp();
+      setMcpStatus(status || null);
+      await loadTools();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setMcpBusy(false);
     }
   }
 
@@ -2282,11 +2308,14 @@ function SettingsAdmin({ api }) {
             runners={runners}
             diagnostics={toolDiagnostics}
             diagnosticsBusy={toolDiagnosticsBusy}
+            mcpStatus={mcpStatus}
+            mcpBusy={mcpBusy}
             diagnosticRunnerId={selectedDiagnosticRunnerId}
             onDiagnosticRunnerChange={setDiagnosticRunnerId}
             onValidate={validateToolSettings}
             onTest={testToolSettings}
             onRefresh={loadTools}
+            onReloadMcp={reloadMcp}
             onChange={(key, value) => set(['tools', key], value)}
           />
         </SettingsSection>
@@ -2307,7 +2336,7 @@ function SettingsAdmin({ api }) {
   );
 }
 
-function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnosticsBusy, diagnosticRunnerId, onDiagnosticRunnerChange, onValidate, onTest, onRefresh, onChange }) {
+function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnosticsBusy, mcpStatus, mcpBusy, diagnosticRunnerId, onDiagnosticRunnerChange, onValidate, onTest, onRefresh, onReloadMcp, onChange }) {
   const setNumber = (key, value) => onChange(key, Number(value));
   return (
     <>
@@ -2323,6 +2352,13 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
       <FormList label="Allowed roots" tooltip="Filesystem roots that tools may access. File and process tools are unavailable without at least one allowed root." value={tools.allowedRoots || []} onChange={v => onChange('allowedRoots', v)} />
       <FormList label="Enabled tool names" tooltip="Optional allow-list of tool names. Leave empty to allow every eligible tool not explicitly disabled." value={tools.enabledToolNames || []} onChange={v => onChange('enabledToolNames', v)} />
       <FormList label="Disabled tool names" tooltip="Tool names that must never be exposed or executed." value={tools.disabledToolNames || []} onChange={v => onChange('disabledToolNames', v)} />
+      <McpSettingsEditor
+        mcp={tools.mcp || { enabled: false, servers: [] }}
+        status={mcpStatus}
+        busy={mcpBusy}
+        onReload={onReloadMcp}
+        onChange={v => onChange('mcp', v)}
+      />
       <div className="tool-diagnostics-panel">
         <div className="runner-editor-header"><strong>Diagnostics</strong></div>
         <label title="Model server used for tool readiness diagnostics">Runner<select title="Model server used for tool readiness diagnostics" value={diagnosticRunnerId || ''} onChange={event => onDiagnosticRunnerChange(event.target.value)}>
@@ -2370,6 +2406,75 @@ function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnos
         ))}
       </div>
     </>
+  );
+}
+
+function McpSettingsEditor({ mcp, status, busy, onReload, onChange }) {
+  const servers = Array.isArray(mcp.servers) ? mcp.servers : [];
+  const setMcp = (key, value) => onChange({ ...mcp, servers, [key]: value });
+  const setServer = (index, key, value) => {
+    const next = servers.map((server, itemIndex) => itemIndex === index ? { ...server, [key]: value } : server);
+    onChange({ ...mcp, servers: next });
+  };
+  const addServer = () => onChange({
+    ...mcp,
+    servers: [
+      ...servers,
+      { name: '', transport: 'stdio', command: '', args: [], env: {}, url: '', mcpPath: '/mcp', enabled: true }
+    ]
+  });
+  const removeServer = (index) => onChange({ ...mcp, servers: servers.filter((_, itemIndex) => itemIndex !== index) });
+  const statusByName = new Map((status?.servers || []).map(item => [String(item.name || '').toLowerCase(), item]));
+
+  return (
+    <div className="mcp-editor-block">
+      <div className="runner-editor-header">
+        <strong>MCP</strong>
+        <div className="tool-diagnostics-actions">
+          <button className="secondary" title="Reconnect MCP servers and refresh discovered tools" disabled={busy} onClick={onReload}>{busy ? <RefreshCw size={16} className="spin" /> : <RefreshCw size={16} />}Reload</button>
+          <button className="secondary" title="Add an MCP server configuration" onClick={addServer}><Plus size={16} />Add Server</button>
+        </div>
+      </div>
+      <FormCheck label="MCP enabled" tooltip="Enable configured Model Context Protocol servers." checked={!!mcp.enabled} onChange={v => setMcp('enabled', v)} />
+      <div className="mcp-status-summary" title="Current MCP runtime status">
+        <span className={status?.enabled ? 'tool-status complete' : 'tool-status failed'}>{status?.enabled ? 'enabled' : 'disabled'}</span>
+        <span>{Number(status?.connectedServerCount || 0)} connected</span>
+        <span>{Number(status?.toolCount || 0)} tools</span>
+      </div>
+      {servers.length < 1 && <div className="empty-cell" title="No MCP servers configured">No MCP servers configured.</div>}
+      {servers.map((server, index) => {
+        const serverStatus = statusByName.get(String(server.name || '').toLowerCase());
+        const isHttp = String(server.transport || 'stdio').toLowerCase() === 'http';
+        return (
+          <div key={index} className="mcp-server-row" title={serverStatus?.error || `${server.name || 'New MCP server'} configuration`}>
+            <div className="runner-editor-header">
+              <strong>{server.name || `Server ${index + 1}`}</strong>
+              <button className="icon-button" title="Remove this MCP server" onClick={() => removeServer(index)}><Trash2 size={16} /></button>
+            </div>
+            <FormCheck label="Enabled" tooltip="Enable this MCP server." checked={server.enabled !== false} onChange={v => setServer(index, 'enabled', v)} />
+            <FormInput label="Name" tooltip="Short server name used as the MCP tool prefix." value={server.name || ''} onChange={v => setServer(index, 'name', v)} />
+            <FormSelect label="Transport" tooltip="MCP transport." value={server.transport || 'stdio'} options={['stdio', 'http']} onChange={v => setServer(index, 'transport', v)} />
+            {isHttp ? (
+              <>
+                <FormInput label="URL" tooltip="HTTP MCP server base URL." value={server.url || ''} onChange={v => setServer(index, 'url', v)} />
+                <FormInput label="MCP path" tooltip="Streamable HTTP MCP path." value={server.mcpPath || '/mcp'} onChange={v => setServer(index, 'mcpPath', v)} />
+              </>
+            ) : (
+              <>
+                <FormInput label="Command" tooltip="Executable used to launch the stdio MCP server." value={server.command || ''} onChange={v => setServer(index, 'command', v)} />
+                <FormList label="Arguments" tooltip="Command arguments for the stdio MCP server." value={server.args || []} onChange={v => setServer(index, 'args', v)} />
+              </>
+            )}
+            <div className="mcp-server-status">
+              <span className={serverStatus?.connected ? 'tool-status complete' : 'tool-status failed'}>{serverStatus?.connected ? 'connected' : 'disconnected'}</span>
+              <span>{Number(serverStatus?.toolCount || 0)} tools</span>
+              {serverStatus?.error && <span className="tool-descriptor-reason">{serverStatus.error}</span>}
+            </div>
+            {(serverStatus?.tools || []).length > 0 && <div className="mcp-tool-list">{serverStatus.tools.map(name => <code key={name}>{name}</code>)}</div>}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

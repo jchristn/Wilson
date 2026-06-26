@@ -14,6 +14,7 @@ const local = await client.modelRunnerHealthById('local-ollama');
 const tools = await client.tools();
 const validation = await client.validateTools({ tools: { enabled: true, workingDirectory: 'C:/Code/Wilson', allowedRoots: ['C:/Code/Wilson'], defaultApprovalPolicy: 'auto' } });
 const readiness = await client.testTools({ tools: { enabled: true, workingDirectory: 'C:/Code/Wilson', allowedRoots: ['C:/Code/Wilson'], defaultApprovalPolicy: 'auto' }, runnerId: 'local-ollama' });
+const mcp = await client.mcpStatus();
 const chat = await client.chat({ runnerId: 'local-ollama', model: 'llama3.1', prompt: 'Read README.md', toolsEnabled: true, approvalPolicy: 'auto', toolNames: ['read_file'] });
 const readFile = await client.tool('read_file');
 const conversationTools = await client.conversationToolCalls('conversation-id', { pageNumber: 1, pageSize: 100 });
