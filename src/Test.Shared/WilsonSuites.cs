@@ -42,6 +42,7 @@ namespace Test.Shared
             await ToolDiagnosticsApiAsync().ConfigureAwait(false);
             await WorkingDirectoryGuardAsync().ConfigureAwait(false);
             await ToolArgumentValidationAndOutputLimiterAsync().ConfigureAwait(false);
+            await FilesystemDiscoveryToolsAsync().ConfigureAwait(false);
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
@@ -942,6 +943,68 @@ namespace Test.Shared
                 using JsonDocument contentJson = JsonDocument.Parse(truncated.ContentJson);
                 if (!contentJson.RootElement.TryGetProperty("truncated", out JsonElement truncatedElement) || !truncatedElement.GetBoolean()) throw new InvalidOperationException("Expected per-call truncation JSON flag.");
                 if (!contentJson.RootElement.TryGetProperty("content", out JsonElement contentElement) || String.IsNullOrWhiteSpace(contentElement.GetString())) throw new InvalidOperationException("Expected per-call truncation JSON content.");
+            }
+            finally
+            {
+                Directory.Delete(workspace, true);
+            }
+        }
+
+        private static async Task FilesystemDiscoveryToolsAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-discovery-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(workspace, "alpha"));
+                Directory.CreateDirectory(Path.Combine(workspace, "zeta"));
+                await File.WriteAllTextAsync(Path.Combine(workspace, "alpha", "notes.txt"), "alpha hit" + Environment.NewLine + "beta miss").ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "alpha", "code.cs"), "public class Sample { }" + Environment.NewLine + "alpha hit").ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "root.txt"), "root alpha").ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "z-last.txt"), "last").ConfigureAwait(false);
+
+                Settings settings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        MaxToolResultItems = 2
+                    }
+                };
+                ToolService service = new ToolService(settings);
+
+                ToolResult fileMetadata = await ExecuteToolAsync(service, "file_metadata", """{"path":"alpha/notes.txt"}""").ConfigureAwait(false);
+                if (!fileMetadata.Success || !fileMetadata.Content.Contains("\"type\":\"file\"", StringComparison.Ordinal) || !fileMetadata.Content.Contains("\"size_bytes\"", StringComparison.Ordinal)) throw new InvalidOperationException("Expected file_metadata to return file metadata.");
+
+                ToolResult directoryMetadata = await ExecuteToolAsync(service, "file_metadata", """{"path":"alpha"}""").ConfigureAwait(false);
+                if (!directoryMetadata.Success || !directoryMetadata.Content.Contains("\"type\":\"directory\"", StringComparison.Ordinal) || !directoryMetadata.Content.Contains("\"file_count\":2", StringComparison.Ordinal)) throw new InvalidOperationException("Expected file_metadata to return directory metadata.");
+
+                ToolResult missingMetadata = await ExecuteToolAsync(service, "file_metadata", """{"path":"missing.txt"}""").ConfigureAwait(false);
+                if (missingMetadata.Success || !String.Equals(missingMetadata.ErrorCode, "not_found", StringComparison.Ordinal)) throw new InvalidOperationException("Expected file_metadata missing path error.");
+
+                ToolResult list = await ExecuteToolAsync(service, "list_directory", """{"path":".","max_entries":3}""").ConfigureAwait(false);
+                if (!list.Success || !list.Truncated) throw new InvalidOperationException("Expected list_directory max_entries truncation.");
+                int alphaIndex = list.Content.IndexOf("[DIR]  alpha", StringComparison.Ordinal);
+                int zetaIndex = list.Content.IndexOf("[DIR]  zeta", StringComparison.Ordinal);
+                int rootIndex = list.Content.IndexOf("[FILE] root.txt", StringComparison.Ordinal);
+                if (alphaIndex < 0 || zetaIndex < 0 || rootIndex < 0 || !(alphaIndex < zetaIndex && zetaIndex < rootIndex)) throw new InvalidOperationException("Expected list_directory to sort directories first, then files.");
+
+                ToolResult glob = await ExecuteToolAsync(service, "glob", """{"pattern":"**/*.txt","max_results":2}""").ConfigureAwait(false);
+                if (!glob.Success || !glob.Truncated || !glob.Content.Contains("Found 2 matching file(s):", StringComparison.Ordinal)) throw new InvalidOperationException("Expected glob to return matching text files and mark max result truncation.");
+
+                ToolResult nestedGlob = await ExecuteToolAsync(service, "glob", """{"pattern":"alpha/*.cs","max_results":10}""").ConfigureAwait(false);
+                if (!nestedGlob.Success || nestedGlob.Truncated || !nestedGlob.Content.Contains("alpha/code.cs", StringComparison.Ordinal)) throw new InvalidOperationException("Expected glob to return a specific nested match.");
+
+                ToolResult invalidGrep = await ExecuteToolAsync(service, "grep", """{"pattern":"[","include":"*.txt"}""").ConfigureAwait(false);
+                if (invalidGrep.Success || !String.Equals(invalidGrep.ErrorCode, "invalid_regex", StringComparison.Ordinal)) throw new InvalidOperationException("Expected grep invalid regex error.");
+
+                ToolResult grep = await ExecuteToolAsync(service, "grep", """{"pattern":"alpha","path":"alpha","include":"*.txt","max_matches":1}""").ConfigureAwait(false);
+                if (!grep.Success || !grep.Truncated || !grep.Content.Contains("notes.txt:1: alpha hit", StringComparison.Ordinal)) throw new InvalidOperationException("Expected grep match output and max-match truncation.");
+
+                ToolResult grepNone = await ExecuteToolAsync(service, "grep", """{"pattern":"does-not-exist","include":"*.txt"}""").ConfigureAwait(false);
+                if (!grepNone.Success || !grepNone.Content.Contains("No matches found.", StringComparison.Ordinal)) throw new InvalidOperationException("Expected grep no-match message.");
             }
             finally
             {

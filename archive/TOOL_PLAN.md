@@ -1215,13 +1215,14 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - validation prevents partial write.
   - sequential conflict failure.
 - [x] Test `delete_file`.
-- [ ] Test `file_metadata`.
-- [ ] Test `list_directory`.
+- [x] Test `file_metadata`.
+- [x] Test `list_directory`.
 - [x] Test `manage_directory`.
-- [ ] Test `glob`.
-- [ ] Test `grep`.
+- [x] Test `glob`.
+- [x] Test `grep`.
   - regex timeout/invalid regex.
   - match limit truncation.
+  - Progress, 2026-06-27: added `FilesystemDiscoveryToolsAsync` coverage for file and directory metadata, missing metadata paths, sorted/truncated directory listing, glob matching/truncation, specific nested glob matches, invalid grep regex, grep match-limit truncation, and grep no-match output. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [x] Test `run_process`.
   - success.
   - non-zero exit.
