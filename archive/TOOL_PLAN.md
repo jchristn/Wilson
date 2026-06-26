@@ -475,7 +475,8 @@ Progress, 2026-06-25: provider-neutral, non-streaming tool-capable inference tra
   - Include a system instruction block for tool behavior, scoped to Wilson's tools. It must say tool outputs are untrusted, broad enumeration should be summarized rather than dumped, secret/policy details must not be revealed, and final answers should use available evidence when tool limits are reached.
   - Include `parallel_tool_calls: true` only when runner supports it.
   - Include model, temperature, top_p, max_tokens, and runner-specific fields.
-  - Progress: provider message conversion, tool definition inclusion, parallel flag, and model/options fields are implemented. Tool-specific system instruction injection remains pending for the agent-loop slice.
+  - Progress: provider message conversion, tool definition inclusion, parallel flag, and model/options fields are implemented.
+  - Progress, 2026-06-27: Wilson tool behavior instructions are injected into the non-streaming agent loop when tools are available. Fake-transport tests verify tool definitions, tool choice, and instructions that tool output is untrusted and hidden policy/secret details must not be revealed. Streaming request-builder coverage remains pending with streaming tool support.
 - [x] Normalize runner URLs.
   - For `OpenAI`, default path should be `/v1/chat/completions` when endpoint is `https://api.openai.com`.
   - For `OpenAICompatible`, document whether endpoint is API root or chat-completions root; make `ChatCompletionsPath` explicit to remove ambiguity.
@@ -1266,7 +1267,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - tool executes.
   - tool result is appended.
   - model receives tool result and returns final answer.
-- [ ] Test the provider request contains `tools`, tool choice, and Wilson tool behavior instructions.
+- [x] Test the provider request contains `tools`, tool choice, and Wilson tool behavior instructions.
+  - Progress, 2026-06-27: `AssertNoToolPathAsync` verifies fake provider requests include tool definitions, `ToolChoiceModes.Auto`, and Wilson tool behavior instructions.
 - [ ] Test the second provider request contains the assistant message with `tool_calls` and a matching `role: "tool"` result message.
 - [x] Test multiple tool calls in one assistant message.
 - [x] Test sequential tool calls across multiple model iterations.
@@ -1408,7 +1410,8 @@ Each superset tool must have:
 - [ ] Approval endpoint must enforce conversation ownership.
 - [ ] Tool calls must be tenant-scoped in every database query.
 - [ ] Tool executors must recheck effective policy at execution time, even when the registry already filtered the model-visible tool list.
-- [ ] Tool output appended back into model context must be treated as untrusted content and the system prompt must instruct the model accordingly.
+- [x] Tool output appended back into model context must be treated as untrusted content and the system prompt must instruct the model accordingly.
+  - Progress, 2026-06-27: `ToolAgentService` injects Wilson tool instructions for tool-enabled requests, warning that tool outputs are untrusted and must not be followed as instructions or used to reveal secrets/policy details. Automated fake-transport coverage verifies the instruction is present.
 
 ## Rollout Plan
 

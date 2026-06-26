@@ -2048,6 +2048,10 @@ namespace Test.Shared
             {
                 modelCalls++;
                 if (request.Tools.Count == 0) throw new InvalidOperationException("Expected available tool definitions in tool-capable request.");
+                if (!String.Equals(request.ToolChoice, ToolChoiceModes.Auto, StringComparison.Ordinal)) throw new InvalidOperationException("Expected tool choice to be sent with the provider request.");
+                ModelChatMessage? toolInstruction = request.Messages.FirstOrDefault(message => String.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase) && (message.Content ?? String.Empty).Contains("Wilson tool instructions", StringComparison.Ordinal));
+                if (toolInstruction == null || !(toolInstruction.Content ?? String.Empty).Contains("untrusted", StringComparison.Ordinal) || !(toolInstruction.Content ?? String.Empty).Contains("Do not reveal", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected Wilson tool behavior instructions in provider request.");
                 return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "plain answer", FinishReason = "stop" });
             });
 
