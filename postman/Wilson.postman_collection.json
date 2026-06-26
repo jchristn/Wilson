@@ -161,6 +161,42 @@
           }
         },
         {
+          "name": "Validate Tool Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/tools/validate",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "tools", "validate" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tools\": {\n    \"enabled\": true,\n    \"defaultApprovalPolicy\": \"auto\",\n    \"workingDirectory\": \"C:\\\\Code\\\\Wilson\",\n    \"allowedRoots\": [\"C:\\\\Code\\\\Wilson\"]\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Test Tool Readiness",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1.0/api/tools/test",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "v1.0", "api", "tools", "test" ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"runnerId\": \"{{runnerId}}\",\n  \"tools\": {\n    \"enabled\": true,\n    \"defaultApprovalPolicy\": \"auto\",\n    \"workingDirectory\": \"C:\\\\Code\\\\Wilson\",\n    \"allowedRoots\": [\"C:\\\\Code\\\\Wilson\"]\n  }\n}"
+            }
+          }
+        },
+        {
           "name": "Get Tool Run",
           "request": {
             "method": "GET",

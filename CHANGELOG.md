@@ -6,8 +6,9 @@
 - Added persisted tool runs and redacted tool-call records linked to conversations, assistant messages, and request history.
 - Added tool catalog, tool-run, conversation tool-call, and request-history tool-call REST/OpenAPI endpoints.
 - Added compact dashboard tool activity in chat, conversation reload support, and request-history tool activity details.
-- Added C#, JavaScript, and Python SDK methods plus Postman requests for implemented tool metadata/history APIs.
-- Added `REST_API.md` coverage for tool enablement, safe chat traces, request-history metrics, and tool-call reads.
+- Added admin tool policy validation and readiness diagnostics endpoints, dashboard settings controls, OpenAPI coverage, automated route tests, SDK methods, and Postman requests.
+- Added C#, JavaScript, and Python SDK methods plus Postman requests for implemented tool metadata/history and diagnostics APIs.
+- Added `REST_API.md` coverage for tool enablement, safe chat traces, request-history metrics, tool-call reads, and diagnostics.
 
 ## 0.3.0
 

@@ -49,6 +49,43 @@ GET /v1.0/api/tools/{name}
 
 Returns one tool descriptor by name.
 
+### Validate Draft Tool Policy
+
+```http
+POST /v1.0/api/tools/validate
+Content-Type: application/json
+
+{
+  "tools": {
+    "enabled": true,
+    "defaultApprovalPolicy": "auto",
+    "workingDirectory": "C:\\Code\\Wilson",
+    "allowedRoots": ["C:\\Code\\Wilson"]
+  }
+}
+```
+
+Requires a global administrator bearer token. Wilson normalizes the draft tool settings without saving them, then returns effective descriptors, `availableToolCount`, warnings, and blocking errors. Use this before saving settings to catch missing working directories, empty allowed roots, unknown enabled tool names, or disabled built-ins.
+
+### Test Tool Readiness
+
+```http
+POST /v1.0/api/tools/test
+Content-Type: application/json
+
+{
+  "runnerId": "local-ollama",
+  "tools": {
+    "enabled": true,
+    "defaultApprovalPolicy": "auto",
+    "workingDirectory": "C:\\Code\\Wilson",
+    "allowedRoots": ["C:\\Code\\Wilson"]
+  }
+}
+```
+
+Requires a global administrator bearer token. The readiness test is a dry run: it does not call a model and does not execute tools. It validates the draft tool policy and, when `runnerId` is supplied, checks that the selected runner exists, enables tools, supports tool calls, and has an effective tool-call wire format.
+
 ### Conversation Tool Calls
 
 ```http

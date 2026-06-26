@@ -71,6 +71,31 @@ namespace Wilson.Sdk
         }
 
         /// <summary>
+        /// Validate draft Wilson tool settings without saving them.
+        /// </summary>
+        /// <param name="tools">Draft tool settings object. When null, Wilson validates the current server settings.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool policy validation result.</returns>
+        public Task<ToolPolicyValidationResult> ValidateToolsAsync(object? tools = null, CancellationToken token = default)
+        {
+            ToolPolicyValidationRequest request = new ToolPolicyValidationRequest { Tools = tools };
+            return SendAsync<ToolPolicyValidationResult>(HttpMethod.Post, "/v1.0/api/tools/validate", request, token);
+        }
+
+        /// <summary>
+        /// Run dry-run tool readiness diagnostics against draft settings and an optional model runner.
+        /// </summary>
+        /// <param name="tools">Draft tool settings object. When null, Wilson tests the current server settings.</param>
+        /// <param name="runnerId">Optional model runner identifier.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Tool readiness diagnostics result.</returns>
+        public Task<ToolPolicyTestResult> TestToolsAsync(object? tools = null, string? runnerId = null, CancellationToken token = default)
+        {
+            ToolPolicyTestRequest request = new ToolPolicyTestRequest { Tools = tools, RunnerId = runnerId };
+            return SendAsync<ToolPolicyTestResult>(HttpMethod.Post, "/v1.0/api/tools/test", request, token);
+        }
+
+        /// <summary>
         /// Get one effective Wilson tool descriptor.
         /// </summary>
         /// <param name="name">Tool name.</param>

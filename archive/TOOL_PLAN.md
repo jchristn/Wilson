@@ -648,6 +648,10 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
 
 ### Chat Request/Response
 
+Progress, 2026-06-26: tool policy diagnostics slice is active for `POST /v1.0/api/tools/validate` and `POST /v1.0/api/tools/test`, including OpenAPI schemas and dashboard settings integration. Approval, MCP status/reload, and streaming SSE events remain separate pending slices.
+
+Progress, 2026-06-26: diagnostics slice implementation is complete and validated. Passing checks: `dotnet build src\Wilson.slnx`, `dotnet run --project src\Test.Automated`, dashboard `npm run lint`, dashboard `npm run build`, C# SDK build, JavaScript syntax check, Python bytecode compile, Postman JSON parse, and `git diff --check`. The solution build still reports the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory.
+
 - [x] Extend `ChatRequest`.
   - `ToolsEnabled` nullable bool; null means server default.
   - `ApprovalPolicy` nullable string; null means server default.
@@ -714,14 +718,18 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - Auth required.
   - Returns one tool definition.
   - Progress: foundation endpoint is implemented and returns 404 while no executors are registered.
-- [ ] Add `POST /v1.0/api/tools/validate`.
+- [x] Add `POST /v1.0/api/tools/validate`.
   - Admin required.
   - Body: draft tool settings/policy.
   - Returns normalized policy, descriptor list, warnings, and blocking errors.
-- [ ] Add `POST /v1.0/api/tools/test`.
+  - Progress, 2026-06-26: implementation is in progress. Route stubs and typed request/response models are in the working tree; server diagnostics, OpenAPI schemas, dashboard controls, SDK methods, docs, Postman requests, and backend coverage are being completed in the same slice.
+  - Progress, 2026-06-26: server endpoint, typed models, OpenAPI path/schema coverage, admin authorization, policy success/failure diagnostics, and route-level automated tests are implemented and passing.
+- [~] Add `POST /v1.0/api/tools/test`.
   - Admin required.
   - Performs dry-run diagnostics without executing model-directed tools.
   - Verifies global enablement, selected runner availability, runner tool capability, wire format, working directory, allowed roots, web-search provider configuration, and MCP connectivity.
+  - Progress, 2026-06-26: implementation is in progress beside `tools/validate`; runner capability checks and current built-in prerequisite checks are targeted for this slice, with web-search provider and MCP connectivity checks to become active when those executors exist.
+  - Progress, 2026-06-26: server endpoint, typed models, OpenAPI path/schema coverage, admin authorization, policy readiness checks, runner missing/disabled/unsupported checks, and route-level automated tests are implemented and passing. Web-search provider and MCP connection checks remain pending until those executors/connectors exist.
 - [x] Add `GET /v1.0/api/conversations/{id}/tool-calls`.
   - Auth required.
   - Conversation owner, tenant admin, or global admin only.
@@ -759,6 +767,7 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - `ToolRunResponse`
   - `ToolCallEnumeration`
   - Progress: tool model schemas, `ToolExecutionRecordEnumeration`, and `ToolRunResponse` are included. Approval schemas remain pending until approval endpoints exist.
+  - Progress, 2026-06-26: added `tools/validate` and `tools/test` paths plus `ToolPolicyValidationRequest`, `ToolPolicyValidationResult`, `ToolPolicyTestRequest`, and `ToolPolicyTestResult` schemas; automated OpenAPI path/schema coverage is passing.
 - [x] Update `ChatRequest`, `ChatResponse`, `ChatMessage`, `RequestHistoryEntry`, and `Settings` schemas through model changes.
   - Progress: ChatRequest, ChatResponse, ChatMessage, RequestHistoryEntry, Settings, tool model, and tool metrics schemas are included through reflection-based schema generation.
 - [ ] Update `SseEventStream` description to list all tool-related events.
@@ -840,6 +849,8 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - `mcpStatus()`
   - `reloadMcp()`
   - Progress: `tools()`, `tool(name)`, `conversationToolCalls`, `requestHistoryToolCalls`, and `toolRun` are implemented. Diagnostics, approval, and MCP methods remain pending with their endpoints.
+  - Progress, 2026-06-26: dashboard diagnostics client methods for `validateTools` and `testTools` are being added with the server diagnostics endpoint slice.
+  - Progress, 2026-06-26: `validateTools` and `testTools` are implemented in the dashboard API client and validated by dashboard lint/build. Approval and MCP methods remain pending with their endpoints.
 
 ### Visual Design
 
@@ -927,6 +938,8 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - Progress: continuing with the descriptor list in the Tools settings section so admins can see effective tool availability and unavailable reasons.
   - Progress: effective tool descriptor list is implemented in `SettingsAdmin` using `/v1.0/api/tools`, with refresh after settings save and a manual refresh button. Validate/test diagnostics remain pending.
   - Progress: descriptor-list and dependency-refresh slice validated on 2026-06-26 with solution build, automated tests, dashboard lint, and dashboard production build.
+  - Progress, 2026-06-26: validate/test diagnostics buttons are being added to this existing Tools section, using draft settings so admins can detect broken prerequisites before saving.
+  - Progress, 2026-06-26: validate/test diagnostics controls are implemented in the Tools settings section with runner selection, compact pass/fail summary, warnings/errors, and draft descriptor refresh. Dashboard lint and production build pass.
 - [ ] Add Web Search subsection.
   - Enabled toggle.
   - Allow fallback toggle.
@@ -954,6 +967,7 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - Add request-history tool-call endpoint.
   - Add approval endpoint.
   - Add MCP status/reload endpoints.
+  - Progress, 2026-06-26: OpenAPI now exposes tool validate/test paths and schemas, so the existing OpenAPI-driven API Explorer can discover those implemented endpoints. Approval and MCP explorer entries remain pending with their endpoints.
 - [ ] Update request history and conversation history modals.
   - Add a redacted `ToolCallTraceSection` equivalent.
   - Support filters for tool name, success, denied, trace ID, and time range.
@@ -995,6 +1009,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - `GetMcpStatus`
   - `ReloadMcp`
   - Progress: implemented `ListTools`, `GetTool`, `GetConversationToolCalls`, `GetRequestHistoryToolCalls`, and `GetToolRun` equivalents in JavaScript, Python, and C#. Validate/test, approval, and MCP methods remain pending with their server endpoints.
+  - Progress, 2026-06-26: `ValidateTools` and `TestTools` SDK methods are being added now that the matching server endpoints are underway.
+  - Progress, 2026-06-26: `ValidateTools`/`TestTools` equivalents are implemented in JavaScript, Python, and C#. C# includes typed diagnostics request/result models; JavaScript and Python follow the existing parsed-JSON payload convention. SDK validation passed with C# build, JavaScript syntax check, and Python bytecode compile.
 - [ ] Add admin audit methods where appropriate:
   - `ListToolCalls`
   - `GetToolCall`
@@ -1013,7 +1029,9 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 - [x] Update `sdk/javascript/index.js`.
   - Progress: added `tools`, `tool`, `toolRun`, `conversationToolCalls`, and `requestHistoryToolCalls`.
+  - Progress, 2026-06-26: added `validateTools` and `testTools`.
 - [x] Update `sdk/javascript/README.md`.
+  - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add examples for:
   - list tools
   - tool-enabled non-streaming chat with auto/deny
@@ -1025,6 +1043,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Update `sdk/python/wilson_client.py`.
   - Progress: added `tools`, `tool`, `tool_run`, `conversation_tool_calls`, and `request_history_tool_calls`.
 - [x] Update `sdk/python/README.md`.
+  - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add examples matching JavaScript.
 - [ ] Keep standard-library compatibility unless there is an explicit decision to add dependencies.
 
@@ -1035,6 +1054,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [x] Add model classes under `sdk/csharp/Wilson.Sdk/Models`.
   - Progress: added typed models for tool descriptors, runs, records, and run responses.
 - [x] Update `sdk/csharp/README.md`.
+  - Progress, 2026-06-26: added diagnostics examples and admin-token note.
 - [ ] Add streaming helper if feasible with `HttpCompletionOption.ResponseHeadersRead`.
 
 ### Top-Level SDK Docs
@@ -1054,6 +1074,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Add MCP and web search notes.
   - Add warning that file/process tools should be scoped to allowed roots.
   - Progress: completed for implemented tool enablement, built-in inventory, safety roots, SDK/Postman pointers, and persistence APIs. MCP/web/search/process notes remain pending with those features.
+  - Progress, 2026-06-26: added Settings-page diagnostics note for validate/test.
 - [~] Create `REST_API.md` if it does not exist.
   - Document all REST endpoints in plain Markdown.
   - Include auth requirements.
@@ -1066,7 +1087,9 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Include retention behavior for tool-call audit records.
   - Link to `/openapi.json` and `/swagger`.
   - Progress: created and documented implemented auth, tool catalog, chat response metadata, persisted tool-call read APIs, request-history metrics, and safe trace behavior. Streaming SSE, approval workflow, diagnostics, and MCP examples remain pending with those endpoints.
+  - Progress, 2026-06-26: added tool policy validation and readiness diagnostics examples and response semantics.
 - [x] Update `dashboard/README.md`.
+  - Progress, 2026-06-26: documented Settings-page tool diagnostics.
   - Document chat tool activity UI.
   - Document admin tool settings.
   - Document history/request detail tool-call trace views.
@@ -1113,6 +1136,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Delete Audit Tool Calls.
   - Delete Audit Tool Call.
   - Progress: added List Tools, Get Tool, Get Tool Run, Get Conversation Tool Calls, and Get Request History Tool Calls. Validation, approval, and audit delete/read requests remain pending until endpoints exist.
+  - Progress, 2026-06-26: added Validate Tool Policy and Test Tool Readiness requests. Approval and audit delete/read requests remain pending until endpoints exist.
 - [ ] Add folder `MCP`.
   - MCP Status.
   - Reload MCP.
@@ -1130,6 +1154,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress: added coverage for tool ID lengths, default tool settings, runner tool defaults, diagnostic catalog behavior, allowed-root read execution, secret-path blocking, OpenAI/Ollama tool-call response parsing, and a fake-model tool-agent loop that executes `read_file` then returns a final answer. Automated tests pass for this slice.
   - Progress: added coverage for `write_file`, `edit_file`, `multi_edit`, `delete_file`, and `manage_directory`, including exact-match failures, CRLF preservation, allowed-root execution, destructive-tool metadata, and secret-path blocking. Automated tests pass for this slice.
   - Progress: added coverage for `run_process`, including successful stdout/exit-code capture, non-zero exit-code capture, timeout handling, working-directory enforcement, and dangerous/approval metadata. Automated tests pass for this slice.
+  - Progress, 2026-06-26: added database parameterization regression coverage using injection-shaped tenant, user, credential, conversation, message, request-history, tool-run, and tool-call values through public database APIs.
 - [ ] Test tool registry filtering:
   - global disabled
   - disabled by name
@@ -1141,6 +1166,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - missing working directory or allowed root reports unavailable reason.
   - missing web-search provider reports unavailable reason.
   - final enabled/disabled allow-list filtering is applied.
+  - Progress, 2026-06-26: diagnostics endpoint tests are being added for policy validation and runner readiness. Web-search provider diagnostics remain pending until that executor is implemented.
+  - Progress, 2026-06-26: route-level diagnostics tests now cover disabled global policy, valid filesystem policy, missing allowed roots, unknown enabled tool names, successful runner readiness, disabled runner, unsupported runner, missing runner, admin-only access, and OpenAPI path/schema presence. Web-search provider diagnostics remain pending until that executor is implemented.
 - [ ] Test tool argument validation:
   - arguments must be a JSON object.
   - unknown properties are rejected.

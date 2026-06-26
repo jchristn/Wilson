@@ -2101,6 +2101,9 @@ function SettingsAdmin({ api }) {
   const [settings, setSettings] = useState(null);
   const [draft, setDraft] = useState(null);
   const [toolDescriptors, setToolDescriptors] = useState([]);
+  const [toolDiagnostics, setToolDiagnostics] = useState(null);
+  const [toolDiagnosticsBusy, setToolDiagnosticsBusy] = useState('');
+  const [diagnosticRunnerId, setDiagnosticRunnerId] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -2113,7 +2116,16 @@ function SettingsAdmin({ api }) {
     }
   }, [api]);
   const load = useCallback(async () => {
-    try { setError(''); const data = await api.settings(); setSettings(data); setDraft(structuredCloneSafe(data)); await loadTools(); } catch (err) { setError(String(err.message || err)); }
+    try {
+      setError('');
+      const data = await api.settings();
+      setSettings(data);
+      setDraft(structuredCloneSafe(data));
+      setDiagnosticRunnerId(current => current || (data.modelRunners || []).find(runner => runner.id)?.id || '');
+      await loadTools();
+    } catch (err) {
+      setError(String(err.message || err));
+    }
   }, [api, loadTools]);
   useEffect(() => { load(); }, [load]);
 
@@ -2135,6 +2147,37 @@ function SettingsAdmin({ api }) {
   const set = (path, value) => setDraft(prev => setPath(prev, path, value));
   const runners = draft.modelRunners || [];
   const toolSettings = { ...defaultToolsSettings(), ...(draft.tools || {}) };
+  const selectedDiagnosticRunnerId = runners.some(runner => runner.id === diagnosticRunnerId) ? diagnosticRunnerId : runners.find(runner => runner.id)?.id || '';
+
+  async function validateToolSettings() {
+    try {
+      setError('');
+      setToolDiagnosticsBusy('validate');
+      const result = await api.validateTools({ tools: toolSettings });
+      setToolDiagnostics({ type: 'validate', result });
+      setToolDescriptors(Array.isArray(result.tools) ? result.tools : []);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setToolDiagnosticsBusy('');
+    }
+  }
+
+  async function testToolSettings() {
+    try {
+      setError('');
+      setToolDiagnosticsBusy('test');
+      const payload = { tools: toolSettings };
+      if (selectedDiagnosticRunnerId) payload.runnerId = selectedDiagnosticRunnerId;
+      const result = await api.testTools(payload);
+      setToolDiagnostics({ type: 'test', result });
+      setToolDescriptors(Array.isArray(result.tools) ? result.tools : []);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setToolDiagnosticsBusy('');
+    }
+  }
 
   return (
     <div className="page settings-page">
@@ -2179,7 +2222,19 @@ function SettingsAdmin({ api }) {
           <FormInput label="Retention days" tooltip="Number of days request history should be retained." type="number" value={draft.requestHistory?.retentionDays ?? 30} onChange={v => set(['requestHistory', 'retentionDays'], Number(v))} />
         </SettingsSection>
         <SettingsSection title="Tools">
-          <ToolsSettingsEditor tools={toolSettings} descriptors={toolDescriptors} onRefresh={loadTools} onChange={(key, value) => set(['tools', key], value)} />
+          <ToolsSettingsEditor
+            tools={toolSettings}
+            descriptors={toolDescriptors}
+            runners={runners}
+            diagnostics={toolDiagnostics}
+            diagnosticsBusy={toolDiagnosticsBusy}
+            diagnosticRunnerId={selectedDiagnosticRunnerId}
+            onDiagnosticRunnerChange={setDiagnosticRunnerId}
+            onValidate={validateToolSettings}
+            onTest={testToolSettings}
+            onRefresh={loadTools}
+            onChange={(key, value) => set(['tools', key], value)}
+          />
         </SettingsSection>
         <SettingsSection title="Model Servers">
           {runners.map((runner, index) => <ModelRunnerEditor key={index} runner={runner} index={index} onChange={(next) => set(['modelRunners', index], next)} onDelete={() => set(['modelRunners'], runners.filter((_, i) => i !== index))} />)}
@@ -2198,7 +2253,7 @@ function SettingsAdmin({ api }) {
   );
 }
 
-function ToolsSettingsEditor({ tools, descriptors, onRefresh, onChange }) {
+function ToolsSettingsEditor({ tools, descriptors, runners, diagnostics, diagnosticsBusy, diagnosticRunnerId, onDiagnosticRunnerChange, onValidate, onTest, onRefresh, onChange }) {
   const setNumber = (key, value) => onChange(key, Number(value));
   return (
     <>
@@ -2214,6 +2269,18 @@ function ToolsSettingsEditor({ tools, descriptors, onRefresh, onChange }) {
       <FormList label="Allowed roots" tooltip="Filesystem roots that tools may access. File and process tools are unavailable without at least one allowed root." value={tools.allowedRoots || []} onChange={v => onChange('allowedRoots', v)} />
       <FormList label="Enabled tool names" tooltip="Optional allow-list of tool names. Leave empty to allow every eligible tool not explicitly disabled." value={tools.enabledToolNames || []} onChange={v => onChange('enabledToolNames', v)} />
       <FormList label="Disabled tool names" tooltip="Tool names that must never be exposed or executed." value={tools.disabledToolNames || []} onChange={v => onChange('disabledToolNames', v)} />
+      <div className="tool-diagnostics-panel">
+        <div className="runner-editor-header"><strong>Diagnostics</strong></div>
+        <label title="Model server used for tool readiness diagnostics">Runner<select title="Model server used for tool readiness diagnostics" value={diagnosticRunnerId || ''} onChange={event => onDiagnosticRunnerChange(event.target.value)}>
+          <option value="">Policy only</option>
+          {(runners || []).filter(runner => runner.id).map(runner => <option key={runner.id} value={runner.id}>{runner.name || runner.id}</option>)}
+        </select></label>
+        <div className="tool-diagnostics-actions">
+          <button className="secondary" title="Validate draft tool settings without saving them" disabled={!!diagnosticsBusy} onClick={onValidate}>{diagnosticsBusy === 'validate' ? <RefreshCw size={16} className="spin" /> : <Check size={16} />}Validate</button>
+          <button className="secondary" title="Test draft tool readiness against the selected runner" disabled={!!diagnosticsBusy} onClick={onTest}>{diagnosticsBusy === 'test' ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}Test</button>
+        </div>
+        {diagnostics && <ToolDiagnosticsResult diagnostics={diagnostics} />}
+      </div>
       <div className="tool-editor-block">
         <div className="runner-editor-header"><strong>Limits and Storage</strong></div>
         <FormInput label="Max agent iterations" tooltip="Maximum agent loop iterations per tool-enabled chat request." type="number" value={tools.maxAgentIterations ?? 25} onChange={v => setNumber('maxAgentIterations', v)} />
@@ -2249,6 +2316,29 @@ function ToolsSettingsEditor({ tools, descriptors, onRefresh, onChange }) {
         ))}
       </div>
     </>
+  );
+}
+
+function ToolDiagnosticsResult({ diagnostics }) {
+  const result = diagnostics.result || {};
+  const errors = Array.isArray(result.errors) ? result.errors : [];
+  const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  const statusClass = result.success ? 'tool-status complete' : 'tool-status failed';
+  return (
+    <div className={result.success ? 'tool-diagnostics-result success' : 'tool-diagnostics-result failed'} title="Latest tool diagnostics result">
+      <div className="tool-diagnostics-summary">
+        <span className={statusClass}>{result.success ? 'passed' : 'issues'}</span>
+        <span>{diagnostics.type === 'test' ? 'Readiness test' : 'Policy validation'}</span>
+        <span>{formatNumber(result.availableToolCount || 0)} tools</span>
+        {diagnostics.type === 'test' && <span>{result.runnerFound === false ? 'runner missing' : result.runnerSupportsTools ? 'runner ready' : 'runner blocked'}</span>}
+      </div>
+      {(errors.length > 0 || warnings.length > 0) && (
+        <div className="tool-diagnostics-messages">
+          {errors.map((item, index) => <div key={`error-${index}`} className="tool-diagnostics-message error"><AlertCircle size={14} />{item}</div>)}
+          {warnings.map((item, index) => <div key={`warning-${index}`} className="tool-diagnostics-message warning"><Info size={14} />{item}</div>)}
+        </div>
+      )}
+    </div>
   );
 }
 

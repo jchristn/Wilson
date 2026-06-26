@@ -149,6 +149,8 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 
 Tools are disabled by default. To use built-in file tools, enable `tools.enabled`, configure `tools.workingDirectory`, and include at least one path in `tools.allowedRoots`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
 
+The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, and Test adds selected-runner readiness checks without calling a model or executing tools.
+
 Implemented built-in tools:
 
 - Read/discover: `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`

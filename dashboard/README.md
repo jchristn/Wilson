@@ -28,6 +28,8 @@ When Wilson tools are enabled by the server and by the selected model runner, Ch
 
 The Settings page exposes the global tool switch, built-in tool policy, working directory, allowed roots, limits, and per-runner tool capability flags. Tools remain disabled until the server settings and runner capability checks allow them.
 
+Tool diagnostics are built into the same Settings page. Validate checks draft settings before saving, while Test checks the selected runner's tool readiness without calling a model or executing a tool.
+
 ## Checks
 
 ```powershell

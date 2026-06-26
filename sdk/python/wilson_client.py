@@ -65,6 +65,12 @@ class WilsonClient:
     def tools(self) -> list[dict[str, Any]]:
         return self.request("GET", "/v1.0/api/tools")
 
+    def validate_tools(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("POST", "/v1.0/api/tools/validate", payload or {})
+
+    def test_tools(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("POST", "/v1.0/api/tools/test", payload or {})
+
     def tool(self, name: str) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/tools/{quote(name, safe='')}")
 

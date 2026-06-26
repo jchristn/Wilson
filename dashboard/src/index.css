@@ -336,6 +336,18 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .token-list-row .icon-button { background: var(--panel); }
 .runner-editor { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .runner-editor-header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.tool-diagnostics-panel { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: minmax(180px, 280px) auto minmax(260px, 1fr); gap: 12px; align-items: end; }
+.tool-diagnostics-panel .runner-editor-header { align-self: center; }
+.tool-diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tool-diagnostics-result { min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px; display: grid; gap: 8px; }
+.tool-diagnostics-result.success { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.tool-diagnostics-result.failed { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
+.tool-diagnostics-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+.tool-diagnostics-summary span:not(.tool-status) { min-height: 24px; display: inline-flex; align-items: center; }
+.tool-diagnostics-messages { display: grid; gap: 6px; }
+.tool-diagnostics-message { min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; align-items: start; font-size: 12px; overflow-wrap: anywhere; }
+.tool-diagnostics-message.error { color: var(--danger); }
+.tool-diagnostics-message.warning { color: var(--warn); }
 .tool-descriptor-list { grid-column: 1 / -1; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; }
 .tool-descriptor-row { min-width: 0; display: grid; grid-template-columns: minmax(150px, 1.3fr) auto auto auto minmax(160px, 1.2fr); gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px; }
 .tool-descriptor-row > div { min-width: 0; display: grid; gap: 2px; }
@@ -487,7 +499,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .modal-full { height: calc(100dvh - 16px); }
   .modal header { padding: 12px; }
   .modal > :not(header) { margin: 12px; }
-  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
+  .record-grid, .form-grid, .detail-grid, .model-server-grid, .server-facts, .runner-editor, .health-editor-block, .tool-editor-block, .tool-diagnostics-panel, .tool-descriptor-row, .health-stats-row, .health-timestamps, .server-health-line { grid-template-columns: 1fr; }
   .entity-hero, .detail-hero { grid-template-columns: 1fr; align-items: start; }
   .key-value-table th, .key-value-table td, .timing-table th, .timing-table td { display: block; width: 100%; }
   .key-value-table th, .timing-table th { border-bottom: 0; }

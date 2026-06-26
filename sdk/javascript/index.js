@@ -61,6 +61,14 @@ export class WilsonClient {
     return this.request('GET', '/v1.0/api/tools');
   }
 
+  validateTools(payload = {}) {
+    return this.request('POST', '/v1.0/api/tools/validate', payload);
+  }
+
+  testTools(payload = {}) {
+    return this.request('POST', '/v1.0/api/tools/test', payload);
+  }
+
   tool(name) {
     return this.request('GET', `/v1.0/api/tools/${encodeURIComponent(name)}`);
   }

@@ -4,7 +4,13 @@ namespace Test.Shared
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Net;
+    using System.Net.Http;
+    using System.Net.Http.Headers;
+    using System.Net.Sockets;
+    using System.Text;
     using System.Text.Json;
+    using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.Data.Sqlite;
@@ -13,6 +19,7 @@ namespace Test.Shared
     using Wilson.Core.Services;
     using Wilson.Core.Settings;
     using Wilson.Core.Tools;
+    using Wilson.Server;
 
     /// <summary>
     /// Automated Wilson test suites.
@@ -25,10 +32,12 @@ namespace Test.Shared
         public static async Task RunAllAsync()
         {
             await DatabaseRoundTripAsync().ConfigureAwait(false);
+            await DatabaseParameterizationAsync().ConfigureAwait(false);
             await ToolPersistenceAsync().ConfigureAwait(false);
             IdLength();
             ToolSettingsDefaults();
             await ToolServiceFoundationAsync().ConfigureAwait(false);
+            await ToolDiagnosticsApiAsync().ConfigureAwait(false);
             await FilesystemMutationToolsAsync().ConfigureAwait(false);
             await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
@@ -49,6 +58,139 @@ namespace Test.Shared
             if (tenants.Count != 1) throw new InvalidOperationException("Expected one seeded tenant.");
             Credential? credential = await database.GetCredentialByAccessKeyAsync("test-token").ConfigureAwait(false);
             if (credential == null) throw new InvalidOperationException("Expected seeded credential.");
+        }
+
+        private static async Task DatabaseParameterizationAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-db-parameterization-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            string injection = "'; DROP TABLE users; DROP TABLE tenants; --";
+            string tenantId = "tenant-param-" + injection;
+            string userId = "user-param-" + injection;
+            string credentialId = "credential-param-" + injection;
+            string conversationId = "conversation-param-" + injection;
+            string messageId = "message-param-" + injection;
+            string requestId = "request-param-" + injection;
+            string toolRunId = "toolrun-param-" + injection;
+            string toolCallRecordId = "toolrec-param-" + injection;
+
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+
+                Tenant tenant = new Tenant { Id = tenantId, Name = "Tenant " + injection };
+                await database.CreateTenantAsync(tenant).ConfigureAwait(false);
+
+                User user = new User
+                {
+                    Id = userId,
+                    TenantId = tenantId,
+                    FirstName = "First " + injection,
+                    LastName = "Last " + injection,
+                    Email = "user+" + injection + "@example.com"
+                };
+                await database.CreateUserAsync(user).ConfigureAwait(false);
+
+                Credential credential = new Credential
+                {
+                    Id = credentialId,
+                    TenantId = tenantId,
+                    UserId = userId,
+                    Name = "Credential " + injection,
+                    AccessKey = "access-" + injection,
+                    SecretLast4 = "1234"
+                };
+                await database.CreateCredentialAsync(credential).ConfigureAwait(false);
+
+                Conversation conversation = new Conversation
+                {
+                    Id = conversationId,
+                    TenantId = tenantId,
+                    UserId = userId,
+                    Title = "Conversation " + injection,
+                    RunnerId = "runner-" + injection,
+                    Model = "model-" + injection
+                };
+                await database.CreateConversationAsync(conversation).ConfigureAwait(false);
+
+                ChatMessage message = new ChatMessage
+                {
+                    Id = messageId,
+                    TenantId = tenantId,
+                    ConversationId = conversationId,
+                    Role = "assistant",
+                    Content = "Message " + injection,
+                    RunnerId = "runner-" + injection,
+                    Model = "model-" + injection,
+                    RunId = toolRunId
+                };
+                await database.CreateMessageAsync(message).ConfigureAwait(false);
+
+                RequestHistoryEntry requestHistory = new RequestHistoryEntry
+                {
+                    Id = requestId,
+                    TenantId = tenantId,
+                    UserId = userId,
+                    Method = "POST",
+                    Path = "/v1.0/api/chat/" + injection,
+                    StatusCode = 200,
+                    DurationMs = 1
+                };
+                await database.CreateRequestHistoryAsync(requestHistory).ConfigureAwait(false);
+
+                ToolRun toolRun = new ToolRun
+                {
+                    RunId = toolRunId,
+                    TenantId = tenantId,
+                    UserId = userId,
+                    ConversationId = conversationId,
+                    RunnerId = "runner-" + injection,
+                    Model = "model-" + injection,
+                    Status = ToolStatuses.Completed
+                };
+                await database.CreateToolRunAsync(toolRun).ConfigureAwait(false);
+
+                ToolExecutionRecord toolCall = new ToolExecutionRecord
+                {
+                    Id = toolCallRecordId,
+                    TenantId = tenantId,
+                    UserId = userId,
+                    ConversationId = conversationId,
+                    RunId = toolRunId,
+                    RequestHistoryId = requestId,
+                    AssistantMessageId = messageId,
+                    ToolCallId = "toolcall-" + injection,
+                    ToolName = "read_file",
+                    ArgumentsJson = "{}",
+                    ResultJson = "{}",
+                    ResultSummaryJson = "{}",
+                    ResultPreview = "Preview " + injection,
+                    Status = ToolStatuses.Completed,
+                    Success = true
+                };
+                await database.CreateToolCallAsync(toolCall).ConfigureAwait(false);
+
+                Tenant? storedTenant = await database.GetTenantAsync(tenantId).ConfigureAwait(false);
+                if (storedTenant == null || !String.Equals(storedTenant.Name, tenant.Name, StringComparison.Ordinal)) throw new InvalidOperationException("Parameterized tenant value was not preserved.");
+
+                User? storedUser = await database.GetUserByEmailAsync(tenantId, user.Email).ConfigureAwait(false);
+                if (storedUser == null || !String.Equals(storedUser.Id, userId, StringComparison.Ordinal)) throw new InvalidOperationException("Parameterized user lookup failed.");
+
+                Credential? storedCredential = await database.GetCredentialByAccessKeyAsync(credential.AccessKey).ConfigureAwait(false);
+                if (storedCredential == null || !String.Equals(storedCredential.Id, credentialId, StringComparison.Ordinal)) throw new InvalidOperationException("Parameterized credential lookup failed.");
+
+                if ((await database.GetMessagesAsync(tenantId, conversationId).ConfigureAwait(false)).Count != 1) throw new InvalidOperationException("Parameterized message lookup failed.");
+                if ((await database.GetRequestHistoryAsync(tenantId).ConfigureAwait(false)).Count != 1) throw new InvalidOperationException("Parameterized request-history lookup failed.");
+                if (await database.GetToolRunAsync(tenantId, toolRunId).ConfigureAwait(false) == null) throw new InvalidOperationException("Parameterized tool-run lookup failed.");
+                if (await database.GetToolCallAsync(tenantId, toolCallRecordId).ConfigureAwait(false) == null) throw new InvalidOperationException("Parameterized tool-call lookup failed.");
+                if ((await database.GetUsersAsync(tenantId).ConfigureAwait(false)).Count != 1) throw new InvalidOperationException("Users table was not intact after injection-shaped input.");
+                if ((await database.GetTenantsAsync().ConfigureAwait(false)).Count != 1) throw new InvalidOperationException("Tenants table was not intact after injection-shaped input.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
         }
 
         private static async Task ToolPersistenceAsync()
@@ -316,6 +458,179 @@ namespace Test.Shared
             }
         }
 
+        private static async Task ToolDiagnosticsApiAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-api-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            string settingsFile = Path.Combine(workspace, "wilson.json");
+            string databaseFile = Path.Combine(workspace, "wilson.db");
+            int port = GetFreePort();
+
+            try
+            {
+                Settings settings = new Settings
+                {
+                    Rest = new RestSettings { Hostname = "127.0.0.1", Port = port, Ssl = false },
+                    Database = new DatabaseSettings { Type = "Sqlite", Filename = databaseFile },
+                    Auth = new AuthSettings { AdminBearerTokens = new List<string> { "test-admin-token" } },
+                    RequestHistory = new RequestHistorySettings { Enabled = false },
+                    Seed = new SeedSettings { AccessKey = "test-user-token", UserEmail = "test-user@example.com" },
+                    Tools = new ToolsSettings { Enabled = false },
+                    ModelRunners = new List<ModelRunnerSettings>
+                    {
+                        new ModelRunnerSettings
+                        {
+                            Id = "tool-runner",
+                            Name = "Tool Runner",
+                            ApiType = "OpenAI",
+                            Endpoint = "http://localhost:9999",
+                            Models = new List<string> { "test-model" }
+                        },
+                        new ModelRunnerSettings
+                        {
+                            Id = "disabled-runner",
+                            Name = "Disabled Runner",
+                            ApiType = "OpenAI",
+                            Endpoint = "http://localhost:9999",
+                            Models = new List<string> { "test-model" },
+                            ToolsEnabled = false
+                        },
+                        new ModelRunnerSettings
+                        {
+                            Id = "unsupported-runner",
+                            Name = "Unsupported Runner",
+                            ApiType = "Custom",
+                            Endpoint = "http://localhost:9999",
+                            Models = new List<string> { "test-model" }
+                        }
+                    }
+                };
+
+                File.WriteAllText(settingsFile, JsonSerializer.Serialize(settings, TestJson()));
+                WilsonServer server = await WilsonServer.CreateAsync(new[] { settingsFile }).ConfigureAwait(false);
+
+                using (CancellationTokenSource serverStop = new CancellationTokenSource())
+                using (HttpClient adminClient = new HttpClient())
+                using (HttpClient userClient = new HttpClient())
+                {
+                    Task serverTask = Task.Run(() => server.Server.StartAsync(serverStop.Token), serverStop.Token);
+                    adminClient.BaseAddress = new Uri("http://127.0.0.1:" + port);
+                    adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-admin-token");
+                    userClient.BaseAddress = adminClient.BaseAddress;
+
+                    try
+                    {
+                        await WaitForHttpAsync(adminClient).ConfigureAwait(false);
+
+                        ToolPolicyValidationResult disabled = await PostJsonAsync<ToolPolicyValidationResult>(
+                            adminClient,
+                            "/v1.0/api/tools/validate",
+                            new ToolPolicyValidationRequest { Tools = new ToolsSettings { Enabled = false } }).ConfigureAwait(false);
+                        if (!disabled.Success || disabled.ToolsEnabled || !disabled.Warnings.Any(warning => warning.Contains("disabled globally", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected disabled tools validation warning without blocking errors.");
+
+                        ToolsSettings validTools = new ToolsSettings
+                        {
+                            Enabled = true,
+                            DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                            WorkingDirectory = workspace,
+                            AllowedRoots = new List<string> { workspace }
+                        };
+                        ToolPolicyValidationResult valid = await PostJsonAsync<ToolPolicyValidationResult>(
+                            adminClient,
+                            "/v1.0/api/tools/validate",
+                            new ToolPolicyValidationRequest { Tools = validTools }).ConfigureAwait(false);
+                        if (!valid.Success || valid.AvailableToolCount < 1 || !valid.Tools.Any(tool => String.Equals(tool.Name, "read_file", StringComparison.OrdinalIgnoreCase) && tool.Available)) throw new InvalidOperationException("Expected valid tool policy to expose read_file.");
+
+                        ToolPolicyValidationResult missingRoots = await PostJsonAsync<ToolPolicyValidationResult>(
+                            adminClient,
+                            "/v1.0/api/tools/validate",
+                            new ToolPolicyValidationRequest { Tools = new ToolsSettings { Enabled = true, WorkingDirectory = workspace } }).ConfigureAwait(false);
+                        if (missingRoots.Success || !missingRoots.Errors.Any(error => error.Contains("allowed root", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected missing allowed roots to fail validation.");
+
+                        ToolPolicyValidationResult unknownTool = await PostJsonAsync<ToolPolicyValidationResult>(
+                            adminClient,
+                            "/v1.0/api/tools/validate",
+                            new ToolPolicyValidationRequest
+                            {
+                                Tools = new ToolsSettings
+                                {
+                                    Enabled = true,
+                                    DefaultApprovalPolicy = ToolApprovalPolicies.Auto,
+                                    WorkingDirectory = workspace,
+                                    AllowedRoots = new List<string> { workspace },
+                                    EnabledToolNames = new List<string> { "missing_tool" }
+                                }
+                            }).ConfigureAwait(false);
+                        if (unknownTool.Success || !unknownTool.Errors.Any(error => error.Contains("missing_tool", StringComparison.Ordinal))) throw new InvalidOperationException("Expected unknown enabled tool name to fail validation.");
+
+                        ToolPolicyTestResult ready = await PostJsonAsync<ToolPolicyTestResult>(
+                            adminClient,
+                            "/v1.0/api/tools/test",
+                            new ToolPolicyTestRequest { Tools = validTools, RunnerId = "tool-runner" }).ConfigureAwait(false);
+                        if (!ready.Success || !ready.RunnerFound || !ready.RunnerSupportsTools || !String.Equals(ready.ToolCallingApiFormat, "OpenAIChatCompletions", StringComparison.Ordinal)) throw new InvalidOperationException("Expected tool-runner readiness to pass.");
+
+                        ToolPolicyTestResult disabledRunner = await PostJsonAsync<ToolPolicyTestResult>(
+                            adminClient,
+                            "/v1.0/api/tools/test",
+                            new ToolPolicyTestRequest { Tools = validTools, RunnerId = "disabled-runner" }).ConfigureAwait(false);
+                        if (disabledRunner.Success || !disabledRunner.Errors.Any(error => error.Contains("tools disabled", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected disabled runner readiness to fail.");
+
+                        ToolPolicyTestResult unsupportedRunner = await PostJsonAsync<ToolPolicyTestResult>(
+                            adminClient,
+                            "/v1.0/api/tools/test",
+                            new ToolPolicyTestRequest { Tools = validTools, RunnerId = "unsupported-runner" }).ConfigureAwait(false);
+                        if (unsupportedRunner.Success || unsupportedRunner.RunnerSupportsTools) throw new InvalidOperationException("Expected unsupported runner readiness to fail.");
+
+                        ToolPolicyTestResult missingRunner = await PostJsonAsync<ToolPolicyTestResult>(
+                            adminClient,
+                            "/v1.0/api/tools/test",
+                            new ToolPolicyTestRequest { Tools = validTools, RunnerId = "missing-runner" }).ConfigureAwait(false);
+                        if (missingRunner.Success || missingRunner.RunnerFound || !missingRunner.Errors.Any(error => error.Contains("not found", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected missing runner readiness to fail.");
+
+                        await ExpectStatusAsync(
+                            userClient,
+                            "/v1.0/api/tools/validate",
+                            new ToolPolicyValidationRequest { Tools = validTools },
+                            HttpStatusCode.Unauthorized).ConfigureAwait(false);
+
+                        JsonDocument openApi = await GetJsonDocumentAsync(adminClient, "/openapi.json").ConfigureAwait(false);
+                        try
+                        {
+                            JsonElement root = openApi.RootElement;
+                            if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/tools/validate", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI tools validate path.");
+                            if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/tools/test", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI tools test path.");
+                            JsonElement schemas = root.GetProperty("components").GetProperty("schemas");
+                            if (!schemas.TryGetProperty("ToolPolicyValidationRequest", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI validation request schema.");
+                            if (!schemas.TryGetProperty("ToolPolicyValidationResult", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI validation result schema.");
+                            if (!schemas.TryGetProperty("ToolPolicyTestRequest", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI test request schema.");
+                            if (!schemas.TryGetProperty("ToolPolicyTestResult", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI test result schema.");
+                        }
+                        finally
+                        {
+                            openApi.Dispose();
+                        }
+                    }
+                    finally
+                    {
+                        serverStop.Cancel();
+                        server.Server.Stop();
+                        try
+                        {
+                            await serverTask.ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (Directory.Exists(workspace)) Directory.Delete(workspace, true);
+            }
+        }
+
         private static async Task FilesystemMutationToolsAsync()
         {
             string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-write-" + Guid.NewGuid().ToString("N"));
@@ -388,6 +703,92 @@ namespace Test.Shared
                 document.RootElement,
                 new ToolExecutionContext(),
                 CancellationToken.None).ConfigureAwait(false);
+        }
+
+        private static JsonSerializerOptions TestJson()
+        {
+            JsonSerializerOptions json = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            };
+            json.Converters.Add(new JsonStringEnumConverter());
+            return json;
+        }
+
+        private static int GetFreePort()
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                IPEndPoint endpoint = (IPEndPoint)listener.LocalEndpoint;
+                return endpoint.Port;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static async Task WaitForHttpAsync(HttpClient client)
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                try
+                {
+                    using (HttpResponseMessage response = await client.GetAsync("/health").ConfigureAwait(false))
+                    {
+                        if (response.IsSuccessStatusCode) return;
+                    }
+                }
+                catch (HttpRequestException)
+                {
+                }
+
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+
+            throw new TimeoutException("Wilson test server did not become reachable.");
+        }
+
+        private static async Task<T> PostJsonAsync<T>(HttpClient client, string path, object body)
+        {
+            string json = JsonSerializer.Serialize(body, TestJson());
+            using (StringContent content = new StringContent(json, Encoding.UTF8, "application/json"))
+            using (HttpResponseMessage response = await client.PostAsync(path, content).ConfigureAwait(false))
+            {
+                string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Expected success from " + path + " but received " + (int)response.StatusCode + ": " + payload);
+                T? value = JsonSerializer.Deserialize<T>(payload, TestJson());
+                if (value == null) throw new InvalidOperationException("Expected JSON response from " + path + ".");
+                return value;
+            }
+        }
+
+        private static async Task ExpectStatusAsync(HttpClient client, string path, object body, HttpStatusCode expectedStatus)
+        {
+            string json = JsonSerializer.Serialize(body, TestJson());
+            using (StringContent content = new StringContent(json, Encoding.UTF8, "application/json"))
+            using (HttpResponseMessage response = await client.PostAsync(path, content).ConfigureAwait(false))
+            {
+                if (response.StatusCode != expectedStatus)
+                {
+                    string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    throw new InvalidOperationException("Expected " + (int)expectedStatus + " from " + path + " but received " + (int)response.StatusCode + ": " + payload);
+                }
+            }
+        }
+
+        private static async Task<JsonDocument> GetJsonDocumentAsync(HttpClient client, string path)
+        {
+            using (HttpResponseMessage response = await client.GetAsync(path).ConfigureAwait(false))
+            {
+                string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Expected success from " + path + " but received " + (int)response.StatusCode + ": " + payload);
+                return JsonDocument.Parse(payload);
+            }
         }
 
         private static async Task RunProcessToolAsync()

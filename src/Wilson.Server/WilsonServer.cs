@@ -460,6 +460,22 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            if (path == "/v1.0/api/tools/validate" && method == "POST")
+            {
+                RequireAdmin(requestContext);
+                ToolPolicyValidationRequest body = Body<ToolPolicyValidationRequest>(ctx);
+                await SendJsonAsync(ctx, ValidateToolPolicy(body.Tools)).ConfigureAwait(false);
+                return;
+            }
+
+            if (path == "/v1.0/api/tools/test" && method == "POST")
+            {
+                RequireAdmin(requestContext);
+                ToolPolicyTestRequest body = Body<ToolPolicyTestRequest>(ctx);
+                await SendJsonAsync(ctx, TestToolPolicy(body)).ConfigureAwait(false);
+                return;
+            }
+
             if (path.StartsWith("/v1.0/api/tools/", StringComparison.OrdinalIgnoreCase) && method == "GET")
             {
                 string name = Segment(path, 3);
@@ -966,8 +982,180 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             };
         }
 
+        private ToolPolicyValidationResult ValidateToolPolicy(ToolsSettings? draftTools)
+        {
+            ToolsSettings tools = draftTools == null ? CloneTools(Settings.Tools) : CloneTools(draftTools);
+            NormalizeTools(tools);
+            Settings validationSettings = new Settings { Tools = tools };
+            ToolService service = new ToolService(validationSettings);
+            List<ToolDescriptor> descriptors = service.ListTools(true);
+            List<ToolDescriptor> available = descriptors.Where(tool => tool.Available).ToList();
+            HashSet<string> registeredNames = new HashSet<string>(descriptors.Select(tool => tool.Name), StringComparer.OrdinalIgnoreCase);
+
+            ToolPolicyValidationResult result = new ToolPolicyValidationResult
+            {
+                ToolsEnabled = tools.Enabled,
+                ApprovalPolicy = tools.DefaultApprovalPolicy,
+                AvailableToolCount = available.Count,
+                Tools = descriptors
+            };
+
+            if (!tools.Enabled)
+            {
+                result.Warnings.Add("Tools are disabled globally.");
+            }
+
+            if (tools.Enabled && !tools.BuiltInsEnabled)
+            {
+                result.Warnings.Add("Built-in tools are disabled.");
+            }
+
+            if (tools.Enabled && String.IsNullOrWhiteSpace(tools.WorkingDirectory))
+            {
+                result.Errors.Add("A working directory is required for filesystem and process tools.");
+            }
+
+            if (tools.Enabled && tools.AllowedRoots.Count == 0)
+            {
+                result.Errors.Add("At least one allowed root is required for filesystem and process tools.");
+            }
+
+            foreach (string name in tools.EnabledToolNames.Where(name => !registeredNames.Contains(name)))
+            {
+                result.Errors.Add("Enabled tool name is not registered: " + name + ".");
+            }
+
+            foreach (string name in tools.DisabledToolNames.Where(name => !registeredNames.Contains(name)))
+            {
+                result.Warnings.Add("Disabled tool name is not registered: " + name + ".");
+            }
+
+            if (tools.Enabled && available.Count == 0)
+            {
+                result.Errors.Add("No executable tools are available. Check working directory, allowed roots, built-in enablement, enabled names, and disabled names.");
+            }
+
+            if (String.Equals(tools.DefaultApprovalPolicy, ToolApprovalPolicies.Ask, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Warnings.Add("Interactive approval requires the future streaming approval flow; non-streaming tool chat rejects ask approval.");
+            }
+
+            if (tools.WebSearch.Enabled)
+            {
+                if (!tools.WebSearch.Providers.Any(provider => provider.Enabled))
+                {
+                    result.Warnings.Add("Web search is enabled, but no enabled search provider is configured.");
+                }
+
+                result.Warnings.Add("Web search settings are configured, but no web_search executor is registered in this Wilson build.");
+            }
+
+            if (tools.Mcp.Enabled)
+            {
+                if (!tools.Mcp.Servers.Any(server => server.Enabled))
+                {
+                    result.Warnings.Add("MCP is enabled, but no enabled MCP server is configured.");
+                }
+
+                result.Warnings.Add("MCP settings are configured, but MCP execution and connection diagnostics are not registered in this Wilson build.");
+            }
+
+            result.Success = result.Errors.Count == 0;
+            return result;
+        }
+
+        private ToolPolicyTestResult TestToolPolicy(ToolPolicyTestRequest request)
+        {
+            ToolPolicyValidationResult validation = ValidateToolPolicy(request.Tools);
+            ToolPolicyTestResult result = new ToolPolicyTestResult
+            {
+                AvailableToolCount = validation.AvailableToolCount,
+                Tools = validation.Tools,
+                Warnings = new List<string>(validation.Warnings),
+                Errors = new List<string>(validation.Errors)
+            };
+
+            if (!validation.ToolsEnabled)
+            {
+                result.Errors.Add("Tools are disabled globally.");
+            }
+
+            if (String.IsNullOrWhiteSpace(request.RunnerId))
+            {
+                result.RunnerFound = true;
+                result.Warnings.Add("No runnerId was supplied, so only tool policy and workspace prerequisites were tested.");
+                result.Success = result.Errors.Count == 0;
+                return result;
+            }
+
+            try
+            {
+                ModelRunnerSettings runner = Inference.GetRunner(request.RunnerId);
+                ModelRunnerSettings runnerDefaults = CloneRunner(runner);
+                ModelRunnerSettings.ApplyToolDefaults(runnerDefaults);
+                result.RunnerFound = true;
+                result.RunnerToolsEnabled = runnerDefaults.ToolsEnabled;
+                result.RunnerSupportsTools = runnerDefaults.SupportsTools;
+                result.ToolCallingApiFormat = runnerDefaults.ToolCallingApiFormat;
+
+                if (!runnerDefaults.ToolsEnabled)
+                {
+                    result.Errors.Add("The selected runner has tools disabled.");
+                }
+
+                if (!runnerDefaults.SupportsTools)
+                {
+                    result.Errors.Add("The selected runner does not support tool calls.");
+                }
+
+                if (String.IsNullOrWhiteSpace(runnerDefaults.ToolCallingApiFormat))
+                {
+                    result.Errors.Add("The selected runner has no tool-calling API format.");
+                }
+            }
+            catch (KeyNotFoundException)
+            {
+                result.RunnerFound = false;
+                result.Errors.Add("The selected runner was not found.");
+            }
+
+            result.Success = result.Errors.Count == 0;
+            return result;
+        }
+
+        private static ModelRunnerSettings CloneRunner(ModelRunnerSettings source)
+        {
+            return new ModelRunnerSettings
+            {
+                Id = source.Id,
+                Name = source.Name,
+                ApiType = source.ApiType,
+                Endpoint = source.Endpoint,
+                ApiKey = source.ApiKey,
+                Models = new List<string>(source.Models),
+                ContextWindowTokens = source.ContextWindowTokens,
+                ToolsEnabled = source.ToolsEnabled,
+                SupportsTools = source.SupportsTools,
+                ToolCallingApiFormat = source.ToolCallingApiFormat,
+                SupportsParallelToolCalls = source.SupportsParallelToolCalls,
+                SupportsStreamingToolCalls = source.SupportsStreamingToolCalls,
+                ChatCompletionsPath = source.ChatCompletionsPath,
+                HealthCheckEnabled = source.HealthCheckEnabled,
+                HealthCheckUrl = source.HealthCheckUrl,
+                HealthCheckMethod = source.HealthCheckMethod,
+                HealthCheckIntervalMs = source.HealthCheckIntervalMs,
+                HealthCheckTimeoutMs = source.HealthCheckTimeoutMs,
+                HealthCheckExpectedStatusCode = source.HealthCheckExpectedStatusCode,
+                HealthyThreshold = source.HealthyThreshold,
+                UnhealthyThreshold = source.UnhealthyThreshold,
+                HealthCheckUseAuth = source.HealthCheckUseAuth
+            };
+        }
+
         private static ToolsSettings CloneTools(ToolsSettings source)
         {
+            WebSearchToolSettings sourceWebSearch = source.WebSearch ?? new WebSearchToolSettings();
+            McpToolSettings sourceMcp = source.Mcp ?? new McpToolSettings();
             return new ToolsSettings
             {
                 Enabled = source.Enabled,
@@ -976,7 +1164,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 DestructiveToolsRequireApproval = source.DestructiveToolsRequireApproval,
                 BlockSecretPaths = source.BlockSecretPaths,
                 WorkingDirectory = source.WorkingDirectory,
-                AllowedRoots = new List<string>(source.AllowedRoots),
+                AllowedRoots = new List<string>(source.AllowedRoots ?? new List<string>()),
                 MaxAgentIterations = source.MaxAgentIterations,
                 MaxToolIterations = source.MaxToolIterations,
                 MaxToolCallsPerTurn = source.MaxToolCallsPerTurn,
@@ -995,13 +1183,15 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 MaxToolOutputChars = source.MaxToolOutputChars,
                 MaxToolOutputCharsPerTurn = source.MaxToolOutputCharsPerTurn,
                 MaxToolResultItems = source.MaxToolResultItems,
-                EnabledToolNames = new List<string>(source.EnabledToolNames),
-                DisabledToolNames = new List<string>(source.DisabledToolNames),
+                EnabledToolNames = new List<string>(source.EnabledToolNames ?? new List<string>()),
+                DisabledToolNames = new List<string>(source.DisabledToolNames ?? new List<string>()),
                 WebSearch = new WebSearchToolSettings
                 {
-                    Enabled = source.WebSearch.Enabled,
-                    AllowFallback = source.WebSearch.AllowFallback,
-                    Providers = source.WebSearch.Providers.Select(provider => new WebSearchProviderSettings
+                    Enabled = sourceWebSearch.Enabled,
+                    AllowFallback = sourceWebSearch.AllowFallback,
+                    Providers = (sourceWebSearch.Providers ?? new List<WebSearchProviderSettings>())
+                    .Where(provider => provider != null)
+                    .Select(provider => new WebSearchProviderSettings
                     {
                         Name = provider.Name,
                         ProviderType = provider.ProviderType,
@@ -1014,14 +1204,16 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 },
                 Mcp = new McpToolSettings
                 {
-                    Enabled = source.Mcp.Enabled,
-                    Servers = source.Mcp.Servers.Select(server => new McpServerSettings
+                    Enabled = sourceMcp.Enabled,
+                    Servers = (sourceMcp.Servers ?? new List<McpServerSettings>())
+                    .Where(server => server != null)
+                    .Select(server => new McpServerSettings
                     {
                         Name = server.Name,
                         Transport = server.Transport,
                         Command = server.Command,
-                        Args = new List<string>(server.Args),
-                        Env = new Dictionary<string, string>(server.Env, StringComparer.OrdinalIgnoreCase),
+                        Args = new List<string>(server.Args ?? new List<string>()),
+                        Env = new Dictionary<string, string>(server.Env ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase),
                         Url = server.Url,
                         McpPath = server.McpPath,
                         Enabled = server.Enabled
@@ -1390,7 +1582,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     new { name = "Authentication", description = "Token validation and current principal metadata." },
                     new { name = "Model Runners", description = "Configured model runner inventory, health, and Ollama model actions." },
                     new { name = "Administration", description = "Settings, tenants, users, and credentials." },
-                    new { name = "Tools", description = "Tool catalog and future tool diagnostics." },
+                    new { name = "Tools", description = "Tool catalog, diagnostics, and run history." },
                     new { name = "Chat", description = "Conversations, messages, and model chat requests." },
                     new { name = "Feedback", description = "User feedback capture and review." },
                     new { name = "Request History", description = "Captured request metadata, timing, and summaries." }
@@ -1413,6 +1605,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         Operation("get", "getSettings", "Administration", "Read settings", "Returns the active Wilson settings. Requires a global administrator bearer token.", "Settings", true),
                         Operation("put", "updateSettings", "Administration", "Update settings", "Replaces the active Wilson settings and persists them to the configured settings file. Requires a global administrator bearer token.", "Settings", true, requestSchema: "Settings")) },
                     { "/v1.0/api/tools", Path(Operation("get", "listTools", "Tools", "List effective tools", "Lists effective tool descriptors for the authenticated principal, including unavailable diagnostics when tools or prerequisites are disabled.", "ToolDescriptorArray", true)) },
+                    { "/v1.0/api/tools/validate", Path(Operation("post", "validateTools", "Tools", "Validate draft tool policy", "Validates draft tool settings without saving them. Requires a global administrator bearer token.", "ToolPolicyValidationResult", true, requestSchema: "ToolPolicyValidationRequest")) },
+                    { "/v1.0/api/tools/test", Path(Operation("post", "testTools", "Tools", "Test tool readiness", "Runs dry-run tool readiness diagnostics against draft tool settings and an optional model runner. Requires a global administrator bearer token.", "ToolPolicyTestResult", true, requestSchema: "ToolPolicyTestRequest")) },
                     { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
                     { "/v1.0/api/tool-runs/{id}", Path(Operation("get", "getToolRun", "Tools", "Get tool run", "Returns one persisted tool run and its redacted tool-call records.", "ToolRunResponse", true, parameters: Parameters(PathParameter("id", "Tool run identifier."), TenantScopeParameter()))) },
                     { "/v1.0/api/tenants", Path(
@@ -1685,6 +1879,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(RequestHistorySummary));
             AddComponentSchema(schemas, typeof(ToolDefinition));
             AddComponentSchema(schemas, typeof(ToolDescriptor));
+            AddComponentSchema(schemas, typeof(ToolPolicyValidationRequest));
+            AddComponentSchema(schemas, typeof(ToolPolicyValidationResult));
+            AddComponentSchema(schemas, typeof(ToolPolicyTestRequest));
+            AddComponentSchema(schemas, typeof(ToolPolicyTestResult));
             AddComponentSchema(schemas, typeof(ModelToolDefinition));
             AddComponentSchema(schemas, typeof(ModelToolFunctionDefinition));
             AddComponentSchema(schemas, typeof(ModelToolCall));
