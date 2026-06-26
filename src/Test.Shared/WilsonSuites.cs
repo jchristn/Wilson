@@ -657,11 +657,13 @@ namespace Test.Shared
             ModelRunnerSettings ollama = new ModelRunnerSettings { ApiType = "Ollama", Endpoint = "http://localhost:11434" };
             ModelRunnerSettings.ApplyToolDefaults(ollama);
             if (!ollama.SupportsTools || !String.Equals(ollama.ToolCallingApiFormat, "OllamaChat", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected Ollama tool defaults.");
+            if (!ollama.SupportsParallelToolCalls || !ollama.SupportsStreamingToolCalls) throw new InvalidOperationException("Ollama parallel and streaming tool calls should default enabled.");
 
             ModelRunnerSettings openAi = new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "https://api.openai.com" };
             ModelRunnerSettings.ApplyToolDefaults(openAi);
             if (!openAi.SupportsTools || !String.Equals(openAi.ToolCallingApiFormat, "OpenAIChatCompletions", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected OpenAI tool defaults.");
             if (!String.Equals(openAi.ChatCompletionsPath, "/v1/chat/completions", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected OpenAI chat completions path.");
+            if (!openAi.SupportsParallelToolCalls || !openAi.SupportsStreamingToolCalls) throw new InvalidOperationException("OpenAI parallel and streaming tool calls should default enabled.");
 
             ModelRunnerSettings unsupported = new ModelRunnerSettings { ApiType = "Custom", Endpoint = "http://localhost:9999" };
             ModelRunnerSettings.ApplyToolDefaults(unsupported);

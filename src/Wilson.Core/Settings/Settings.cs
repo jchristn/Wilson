@@ -228,12 +228,12 @@ namespace Wilson.Core.Settings
         /// <summary>
         /// Whether this runner supports parallel tool calls.
         /// </summary>
-        public bool SupportsParallelToolCalls { get; set; } = false;
+        public bool SupportsParallelToolCalls { get; set; } = true;
 
         /// <summary>
         /// Whether this runner supports streaming tool-call deltas.
         /// </summary>
-        public bool SupportsStreamingToolCalls { get; set; } = false;
+        public bool SupportsStreamingToolCalls { get; set; } = true;
 
         /// <summary>
         /// Chat-completions path for OpenAI-compatible tool-capable transports.

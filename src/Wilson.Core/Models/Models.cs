@@ -514,9 +514,9 @@ namespace Wilson.Core.Models
         /// <summary>Tool-calling API format.</summary>
         public string ToolCallingApiFormat { get; set; } = String.Empty;
         /// <summary>Whether this runner supports parallel tool calls.</summary>
-        public bool SupportsParallelToolCalls { get; set; } = false;
+        public bool SupportsParallelToolCalls { get; set; } = true;
         /// <summary>Whether this runner supports streaming tool-call deltas.</summary>
-        public bool SupportsStreamingToolCalls { get; set; } = false;
+        public bool SupportsStreamingToolCalls { get; set; } = true;
         /// <summary>Chat-completions path for tool-capable transports.</summary>
         public string ChatCompletionsPath { get; set; } = String.Empty;
         /// <summary>Whether background health checks are enabled.</summary>

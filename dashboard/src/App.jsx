@@ -1012,8 +1012,8 @@ function defaultRunnerToolSettings(apiType = 'Ollama') {
     toolsEnabled: true,
     supportsTools: supported,
     toolCallingApiFormat: isOllama ? 'OllamaChat' : (supported ? 'OpenAIChatCompletions' : ''),
-    supportsParallelToolCalls: false,
-    supportsStreamingToolCalls: false,
+    supportsParallelToolCalls: true,
+    supportsStreamingToolCalls: true,
     chatCompletionsPath: isOllama ? '' : '/v1/chat/completions'
   };
 }
@@ -1075,8 +1075,8 @@ function normalizeRunnerForSave(runner) {
     toolsEnabled: runner.toolsEnabled !== false,
     supportsTools: runner.supportsTools ?? toolDefaults.supportsTools,
     toolCallingApiFormat: runner.toolCallingApiFormat || toolDefaults.toolCallingApiFormat,
-    supportsParallelToolCalls: Boolean(runner.supportsParallelToolCalls),
-    supportsStreamingToolCalls: Boolean(runner.supportsStreamingToolCalls),
+    supportsParallelToolCalls: runner.supportsParallelToolCalls !== false,
+    supportsStreamingToolCalls: runner.supportsStreamingToolCalls !== false,
     chatCompletionsPath: runner.chatCompletionsPath ?? toolDefaults.chatCompletionsPath,
     healthCheckEnabled: runner.healthCheckEnabled !== false,
     healthCheckUrl: runner.healthCheckUrl || defaults.healthCheckUrl,
@@ -1546,8 +1546,8 @@ function ModelServerEditModal({ server, onClose, onSave }) {
           <FormCheck label="Supports tools" tooltip="Whether this model server API can accept tool definitions and return tool calls" checked={draft.supportsTools !== false} onChange={v => set('supportsTools', v)} />
           <FormInput label="Tool API format" tooltip="Tool-call wire format, for example OllamaChat or OpenAIChatCompletions" value={draft.toolCallingApiFormat || defaultRunnerToolSettings(draft.apiType).toolCallingApiFormat} onChange={v => set('toolCallingApiFormat', v)} />
           <FormInput label="Chat completions path" tooltip="OpenAI-compatible chat completions path used for tool-enabled requests. Ollama can leave this blank." value={draft.chatCompletionsPath ?? defaultRunnerToolSettings(draft.apiType).chatCompletionsPath} onChange={v => set('chatCompletionsPath', v)} />
-          <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn" checked={!!draft.supportsParallelToolCalls} onChange={v => set('supportsParallelToolCalls', v)} />
-          <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={!!draft.supportsStreamingToolCalls} onChange={v => set('supportsStreamingToolCalls', v)} />
+          <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn" checked={draft.supportsParallelToolCalls !== false} onChange={v => set('supportsParallelToolCalls', v)} />
+          <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={draft.supportsStreamingToolCalls !== false} onChange={v => set('supportsStreamingToolCalls', v)} />
         </div>
         <div className="health-editor-block">
           <div className="runner-editor-header"><strong>Health Checks</strong></div>
@@ -2395,8 +2395,8 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
         <FormCheck label="Supports tools" tooltip="Whether this model server API can accept tool definitions and return tool calls." checked={runner.supportsTools !== false} onChange={v => set('supportsTools', v)} />
         <FormInput label="Tool API format" tooltip="Tool-call wire format, for example OllamaChat or OpenAIChatCompletions." value={runner.toolCallingApiFormat || defaultRunnerToolSettings(runner.apiType).toolCallingApiFormat} onChange={v => set('toolCallingApiFormat', v)} />
         <FormInput label="Chat completions path" tooltip="OpenAI-compatible chat completions path used for tool-enabled requests. Ollama can leave this blank." value={runner.chatCompletionsPath ?? defaultRunnerToolSettings(runner.apiType).chatCompletionsPath} onChange={v => set('chatCompletionsPath', v)} />
-        <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn." checked={!!runner.supportsParallelToolCalls} onChange={v => set('supportsParallelToolCalls', v)} />
-        <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={!!runner.supportsStreamingToolCalls} onChange={v => set('supportsStreamingToolCalls', v)} />
+        <FormCheck label="Parallel tool calls" tooltip="Whether this model server supports multiple tool calls in one assistant turn." checked={runner.supportsParallelToolCalls !== false} onChange={v => set('supportsParallelToolCalls', v)} />
+        <FormCheck label="Streaming tool calls" tooltip="Whether this model server supports streaming tool-call deltas. Wilson does not execute streaming tools yet." checked={runner.supportsStreamingToolCalls !== false} onChange={v => set('supportsStreamingToolCalls', v)} />
       </div>
       <div className="health-editor-block">
         <div className="runner-editor-header"><strong>Health Checks</strong></div>
