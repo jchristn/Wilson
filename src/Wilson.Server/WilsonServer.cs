@@ -868,7 +868,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 TokensUsed = inputTokens + outputTokens,
                 RunId = toolRun.RunId
             };
-            List<ToolExecutionRecord> toolRecords = BuildToolExecutionRecords(toolRun, agentResponse.AuditToolCalls, agentResponse.ToolCalls, body.ApprovalPolicy ?? toolPlan.Settings.Tools.DefaultApprovalPolicy, assistantMessage, runner, toolPlan.Settings.Tools);
+            List<ToolExecutionRecord> toolRecords = ToolAuditWriter.BuildExecutionRecords(toolRun, agentResponse.AuditToolCalls, agentResponse.ToolCalls, body.ApprovalPolicy ?? toolPlan.Settings.Tools.DefaultApprovalPolicy, assistantMessage.Id, toolPlan.Settings.Tools);
             List<ToolTrace> safeToolCalls = BuildSafeToolTraces(agentResponse.ToolCalls, toolRecords);
             assistantMessage.ToolCallsJson = JsonSerializer.Serialize(safeToolCalls, _Json);
             assistantMessage.MetadataJson = JsonSerializer.Serialize(metrics, _Json);
@@ -1311,74 +1311,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             capture.AgentIterations = metrics?.IterationCount ?? 0;
         }
 
-        private static List<ToolExecutionRecord> BuildToolExecutionRecords(ToolRun run, List<ToolAuditTrace> auditTraces, List<ToolTrace> safeTraces, string approvalPolicy, ChatMessage assistantMessage, ModelRunnerSettings runner, ToolsSettings tools)
-        {
-            List<ToolExecutionRecord> records = new List<ToolExecutionRecord>();
-            int maxPayloadCharacters = Math.Clamp(tools.MaxToolResultBytes, 1024, 200000);
-            for (int i = 0; i < auditTraces.Count; i++)
-            {
-                ToolAuditTrace trace = auditTraces[i];
-                ToolTrace? safeTrace = i < safeTraces.Count ? safeTraces[i] : null;
-                string internalToolCallId = IdGenerator.ToolCall();
-                string summary = safeTrace == null ? SafeToolSummary(trace) : SafeToolSummary(safeTrace);
-                string summaryJson = JsonSerializer.Serialize(new Dictionary<string, object?>
-                {
-                    { "toolName", trace.ToolName },
-                    { "displayLabel", trace.DisplayLabel },
-                    { "success", trace.Success },
-                    { "denied", trace.Denied },
-                    { "truncated", trace.Truncated },
-                    { "outputCharacters", trace.OutputCharacters },
-                    { "resultCount", trace.ResultCount },
-                    { "elapsedMs", trace.ElapsedMs },
-                    { "summary", summary }
-                });
-                summaryJson = ToolAuditSanitizer.RedactAndCapJson(summaryJson, maxPayloadCharacters);
-                string argumentsJson = tools.StoreToolArguments ? ToolAuditSanitizer.RedactAndCapJson(trace.ArgumentsJson, maxPayloadCharacters) : "{}";
-                string resultJson = tools.StoreFullToolResults ? ToolAuditSanitizer.RedactAndCapJson(trace.ResultJson, maxPayloadCharacters) : summaryJson;
-                string errorMessage = ToolAuditSanitizer.RedactAndCapText(trace.ErrorMessage ?? summary, 1000);
-
-                records.Add(new ToolExecutionRecord
-                {
-                    TenantId = run.TenantId,
-                    UserId = run.UserId,
-                    ConversationId = run.ConversationId,
-                    RunId = run.RunId,
-                    TraceId = run.RunId + ":" + trace.SequenceNumber.ToString(),
-                    Origin = "chat",
-                    AssistantMessageId = assistantMessage.Id,
-                    ToolCallId = internalToolCallId,
-                    ToolName = trace.ToolName,
-                    Iteration = trace.Iteration,
-                    SequenceNumber = trace.SequenceNumber,
-                    Status = trace.Success ? ToolStatuses.Completed : trace.Denied ? ToolStatuses.Denied : ToolStatuses.Failed,
-                    ApprovalPolicy = String.IsNullOrWhiteSpace(approvalPolicy) ? ToolApprovalPolicies.Ask : approvalPolicy,
-                    ArgumentsJson = argumentsJson,
-                    ResultJson = resultJson,
-                    ResultSummaryJson = summaryJson,
-                    ResultPreview = ToolAuditSanitizer.RedactAndCapText(summary, 4000),
-                    Success = trace.Success,
-                    Denied = trace.Denied,
-                    Truncated = trace.Truncated,
-                    OutputCharacters = trace.OutputCharacters,
-                    InputBytes = Encoding.UTF8.GetByteCount(argumentsJson),
-                    OutputBytes = Encoding.UTF8.GetByteCount(resultJson),
-                    ErrorType = trace.Success ? null : "tool_execution",
-                    ErrorCode = trace.Success ? null : trace.ErrorCode ?? "tool_failed",
-                    ErrorMessage = trace.Success ? null : errorMessage,
-                    Model = run.Model,
-                    StartedUtc = trace.StartedUtc ?? run.StartedUtc,
-                    CompletedUtc = trace.CompletedUtc,
-                    ElapsedMs = trace.ElapsedMs,
-                    Active = true,
-                    CreatedUtc = trace.StartedUtc ?? run.CreatedUtc,
-                    UpdatedUtc = trace.CompletedUtc ?? DateTime.UtcNow
-                });
-            }
-
-            return records;
-        }
-
         private static List<ToolTrace> BuildSafeToolTraces(List<ToolTrace> traces, List<ToolExecutionRecord> records)
         {
             List<ToolTrace> safe = new List<ToolTrace>();
@@ -1411,12 +1343,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private static string SafeToolSummary(ToolTrace trace)
         {
             string summary = String.IsNullOrWhiteSpace(trace.Summary) ? (trace.Success ? "Completed." : "Tool call failed.") : trace.Summary!;
-            return ToolAuditSanitizer.RedactAndCapText(summary, 4000);
-        }
-
-        private static string SafeToolSummary(ToolAuditTrace trace)
-        {
-            string summary = trace.Success ? "Completed." : trace.ErrorMessage ?? "Tool call failed.";
             return ToolAuditSanitizer.RedactAndCapText(summary, 4000);
         }
 

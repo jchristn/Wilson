@@ -8,7 +8,6 @@ namespace Test.Shared
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Net.Sockets;
-    using System.Reflection;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
@@ -444,6 +443,31 @@ namespace Test.Shared
                 AssertAuditRecordRedacted(summaryRecord);
                 if (summaryRecord.ResultJson.Contains("stdout", StringComparison.Ordinal) || summaryRecord.ResultJson.Contains("stderr", StringComparison.Ordinal))
                     throw new InvalidOperationException("Summary-only audit persistence must not store raw stdout/stderr result structure.");
+
+                ToolRun suppressedRun = new ToolRun
+                {
+                    RunId = "toolrun-audit-suppressed",
+                    TenantId = tenantId,
+                    UserId = userId,
+                    ConversationId = conversationId,
+                    RunnerId = "runner-audit",
+                    Model = "model-audit",
+                    Status = ToolStatuses.Completed,
+                    StartedUtc = DateTime.UtcNow.AddMilliseconds(-50),
+                    CompletedUtc = DateTime.UtcNow,
+                    ToolCallCount = 1,
+                    IterationCount = 1
+                };
+                List<ToolExecutionRecord> suppressedRecords = BuildAuditRecordsForTest(
+                    suppressedRun,
+                    CreateSecretAuditTraces(),
+                    CreateSecretSafeTraces(),
+                    new ToolsSettings { StoreToolArguments = false, StoreFullToolResults = true, MaxToolResultBytes = 12000 });
+                if (suppressedRecords.Count != 1) throw new InvalidOperationException("Expected one suppressed-argument audit record.");
+                ToolExecutionRecord suppressedRecord = suppressedRecords[0];
+                if (!String.Equals(suppressedRecord.ArgumentsJson, "{}", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected StoreToolArguments=false to suppress persisted arguments.");
+                AssertAuditRecordRedacted(suppressedRecord);
             }
             finally
             {
@@ -503,20 +527,7 @@ namespace Test.Shared
 
         private static List<ToolExecutionRecord> BuildAuditRecordsForTest(ToolRun run, List<ToolAuditTrace> auditTraces, List<ToolTrace> safeTraces, ToolsSettings tools)
         {
-            MethodInfo? method = typeof(WilsonServer).GetMethod("BuildToolExecutionRecords", BindingFlags.NonPublic | BindingFlags.Static);
-            if (method == null) throw new InvalidOperationException("Expected WilsonServer BuildToolExecutionRecords helper.");
-            object? result = method.Invoke(null, new object[]
-            {
-                run,
-                auditTraces,
-                safeTraces,
-                ToolApprovalPolicies.Auto,
-                new ChatMessage { TenantId = run.TenantId, ConversationId = run.ConversationId, Role = "assistant", Content = "done" },
-                new ModelRunnerSettings { Id = run.RunnerId, Name = "Audit Runner", ApiType = "OpenAI", Models = new List<string> { run.Model } },
-                tools
-            });
-            if (result is not List<ToolExecutionRecord> records) throw new InvalidOperationException("Expected tool execution records from audit builder.");
-            return records;
+            return ToolAuditWriter.BuildExecutionRecords(run, auditTraces, safeTraces, ToolApprovalPolicies.Auto, "assistant-audit-message", tools);
         }
 
         private static void AssertAuditRecordRedacted(ToolExecutionRecord record)

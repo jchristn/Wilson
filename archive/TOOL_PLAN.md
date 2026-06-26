@@ -334,12 +334,13 @@ Progress, 2026-06-26: `run_process` executor slice is implemented. It executes a
   - Apply remaining per-turn output limit before appending `role: "tool"` messages.
   - When truncating, return valid JSON containing `truncated`, `originalCharacters`, and `content`.
   - Progress: per-call truncation is implemented in `ToolResultFactory`; per-turn budgeting is implemented in the agent loop and returns valid JSON truncation payloads before tool output is appended to model context.
-- [ ] Add `ToolAuditWriter`.
+- [x] Add `ToolAuditWriter`.
   - Build persisted arguments according to `StoreToolArguments`.
   - Build persisted output according to `StoreFullToolResults`.
   - Always produce a compact result summary JSON for request history and admin lists.
   - Redact field names containing `apiKey`, `password`, `secret`, `token`, `credential`, `bearer`, `accessKey`, `signedUrl`, `connectionString`, and obvious case/underscore/hyphen variants.
   - Add a model-visible redaction pass that preserves safe continuation/pagination tokens when needed.
+  - Progress, 2026-06-26: added `Wilson.Core.Tools.ToolAuditWriter` and `ToolAuditSanitizer`; server persistence now uses the writer instead of inline audit construction. Persisted argument suppression, summary-only output persistence, full-result redaction, and compact summaries are covered by automated tests. Model-visible continuation-token-specific redaction remains pending for future web/search tools that produce continuation tokens.
 - [~] Recheck policy in the executor.
   - Every `ExecuteAsync` call must normalize the tool name, resolve current effective policy, reject unknown or unavailable tools, enforce timeout, validate arguments, dispatch, apply provider telemetry, limit output, and return a structured result.
   - Progress: `ToolService.ExecuteAsync` rejects unknown/unavailable tools before dispatch, enforces configured tool timeout, and executors return structured results. Provider telemetry remains pending.
@@ -628,6 +629,8 @@ Progress, 2026-06-26: persistence/API/history reload slice is implemented in the
   - Include tool metrics.
 
 ### Retention And Redaction
+
+Progress, 2026-06-26: `ToolAuditWriter` extraction slice is complete. Audit-record construction moved out of `WilsonServer`, tests no longer use reflection against server internals, and `ToolAuditRedactionPersistenceAsync` now covers `StoreToolArguments = false`. Passing checks: `dotnet build src\Wilson.slnx`, `dotnet run --project src\Test.Automated`, dashboard `npm run lint`, dashboard `npm run build`, C# SDK build, JavaScript syntax check, Python bytecode compile, Postman JSON parse, and `git diff --check`. The existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears during .NET restore/build.
 
 Progress, 2026-06-26: audit redaction hardening slice is complete. Added a separate `ToolAuditTrace` path alongside safe public `ToolTrace` responses, plus a central `ToolAuditSanitizer` for JSON and text redaction before persistence. Server audit record creation now honors `StoreToolArguments` and `StoreFullToolResults`, redacts/caps arguments, results, summaries, previews, and error messages before database writes, and keeps default full-result persistence disabled. Regression tests cover full-result redaction, default summary-only suppression of stdout/stderr, and request-history-linked audit reads. Passing checks: `dotnet build src\Wilson.slnx`, `dotnet run --project src\Test.Automated`, dashboard `npm run lint`, dashboard `npm run build`, C# SDK build, JavaScript syntax check, Python bytecode compile, Postman JSON parse, and `git diff --check`. The existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears during .NET restore/build.
 
@@ -1185,7 +1188,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - persisted outputs can be summarized by policy.
   - secret-like fields are redacted recursively.
   - public/model-visible redaction preserves safe continuation tokens.
-  - Progress, 2026-06-26: `ToolAuditRedactionPersistenceAsync` covers persisted argument redaction, summary-only output persistence, recursive secret-field redaction, and request-history-linked redacted reads. Explicit argument-suppression and model-visible continuation-token tests remain pending.
+  - Progress, 2026-06-26: `ToolAuditRedactionPersistenceAsync` covers persisted argument suppression/redaction, summary-only output persistence, recursive secret-field redaction, and request-history-linked redacted reads. Model-visible continuation-token tests remain pending until web/search tools add continuation-token payloads.
 - [ ] Test `WorkingDirectoryGuard`.
   - relative paths inside root pass.
   - absolute paths inside root pass.
