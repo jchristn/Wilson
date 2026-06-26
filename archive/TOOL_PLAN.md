@@ -291,6 +291,8 @@ Progress, 2026-06-25: foundational model contracts, settings, config defaults, r
 ## Phase 2: Tool Registry And Built-In Executors
 
 Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, root guard, and low-risk filesystem tools are implemented and pass build plus automated tests. Destructive, process, web retrieval, search provider, and MCP execution remain pending.
+Progress, 2026-06-26: remaining local filesystem executor slice is implemented for `write_file`, `edit_file`, `multi_edit`, `delete_file`, and `manage_directory`. These remain policy-controlled by working-directory/allowed-root checks and destructive-tool approval flags; process, web, search, and MCP tools remain separate pending slices. `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated` pass with the existing SQLite advisory.
+Progress, 2026-06-26: `run_process` executor slice is implemented. It executes a configured executable plus argument array without shell expansion, enforces working-directory allowed roots, applies timeout/cancellation handling, captures stdout/stderr/exit code, and truncates output. Web, search, and MCP tools remain separate pending slices. `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated` pass with the existing SQLite advisory.
 
 ### Core Contracts
 
@@ -331,7 +333,7 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
   - Apply per-call serialized output limit before model feedback.
   - Apply remaining per-turn output limit before appending `role: "tool"` messages.
   - When truncating, return valid JSON containing `truncated`, `originalCharacters`, and `content`.
-  - Progress: per-call truncation is implemented in `ToolResultFactory`; per-turn budgeting remains pending for the agent loop.
+  - Progress: per-call truncation is implemented in `ToolResultFactory`; per-turn budgeting is implemented in the agent loop and returns valid JSON truncation payloads before tool output is appended to model context.
 - [ ] Add `ToolAuditWriter`.
   - Build persisted arguments according to `StoreToolArguments`.
   - Build persisted output according to `StoreFullToolResults`.
@@ -340,7 +342,7 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
   - Add a model-visible redaction pass that preserves safe continuation/pagination tokens when needed.
 - [~] Recheck policy in the executor.
   - Every `ExecuteAsync` call must normalize the tool name, resolve current effective policy, reject unknown or unavailable tools, enforce timeout, validate arguments, dispatch, apply provider telemetry, limit output, and return a structured result.
-  - Progress: `ToolService.ExecuteAsync` rejects unknown/unavailable tools before dispatch and executors return structured results. Timeout, telemetry, and per-turn output enforcement remain pending.
+  - Progress: `ToolService.ExecuteAsync` rejects unknown/unavailable tools before dispatch, enforces configured tool timeout, and executors return structured results. Provider telemetry remains pending.
 
 ### Filesystem Tools
 
@@ -351,23 +353,23 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
   - Return line-numbered content.
   - Return JSON error for missing files, oversize files, invalid arguments, and permission failures.
   - Progress: executor implemented and automated tests pass.
-- [ ] Implement `write_file`.
+- [x] Implement `write_file`.
   - Parameters: `file_path`, `content`.
   - Enforce allowed roots.
   - Preserve existing line endings.
   - Create parent directories only inside allowed roots.
   - Return path and line count.
-- [ ] Implement `edit_file`.
+- [x] Implement `edit_file`.
   - Parameters: `file_path`, `old_string`, `new_string`.
   - Enforce exactly one match.
   - Preserve line endings.
   - Return candidate line numbers on ambiguous match.
-- [ ] Implement `multi_edit`.
+- [x] Implement `multi_edit`.
   - Parameters: `file_path`, `edits[]`.
   - Validate all edits before writing.
   - Apply sequentially to working content.
   - Return edit count and new line count.
-- [ ] Implement `delete_file`.
+- [x] Implement `delete_file`.
   - Parameters: `file_path`.
   - Enforce allowed roots.
   - Return structured success/failure.
@@ -382,7 +384,7 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
   - Return stable sorted output.
   - Add a future-compatible `max_entries` argument even if defaulted.
   - Progress: executor implemented with `max_entries` and build validation passes.
-- [ ] Implement `manage_directory`.
+- [x] Implement `manage_directory`.
   - Parameters: `action`, `path`, `new_path`.
   - Supported actions: `create`, `delete`, `rename`.
   - Enforce allowed roots for source and destination.
@@ -403,7 +405,7 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
 
 ### Process Tool
 
-- [ ] Implement `run_process`.
+- [x] Implement `run_process`.
   - Parameters: `command`, `args`, `working_directory`, `timeout_ms`.
   - Enforce process working directory inside allowed roots.
   - Use Windows-safe execution on Windows and POSIX-safe execution on Linux/macOS.
@@ -412,6 +414,7 @@ Progress, 2026-06-25: Wilson-owned executor contracts, registry, safety limits, 
   - Truncate stdout/stderr separately.
   - Mark dangerous and approval-required by default.
   - Add a setting to disable this tool independently even when other built-ins are enabled.
+  - Progress: executor is implemented and approval-required/dangerous. Independent per-tool disabling is currently available through `DisabledToolNames`; a dedicated process-only switch remains pending.
 
 ### Web Tools
 
@@ -1043,14 +1046,15 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 ## Phase 9: Documentation
 
-- [x] Update `README.md`.
+- [~] Update `README.md`.
   - Add tool-calling capability to feature list.
   - Add safety-focused configuration section.
   - Add short quick-start note for enabling tools.
   - Add supported built-in tool list.
   - Add MCP and web search notes.
   - Add warning that file/process tools should be scoped to allowed roots.
-- [x] Create `REST_API.md` if it does not exist.
+  - Progress: completed for implemented tool enablement, built-in inventory, safety roots, SDK/Postman pointers, and persistence APIs. MCP/web/search/process notes remain pending with those features.
+- [~] Create `REST_API.md` if it does not exist.
   - Document all REST endpoints in plain Markdown.
   - Include auth requirements.
   - Include request/response examples for chat with tools.
@@ -1061,6 +1065,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Include tool policy validate/test examples and endpoint capability diagnostics.
   - Include retention behavior for tool-call audit records.
   - Link to `/openapi.json` and `/swagger`.
+  - Progress: created and documented implemented auth, tool catalog, chat response metadata, persisted tool-call read APIs, request-history metrics, and safe trace behavior. Streaming SSE, approval workflow, diagnostics, and MCP examples remain pending with those endpoints.
 - [x] Update `dashboard/README.md`.
   - Document chat tool activity UI.
   - Document admin tool settings.
@@ -1123,6 +1128,8 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 
 - [x] Add test coverage in `src/Test.Shared/WilsonSuites.cs` or create a richer test project if needed.
   - Progress: added coverage for tool ID lengths, default tool settings, runner tool defaults, diagnostic catalog behavior, allowed-root read execution, secret-path blocking, OpenAI/Ollama tool-call response parsing, and a fake-model tool-agent loop that executes `read_file` then returns a final answer. Automated tests pass for this slice.
+  - Progress: added coverage for `write_file`, `edit_file`, `multi_edit`, `delete_file`, and `manage_directory`, including exact-match failures, CRLF preservation, allowed-root execution, destructive-tool metadata, and secret-path blocking. Automated tests pass for this slice.
+  - Progress: added coverage for `run_process`, including successful stdout/exit-code capture, non-zero exit-code capture, timeout handling, working-directory enforcement, and dangerous/approval metadata. Automated tests pass for this slice.
 - [ ] Test tool registry filtering:
   - global disabled
   - disabled by name
@@ -1153,32 +1160,32 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - absolute paths inside root pass.
   - path traversal outside root fails.
   - symlink/junction behavior is defined and tested.
-- [ ] Test `read_file`.
+- [x] Test `read_file`.
   - line numbers.
   - offset/limit.
   - max size rejection.
   - outside root rejection.
-- [ ] Test `write_file`.
+- [x] Test `write_file`.
   - creates parent directories.
   - preserves line endings.
   - outside root rejection.
-- [ ] Test `edit_file`.
+- [x] Test `edit_file`.
   - success.
   - no match failure.
   - multiple match failure with line numbers.
-- [ ] Test `multi_edit`.
+- [x] Test `multi_edit`.
   - all edits apply.
   - validation prevents partial write.
   - sequential conflict failure.
-- [ ] Test `delete_file`.
+- [x] Test `delete_file`.
 - [ ] Test `file_metadata`.
 - [ ] Test `list_directory`.
-- [ ] Test `manage_directory`.
+- [x] Test `manage_directory`.
 - [ ] Test `glob`.
 - [ ] Test `grep`.
   - regex timeout/invalid regex.
   - match limit truncation.
-- [ ] Test `run_process`.
+- [x] Test `run_process`.
   - success.
   - non-zero exit.
   - timeout kills process.
@@ -1215,7 +1222,7 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
 - [ ] Test approval ask timeout.
 - [ ] Test max iterations reached.
 - [ ] Test max tool calls per turn reached.
-- [ ] Test per-turn output limit reached.
+- [x] Test per-turn output limit reached.
 - [ ] Test loop guard stops repeated discovery/read cycles and requests a best-effort final answer.
 - [ ] Test final fallback message when tool limit is reached and the final model call fails or returns empty content.
 - [ ] Test cancellation.

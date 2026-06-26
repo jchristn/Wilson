@@ -25,6 +25,14 @@ Content-Type: application/json
 
 Tools are disabled by default. Administrators enable them in settings and each model runner must advertise a supported tool-call format before Wilson sends tools to a model.
 
+Implemented built-in tools:
+
+- `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
+- `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
+- `run_process`
+
+Write, edit, delete, directory-management, and process tools are marked dangerous and approval-required. Use narrow `allowedRoots` and avoid automatic approval unless the deployment is trusted and admin-only.
+
 ### List Tools
 
 ```http

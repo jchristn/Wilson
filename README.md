@@ -149,6 +149,14 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 
 Tools are disabled by default. To use built-in file tools, enable `tools.enabled`, configure `tools.workingDirectory`, and include at least one path in `tools.allowedRoots`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
 
+Implemented built-in tools:
+
+- Read/discover: `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
+- Modify files/directories: `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
+- Process execution: `run_process`
+
+Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
+
 ## API
 
 - OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`

@@ -3,6 +3,7 @@ namespace Test.Shared
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
@@ -28,8 +29,11 @@ namespace Test.Shared
             IdLength();
             ToolSettingsDefaults();
             await ToolServiceFoundationAsync().ConfigureAwait(false);
+            await FilesystemMutationToolsAsync().ConfigureAwait(false);
+            await RunProcessToolAsync().ConfigureAwait(false);
             ToolCapableInferenceParsing();
             await ToolAgentLoopAsync().ConfigureAwait(false);
+            await ToolAgentPerTurnOutputLimitAsync().ConfigureAwait(false);
             ContextTruncationAsync();
             HealthCheckDefaults();
             HealthStatusSnapshot();
@@ -312,6 +316,123 @@ namespace Test.Shared
             }
         }
 
+        private static async Task FilesystemMutationToolsAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-write-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                Settings configured = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace }
+                    }
+                };
+                ToolService service = new ToolService(configured);
+                ToolDescriptor? writeDescriptor = service.GetTool("write_file");
+                if (writeDescriptor == null || !writeDescriptor.Available || !writeDescriptor.Dangerous || !writeDescriptor.RequiresApproval) throw new InvalidOperationException("Expected write_file to be available and approval-required.");
+
+                ToolResult writeResult = await ExecuteToolAsync(service, "write_file", """{"file_path":"nested/sample.txt","content":"one\ntwo\n"}""").ConfigureAwait(false);
+                if (!writeResult.Success || !File.Exists(Path.Combine(workspace, "nested", "sample.txt"))) throw new InvalidOperationException("Expected write_file to create the file.");
+
+                await File.WriteAllTextAsync(Path.Combine(workspace, "nested", "line-endings.txt"), "alpha\r\nbeta\r\n").ConfigureAwait(false);
+                ToolResult overwriteResult = await ExecuteToolAsync(service, "write_file", """{"file_path":"nested/line-endings.txt","content":"gamma\ndelta\n"}""").ConfigureAwait(false);
+                if (!overwriteResult.Success) throw new InvalidOperationException("Expected write_file overwrite to succeed.");
+                string overwritten = await File.ReadAllTextAsync(Path.Combine(workspace, "nested", "line-endings.txt")).ConfigureAwait(false);
+                if (!overwritten.Contains("gamma\r\ndelta\r\n", StringComparison.Ordinal)) throw new InvalidOperationException("Expected write_file to preserve CRLF line endings.");
+
+                ToolResult editResult = await ExecuteToolAsync(service, "edit_file", """{"file_path":"nested/sample.txt","old_string":"two","new_string":"deux"}""").ConfigureAwait(false);
+                if (!editResult.Success) throw new InvalidOperationException("Expected edit_file to replace exactly one match.");
+                string edited = await File.ReadAllTextAsync(Path.Combine(workspace, "nested", "sample.txt")).ConfigureAwait(false);
+                if (!edited.Contains("deux", StringComparison.Ordinal)) throw new InvalidOperationException("Expected edit_file replacement content.");
+
+                ToolResult multiEditResult = await ExecuteToolAsync(service, "multi_edit", """{"file_path":"nested/sample.txt","edits":[{"old_string":"one","new_string":"uno"},{"old_string":"deux","new_string":"dos"}]}""").ConfigureAwait(false);
+                if (!multiEditResult.Success) throw new InvalidOperationException("Expected multi_edit to apply sequential replacements.");
+                string multiEdited = await File.ReadAllTextAsync(Path.Combine(workspace, "nested", "sample.txt")).ConfigureAwait(false);
+                if (!multiEdited.Contains("uno", StringComparison.Ordinal) || !multiEdited.Contains("dos", StringComparison.Ordinal)) throw new InvalidOperationException("Expected multi_edit replacement content.");
+
+                await File.WriteAllTextAsync(Path.Combine(workspace, "ambiguous.txt"), "same same").ConfigureAwait(false);
+                ToolResult ambiguous = await ExecuteToolAsync(service, "edit_file", """{"file_path":"ambiguous.txt","old_string":"same","new_string":"other"}""").ConfigureAwait(false);
+                if (ambiguous.Success || !String.Equals(ambiguous.ErrorCode, "multiple_matches", StringComparison.Ordinal)) throw new InvalidOperationException("Expected edit_file to reject multiple matches.");
+
+                ToolResult secretWrite = await ExecuteToolAsync(service, "write_file", """{"file_path":".env","content":"SECRET=value"}""").ConfigureAwait(false);
+                if (secretWrite.Success || !String.Equals(secretWrite.ErrorCode, "secret_path_blocked", StringComparison.Ordinal)) throw new InvalidOperationException("Expected write_file to respect secret path blocking.");
+
+                ToolResult createDirectory = await ExecuteToolAsync(service, "manage_directory", """{"action":"create","path":"workdir"}""").ConfigureAwait(false);
+                if (!createDirectory.Success || !Directory.Exists(Path.Combine(workspace, "workdir"))) throw new InvalidOperationException("Expected manage_directory create to succeed.");
+
+                ToolResult renameDirectory = await ExecuteToolAsync(service, "manage_directory", """{"action":"rename","path":"workdir","new_path":"renamed"}""").ConfigureAwait(false);
+                if (!renameDirectory.Success || !Directory.Exists(Path.Combine(workspace, "renamed"))) throw new InvalidOperationException("Expected manage_directory rename to succeed.");
+
+                ToolResult deleteDirectory = await ExecuteToolAsync(service, "manage_directory", """{"action":"delete","path":"renamed"}""").ConfigureAwait(false);
+                if (!deleteDirectory.Success || Directory.Exists(Path.Combine(workspace, "renamed"))) throw new InvalidOperationException("Expected manage_directory delete to succeed.");
+
+                ToolResult deleteFile = await ExecuteToolAsync(service, "delete_file", """{"file_path":"nested/sample.txt"}""").ConfigureAwait(false);
+                if (!deleteFile.Success || File.Exists(Path.Combine(workspace, "nested", "sample.txt"))) throw new InvalidOperationException("Expected delete_file to remove the file.");
+            }
+            finally
+            {
+                Directory.Delete(workspace, true);
+            }
+        }
+
+        private static async Task<ToolResult> ExecuteToolAsync(ToolService service, string name, string json)
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            return await service.ExecuteAsync(
+                Wilson.Core.Helpers.IdGenerator.ToolCall(),
+                name,
+                document.RootElement,
+                new ToolExecutionContext(),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+
+        private static async Task RunProcessToolAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-process-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                Settings configured = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        ProcessTimeoutMs = 5000,
+                        MaxToolOutputChars = 1024
+                    }
+                };
+                ToolService service = new ToolService(configured);
+                ToolDescriptor? descriptor = service.GetTool("run_process");
+                if (descriptor == null || !descriptor.Available || !descriptor.Dangerous || !descriptor.RequiresApproval) throw new InvalidOperationException("Expected run_process to be available and approval-required.");
+
+                string command = OperatingSystem.IsWindows() ? "cmd.exe" : "sh";
+                string successArgs = OperatingSystem.IsWindows() ? """["/c","echo hello"]""" : """["-c","echo hello"]""";
+                ToolResult success = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + successArgs + "}").ConfigureAwait(false);
+                if (!success.Success || !success.Content.Contains("hello", StringComparison.Ordinal) || !success.Content.Contains("\"exitCode\":0", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process to capture successful stdout and exit code.");
+
+                string failureArgs = OperatingSystem.IsWindows() ? """["/c","exit 7"]""" : """["-c","exit 7"]""";
+                ToolResult failure = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + failureArgs + "}").ConfigureAwait(false);
+                if (!failure.Success || !failure.Content.Contains("\"exitCode\":7", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process to capture non-zero exit code.");
+
+                string timeoutArgs = OperatingSystem.IsWindows() ? """["/c","ping -n 6 127.0.0.1 > nul"]""" : """["-c","sleep 5"]""";
+                ToolResult timeout = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + timeoutArgs + ",\"timeout_ms\":1000}").ConfigureAwait(false);
+                if (!timeout.Success || !timeout.Content.Contains("\"timedOut\":true", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process timeout to be captured.");
+
+                ToolResult outside = await ExecuteToolAsync(service, "run_process", "{\"command\":\"" + command + "\",\"args\":" + successArgs + ",\"working_directory\":\"..\"}").ConfigureAwait(false);
+                if (outside.Success || !String.Equals(outside.ErrorCode, "path_outside_allowed_roots", StringComparison.Ordinal)) throw new InvalidOperationException("Expected run_process working directory guard to reject outside roots.");
+            }
+            finally
+            {
+                Directory.Delete(workspace, true);
+            }
+        }
+
         private static void ToolCapableInferenceParsing()
         {
             string openAiResponse = """
@@ -438,6 +559,73 @@ namespace Test.Shared
                 if (modelCalls != 2) throw new InvalidOperationException("Expected two model calls in the tool agent loop.");
                 if (response.ToolCalls.Count != 1 || !response.ToolCalls[0].Success) throw new InvalidOperationException("Expected one successful tool trace.");
                 if (!response.Content.Contains("agent loop content", StringComparison.Ordinal)) throw new InvalidOperationException("Expected final answer from second model turn.");
+            }
+            finally
+            {
+                Directory.Delete(workspace, true);
+            }
+        }
+
+        private static async Task ToolAgentPerTurnOutputLimitAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-agent-budget-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                await File.WriteAllTextAsync(Path.Combine(workspace, "one.txt"), new String('a', 700)).ConfigureAwait(false);
+                await File.WriteAllTextAsync(Path.Combine(workspace, "two.txt"), new String('b', 700)).ConfigureAwait(false);
+                Settings settings = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        MaxToolIterations = 2,
+                        MaxToolCallsPerTurn = 4,
+                        MaxToolOutputChars = 1024,
+                        MaxToolOutputCharsPerTurn = 1100
+                    }
+                };
+                ToolService toolService = new ToolService(settings);
+                int modelCalls = 0;
+                bool sawTurnTruncation = false;
+                ToolAgentService agent = new ToolAgentService(
+                    toolService,
+                    (runner, request, token) =>
+                    {
+                        modelCalls++;
+                        if (modelCalls == 1)
+                        {
+                            return Task.FromResult(new ToolCapableInferenceResponse
+                            {
+                                Success = true,
+                                FinishReason = "tool_calls",
+                                ToolCalls = new List<ModelToolCall>
+                                {
+                                    new ModelToolCall { Id = "call_one", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"one.txt"}""" } },
+                                    new ModelToolCall { Id = "call_two", Function = new ModelToolFunctionCall { Name = "read_file", Arguments = """{"file_path":"two.txt"}""" } }
+                                }
+                            });
+                        }
+
+                        List<ModelChatMessage> toolMessages = request.Messages.Where(message => String.Equals(message.Role, "tool", StringComparison.Ordinal)).ToList();
+                        string secondToolContent = toolMessages.Count > 1 ? toolMessages[1].Content ?? String.Empty : String.Empty;
+                        sawTurnTruncation = toolMessages.Count == 2 && secondToolContent.Contains("originalCharacters", StringComparison.Ordinal);
+                        return Task.FromResult(new ToolCapableInferenceResponse { Success = true, Content = "budgeted", FinishReason = "stop" });
+                    });
+
+                ToolAgentResponse response = await agent.RunAsync(
+                    new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "http://localhost", Models = new List<string> { "test-model" } },
+                    "test-model",
+                    new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "read both" } },
+                    new CompletionRequestSettings { MaxTokens = 128, Temperature = 0, TopP = 1 },
+                    new ToolExecutionContext { Settings = settings },
+                    CancellationToken.None).ConfigureAwait(false);
+
+                if (!response.Success) throw new InvalidOperationException("Expected budgeted tool agent loop to succeed.");
+                if (!sawTurnTruncation) throw new InvalidOperationException("Expected per-turn output budget truncation before final model call.");
+                if (response.ToolCalls.Count != 2 || !response.ToolCalls[1].Truncated) throw new InvalidOperationException("Expected safe trace to mark the budget-truncated tool call.");
             }
             finally
             {

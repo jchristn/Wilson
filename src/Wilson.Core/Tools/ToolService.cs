@@ -83,14 +83,22 @@ namespace Wilson.Core.Tools
         /// <param name="context">Execution context.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>Tool result.</returns>
-        public Task<ToolResult> ExecuteAsync(string toolCallId, string toolName, JsonElement arguments, ToolExecutionContext context, CancellationToken token)
+        public async Task<ToolResult> ExecuteAsync(string toolCallId, string toolName, JsonElement arguments, ToolExecutionContext context, CancellationToken token)
         {
             ToolDescriptor? descriptor = GetTool(toolName);
-            if (descriptor == null) return Task.FromResult(ToolResultFactory.Error(toolCallId, "unknown_tool", "Tool '" + toolName + "' is not registered."));
-            if (!descriptor.Available) return Task.FromResult(ToolResultFactory.Error(toolCallId, "tool_unavailable", descriptor.UnavailableReason ?? "Tool is unavailable."));
+            if (descriptor == null) return ToolResultFactory.Error(toolCallId, "unknown_tool", "Tool '" + toolName + "' is not registered.");
+            if (!descriptor.Available) return ToolResultFactory.Error(toolCallId, "tool_unavailable", descriptor.UnavailableReason ?? "Tool is unavailable.");
 
             context.Settings = _Settings;
-            return _Registry.ExecuteAsync(toolCallId, toolName, arguments, context, token);
+            int timeoutMs = context.SafetyLimits.ToolTimeoutMs;
+            using CancellationTokenSource timeoutSource = new CancellationTokenSource(timeoutMs);
+            using CancellationTokenSource linkedSource = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutSource.Token);
+            Task<ToolResult> execution = _Registry.ExecuteAsync(toolCallId, toolName, arguments, context, linkedSource.Token);
+            Task timeout = Task.Delay(Timeout.InfiniteTimeSpan, linkedSource.Token);
+            Task completed = await Task.WhenAny(execution, timeout).ConfigureAwait(false);
+            if (completed == execution) return await execution.ConfigureAwait(false);
+            if (token.IsCancellationRequested) token.ThrowIfCancellationRequested();
+            return ToolResultFactory.Error(toolCallId, "tool_timed_out", "Tool execution exceeded the configured timeout.");
         }
     }
 }

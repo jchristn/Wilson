@@ -4,6 +4,7 @@ namespace Wilson.Core.Services
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
+    using System.Text;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
@@ -74,6 +75,7 @@ namespace Wilson.Core.Services
             List<ModelToolDefinition> tools = _ToolService.GetModelToolDefinitions();
             int maxIterations = Math.Clamp(executionContext.Settings.Tools.MaxToolIterations, 1, 20);
             int maxToolCalls = Math.Clamp(executionContext.Settings.Tools.MaxToolCallsPerTurn, 1, 50);
+            int remainingToolOutputCharacters = Math.Clamp(executionContext.Settings.Tools.MaxToolOutputCharsPerTurn, executionContext.SafetyLimits.MaxToolOutputChars, 500000);
             int sequence = 0;
             int errors = 0;
 
@@ -155,6 +157,7 @@ namespace Wilson.Core.Services
                     DateTime started = DateTime.UtcNow;
                     Stopwatch sw = Stopwatch.StartNew();
                     ToolResult result = await ExecuteToolCallAsync(call, executionContext, token).ConfigureAwait(false);
+                    result = ApplyTurnOutputBudget(result, ref remainingToolOutputCharacters);
                     sw.Stop();
                     DateTime completed = DateTime.UtcNow;
                     if (!result.Success) errors++;
@@ -182,6 +185,31 @@ namespace Wilson.Core.Services
                 ToolCalls = traces,
                 Messages = conversation
             };
+        }
+
+        private static ToolResult ApplyTurnOutputBudget(ToolResult result, ref int remainingCharacters)
+        {
+            string content = result.Content ?? String.Empty;
+            if (content.Length <= remainingCharacters)
+            {
+                remainingCharacters -= content.Length;
+                return result;
+            }
+
+            int allowed = Math.Max(0, remainingCharacters);
+            string visible = allowed > 0 ? content.Substring(0, allowed) : String.Empty;
+            string json = JsonSerializer.Serialize(new
+            {
+                truncated = true,
+                originalCharacters = content.Length,
+                content = visible
+            });
+            result.Content = json;
+            result.ContentJson = json;
+            result.Truncated = true;
+            result.OutputBytes = Encoding.UTF8.GetByteCount(json);
+            remainingCharacters = 0;
+            return result;
         }
 
         private async Task<ToolResult> ExecuteToolCallAsync(ModelToolCall call, ToolExecutionContext context, CancellationToken token)

@@ -22,10 +22,16 @@ namespace Wilson.Core.Tools
         public BuiltInToolRegistry()
         {
             Register(new ReadFileTool());
+            Register(new WriteFileTool());
+            Register(new EditFileTool());
+            Register(new MultiEditTool());
+            Register(new DeleteFileTool());
             Register(new FileMetadataTool());
             Register(new ListDirectoryTool());
+            Register(new ManageDirectoryTool());
             Register(new GlobTool());
             Register(new GrepTool());
+            Register(new RunProcessTool());
         }
 
         /// <summary>

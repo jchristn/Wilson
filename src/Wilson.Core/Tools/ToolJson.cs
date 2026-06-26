@@ -36,6 +36,26 @@ namespace Wilson.Core.Tools
             throw new ToolExecutionException("invalid_arguments", "Required argument '" + propertyName + "' is missing or not a non-empty string.");
         }
 
+        public static string RequiredStringAllowEmpty(JsonElement arguments, string propertyName)
+        {
+            if (arguments.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString() ?? String.Empty;
+            }
+
+            throw new ToolExecutionException("invalid_arguments", "Required argument '" + propertyName + "' is missing or not a string.");
+        }
+
+        public static JsonElement RequiredArray(JsonElement arguments, string propertyName)
+        {
+            if (arguments.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.Array)
+            {
+                return value;
+            }
+
+            throw new ToolExecutionException("invalid_arguments", "Required argument '" + propertyName + "' is missing or not an array.");
+        }
+
         public static string OptionalString(JsonElement arguments, string propertyName, string defaultValue)
         {
             if (arguments.TryGetProperty(propertyName, out JsonElement value))
