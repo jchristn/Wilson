@@ -610,14 +610,23 @@ namespace Test.Shared
             Settings disabled = new Settings();
             ToolService disabledService = new ToolService(disabled);
             if (disabledService.ListTools(false).Count != 0) throw new InvalidOperationException("Disabled tool service should not expose model tools.");
-            if (disabledService.ListTools(true).Count == 0) throw new InvalidOperationException("Disabled tool service should expose diagnostic descriptors.");
+            List<ToolDescriptor> disabledDiagnostics = disabledService.ListTools(true);
+            if (disabledDiagnostics.Count == 0) throw new InvalidOperationException("Disabled tool service should expose diagnostic descriptors.");
+            if (disabledDiagnostics.Any(tool => tool.Available)) throw new InvalidOperationException("Disabled tool service should not report available tools.");
+            if (!disabledDiagnostics.All(tool => String.Equals(tool.UnavailableReason, "Tools are disabled.", StringComparison.Ordinal))) throw new InvalidOperationException("Disabled tool service should explain the global disabled policy.");
             if (disabledService.GetModelToolDefinitions().Count != 0) throw new InvalidOperationException("Foundation tool service should not expose model tool definitions.");
 
             Settings enabled = new Settings { Tools = new ToolsSettings { Enabled = true } };
             ToolService enabledService = new ToolService(enabled);
             if (enabledService.ListTools(false).Count != 0) throw new InvalidOperationException("Tool service should not expose file tools without a working directory and allowed root.");
             ToolDescriptor? unavailableRead = enabledService.GetTool("read_file");
-            if (unavailableRead == null || unavailableRead.Available) throw new InvalidOperationException("Expected read_file to be unavailable until workspace settings are configured.");
+            if (unavailableRead == null || unavailableRead.Available || String.IsNullOrWhiteSpace(unavailableRead.UnavailableReason)) throw new InvalidOperationException("Expected read_file to be unavailable until workspace settings are configured.");
+
+            Settings builtInsDisabled = new Settings { Tools = new ToolsSettings { Enabled = true, BuiltInsEnabled = false } };
+            ToolService builtInsDisabledService = new ToolService(builtInsDisabled);
+            List<ToolDescriptor> builtInsDisabledDiagnostics = builtInsDisabledService.ListTools(true);
+            if (builtInsDisabledService.ListTools(false).Count != 0) throw new InvalidOperationException("Built-in disabled policy should not expose model tools.");
+            if (!builtInsDisabledDiagnostics.All(tool => String.Equals(tool.UnavailableReason, "Built-in tools are disabled.", StringComparison.Ordinal))) throw new InvalidOperationException("Built-in disabled policy should explain why tools are unavailable.");
 
             string workspace = Path.Combine(Path.GetTempPath(), "wilson-tools-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(workspace);
@@ -639,6 +648,38 @@ namespace Test.Shared
                 ToolService configuredService = new ToolService(configured);
                 if (!configuredService.ListTools(false).Exists(tool => String.Equals(tool.Name, "read_file", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Expected read_file to be available with workspace settings.");
                 if (configuredService.GetModelToolDefinitions().Count == 0) throw new InvalidOperationException("Expected model tool definitions for available tools.");
+
+                Settings disabledByName = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        DisabledToolNames = new List<string> { "read_file" }
+                    }
+                };
+                ToolService disabledByNameService = new ToolService(disabledByName);
+                ToolDescriptor? disabledRead = disabledByNameService.GetTool("read_file");
+                if (disabledRead == null || disabledRead.Available || !String.Equals(disabledRead.UnavailableReason, "Tool is disabled by name.", StringComparison.Ordinal)) throw new InvalidOperationException("Expected disabled-by-name tools to return a diagnostic descriptor.");
+                if (disabledByNameService.ListTools(false).Any(tool => String.Equals(tool.Name, "read_file", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Disabled-by-name tools should not be model-visible.");
+                if (disabledByNameService.GetModelToolDefinitions().Any(tool => tool.Function != null && String.Equals(tool.Function.Name, "read_file", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Disabled-by-name tools should not have model definitions.");
+
+                Settings enabledSubset = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        EnabledToolNames = new List<string> { "read_file" }
+                    }
+                };
+                ToolService enabledSubsetService = new ToolService(enabledSubset);
+                List<ToolDescriptor> subsetVisible = enabledSubsetService.ListTools(false);
+                if (subsetVisible.Count != 1 || !String.Equals(subsetVisible[0].Name, "read_file", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Enabled tool subset should only expose allow-listed tools.");
+                ToolDescriptor? subsetWrite = enabledSubsetService.GetTool("write_file");
+                if (subsetWrite == null || subsetWrite.Available || !String.Equals(subsetWrite.UnavailableReason, "Tool is not in the enabled tool list.", StringComparison.Ordinal)) throw new InvalidOperationException("Expected non-allow-listed tools to return a diagnostic descriptor.");
 
                 using JsonDocument readArgs = JsonDocument.Parse("""{"file_path":"sample.txt","offset":1,"limit":1}""");
                 ToolResult readResult = await configuredService.ExecuteAsync(

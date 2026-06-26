@@ -1161,11 +1161,13 @@ Progress, 2026-06-26: SDK/Postman/docs slice is implemented for the completed pe
   - Progress: added coverage for `write_file`, `edit_file`, `multi_edit`, `delete_file`, and `manage_directory`, including exact-match failures, CRLF preservation, allowed-root execution, destructive-tool metadata, and secret-path blocking. Automated tests pass for this slice.
   - Progress: added coverage for `run_process`, including successful stdout/exit-code capture, non-zero exit-code capture, timeout handling, working-directory enforcement, and dangerous/approval metadata. Automated tests pass for this slice.
   - Progress, 2026-06-26: added database parameterization regression coverage using injection-shaped tenant, user, credential, conversation, message, request-history, tool-run, and tool-call values through public database APIs.
-- [ ] Test tool registry filtering:
+- [x] Test tool registry filtering:
   - global disabled
   - disabled by name
   - enabled subset
   - unsafe missing working directory
+  - built-ins disabled.
+  - Progress, 2026-06-27: added direct core coverage for global disabled, disabled-by-name, allow-list filtering, built-ins disabled, and missing filesystem context. Passing checks: `dotnet build src\Wilson.slnx` and `dotnet run --project src\Test.Automated`; the existing transitive `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory still appears.
 - [ ] Test tool policy resolver diagnostics:
   - available tool included.
   - disabled tool reports disabled reason.
