@@ -766,15 +766,21 @@ function Chat({ api, onOpenPrompts }) {
       <section className="chat-main">
         <PageIntro title="Chat" description="Send prompts to a selected model server, stream responses, review prior conversations, and load Ollama models into memory before use." />
         <div className="chat-toolbar">
-          <label title="Select the model server used for chat requests">{text.runner}<select title="Select the model server used for chat requests" value={runnerId} onChange={e => setRunnerId(e.target.value)}>{runners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label title="Select any model returned by the configured server">{text.model}<select title="Select the model to use for chat requests" value={model} onChange={e => setModel(e.target.value)} disabled={modelOptions.length < 1}>{modelOptions.length < 1 ? <option value="">{loadingModels ? 'Loading models' : text.noModels}</option> : modelOptions.map(item => <option key={item}>{item}</option>)}</select></label>
+          <div className="chat-toolbar-selects">
+            <label title="Select the model server used for chat requests">{text.runner}<select title="Select the model server used for chat requests" value={runnerId} onChange={e => setRunnerId(e.target.value)}>{runners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label title="Select any model returned by the configured server">{text.model}<select title="Select the model to use for chat requests" value={model} onChange={e => setModel(e.target.value)} disabled={modelOptions.length < 1}>{modelOptions.length < 1 ? <option value="">{loadingModels ? 'Loading models' : text.noModels}</option> : modelOptions.map(item => <option key={item}>{item}</option>)}</select></label>
+            <label title="System prompt used for this chat request">System prompt
+              <select className="prompt-select" title="System prompt used for this chat request" value={selectedSystemPrompt?.id || ''} onChange={e => { const next = systemPromptOptions.find(item => item.id === e.target.value); setSystemPromptId(e.target.value); setSystemPrompt(next?.content || defaultSystemPrompt); }}>
+                {systemPromptOptions.length < 1 ? <option value="">Default system prompt</option> : systemPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
+              </select>
+            </label>
+            <label title={toolRequestEnabled ? 'Tool prompt used for this chat request' : 'Tool prompt is not sent while tools are unavailable or disabled'}>Tool prompt
+              <select className="prompt-select" title={toolRequestEnabled ? 'Tool prompt used for this chat request' : 'Tool prompt is not sent while tools are unavailable or disabled'} value={selectedToolPrompt?.id || ''} disabled={!toolRequestEnabled} onChange={e => { const next = toolPromptOptions.find(item => item.id === e.target.value); setToolPromptId(e.target.value); setToolSystemPrompt(next?.content || ''); }}>
+                {toolPromptOptions.length < 1 ? <option value="">Default tool prompt</option> : toolPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="chat-toolbar-actions">
-            <select className="prompt-select" title="System prompt used for this chat request" value={selectedSystemPrompt?.id || ''} onChange={e => { const next = systemPromptOptions.find(item => item.id === e.target.value); setSystemPromptId(e.target.value); setSystemPrompt(next?.content || defaultSystemPrompt); }}>
-              {systemPromptOptions.length < 1 ? <option value="">Default system prompt</option> : systemPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
-            </select>
-            <select className="prompt-select" title={toolRequestEnabled ? 'Tool prompt used for this chat request' : 'Tool prompt is not sent while tools are unavailable or disabled'} value={selectedToolPrompt?.id || ''} disabled={!toolRequestEnabled} onChange={e => { const next = toolPromptOptions.find(item => item.id === e.target.value); setToolPromptId(e.target.value); setToolSystemPrompt(next?.content || ''); }}>
-              {toolPromptOptions.length < 1 ? <option value="">Default tool prompt</option> : toolPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
-            </select>
             <button className="icon-button" title="Refresh model servers and query Ollama model lists" onClick={loadRunners}><RefreshCw size={16} /></button>
             {canLoadModel && <button className="secondary toolbar-button model-load-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}<span className="button-label">Load Model</span></button>}
             <button className="secondary toolbar-button system-prompt-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} /><span className="button-label">System Prompt</span></button>
@@ -1903,14 +1909,19 @@ function PromptEditorModal({ row, onSave, onClose }) {
           </label>
           <FormInput label="Name" tooltip="Human-readable prompt name shown in Chat selectors" value={draft.name || ''} onChange={v => set('name', v)} />
           <FormInput label="Description" tooltip="Short description for operators and chat users" value={draft.description || ''} onChange={v => set('description', v)} />
-          <label className="toggle" title="Whether users can select this prompt in Chat"><input type="checkbox" checked={draft.active !== false} onChange={e => set('active', e.target.checked)} />Active</label>
-          <label className="toggle" title="Whether this prompt is the default for its tenant and kind"><input type="checkbox" checked={!!draft.isDefault} onChange={e => set('isDefault', e.target.checked)} />Default</label>
+          <label className="prompt-check-row" title="Whether users can select this prompt in Chat"><input type="checkbox" checked={draft.active !== false} onChange={e => set('active', e.target.checked)} />Active</label>
+          <label className="prompt-check-row" title="Whether this prompt is the default for its tenant and kind"><input type="checkbox" checked={!!draft.isDefault} onChange={e => set('isDefault', e.target.checked)} />Default</label>
           {draft.isProtected && <div className="field-note" title="Seeded default prompt records are protected from deletion">Protected</div>}
         </div>
         <label className="prompt-content-field" title="Prompt content sent to the model when selected">
           Prompt content
           <textarea className="prompt-template-textarea" title="Edit the full prompt template content. Tool prompts can include {{tool_catalog}}." value={draft.content || ''} onChange={e => set('content', e.target.value)} />
         </label>
+        <div className="prompt-parameter-help" title="Template parameters available in prompt content">
+          <strong>Available parameter</strong>
+          <code>{'{{tool_catalog}}'}</code>
+          <span>Tool prompts can include this placeholder to insert the visible Wilson tool catalog and execution rules for the selected chat request. System prompts do not require template parameters.</span>
+        </div>
         {error && <div className="error" title="Prompt save error">{error}</div>}
       </div>
       <div className="modal-actions">
@@ -2042,7 +2053,15 @@ function ActivityChart({ summary, range }) {
   });
   function showTooltip(event, bucket) {
     const rect = event.currentTarget.getBoundingClientRect();
-    setTooltip({ ...bucketTooltip(bucket), left: rect.left + rect.width / 2, top: rect.top });
+    const minLeft = 132;
+    const maxLeft = Math.max(minLeft, window.innerWidth - 132);
+    const below = rect.top < 130;
+    setTooltip({
+      ...bucketTooltip(bucket),
+      left: Math.min(maxLeft, Math.max(minLeft, rect.left + rect.width / 2)),
+      top: below ? rect.bottom + 10 : rect.top,
+      below
+    });
   }
   return (
     <div className="chart-shell" title="Time-bucketed request volume. Green is success; red is failure.">
@@ -2074,7 +2093,7 @@ function ActivityChart({ summary, range }) {
           {buckets.length < 1 && <div className="empty-chart">No activity in this range</div>}
         </div>
         {tooltip && (
-          <div className="chart-tooltip" style={{ left: tooltip.left, top: tooltip.top }} role="tooltip">
+          <div className={tooltip.below ? 'chart-tooltip below' : 'chart-tooltip'} style={{ left: tooltip.left, top: tooltip.top }} role="tooltip">
             <div><strong>Timestamp</strong><span>{tooltip.timestamp}</span></div>
             <div><strong>Successful requests</strong><span>{tooltip.successes}</span></div>
             <div><strong>Failed requests</strong><span>{tooltip.failures}</span></div>
@@ -2211,12 +2230,12 @@ function RequestHistoryDetailModal({ api, row, onClose }) {
             <tbody>
               <tr><th title="UTC timestamp when this request was captured">Created</th><td>{formatDate(row.createdUtc)}</td></tr>
               <tr><th title="Total request duration in milliseconds">Response Time</th><td>{formatDuration(row.durationMs)}</td></tr>
-              <tr><th title="Milliseconds until the first token was received for chat requests">Time to first token (ms)</th><td>{formatNumber(row.timeToFirstTokenMs)}</td></tr>
-              <tr><th title="Milliseconds spent receiving streamed tokens">Streaming time (ms)</th><td>{formatNumber(row.streamingTimeMs)}</td></tr>
-              <tr><th title="Total model inference time for chat requests">Total time (ms)</th><td>{formatNumber(row.totalTimeMs)}</td></tr>
+              <tr><th title="Milliseconds until the first token was received for chat requests">Time to first token (ms)</th><td>{formatNumber(row.timeToFirstTokenMs)} ms</td></tr>
+              <tr><th title="Milliseconds spent receiving streamed tokens">Streaming time (ms)</th><td>{formatNumber(row.streamingTimeMs)} ms</td></tr>
+              <tr><th title="Total model inference time for chat requests">Total time (ms)</th><td>{formatNumber(row.totalTimeMs)} ms</td></tr>
               <tr><th title="Estimated tokens used by this request">Tokens used</th><td>{row.tokensUsed || 0}</td></tr>
               <tr><th title="Tool calls executed during this request">Tool calls</th><td>{row.toolCallCount || 0}</td></tr>
-              <tr><th title="Milliseconds spent in tools during this request">Tool time (ms)</th><td>{formatNumber(row.toolElapsedMs || 0)}</td></tr>
+              <tr><th title="Milliseconds spent in tools during this request">Tool time (ms)</th><td>{formatNumber(row.toolElapsedMs || 0)} ms</td></tr>
               <tr><th title="Tool-agent iterations used by this request">Tool iterations</th><td>{row.agentIterations || 0}</td></tr>
               <tr><th title="System prompt template used by this request">System prompt</th><td>{row.systemPromptName || '-'}</td></tr>
               <tr><th title="Tool prompt template used by this request">Tool prompt</th><td>{row.toolPromptName || '-'}</td></tr>
@@ -2427,16 +2446,18 @@ function FeedbackDetailModal({ row, onClose }) {
             <span>{row.rating > 0 ? 'Helpful' : 'Not helpful'}</span>
           </div>
         </div>
-        <KeyValueTable rows={[
-          ['conversationId', row.conversationId],
-          ['messageId', row.messageId],
-          ['userId', row.userId || '-'],
-          ['createdUtc', row.createdUtc],
-          ['timeToFirstTokenMs', formatNumber(row.timeToFirstTokenMs)],
-          ['streamingTimeMs', formatNumber(row.streamingTimeMs)],
-          ['totalTimeMs', formatNumber(row.totalTimeMs)],
-          ['tokensUsed', row.tokensUsed || 0]
-        ]} />
+        <div className="feedback-detail-table">
+          <KeyValueTable rows={[
+            ['conversationId', row.conversationId],
+            ['messageId', row.messageId],
+            ['userId', row.userId || '-'],
+            ['createdUtc', row.createdUtc],
+            ['timeToFirstTokenMs', `${formatNumber(row.timeToFirstTokenMs)} ms`],
+            ['streamingTimeMs', `${formatNumber(row.streamingTimeMs)} ms`],
+            ['totalTimeMs', `${formatNumber(row.totalTimeMs)} ms`],
+            ['tokensUsed', row.tokensUsed || 0]
+          ]} />
+        </div>
         <div className="detail-section">
           <h3>Opinion</h3>
           <pre className="feedback-comment-display" title="Free-form user feedback">{row.comment || 'No written comment was provided.'}</pre>
