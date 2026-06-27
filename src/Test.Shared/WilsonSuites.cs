@@ -49,6 +49,11 @@ namespace Test.Shared
                         CreateAsyncCase("tool-audit-redaction-persistence", "Tool audit redaction persistence", ToolAuditRedactionPersistenceAsync),
                         CreateSyncCase("id-length", "Identifier length", IdLength),
                         CreateSyncCase("tool-settings-defaults", "Tool settings defaults", ToolSettingsDefaults),
+                        CreateSyncCase("tool-policy-resolution-coverage", "Tool policy resolution coverage", ToolPolicyResolutionCoverage),
+                        CreateSyncCase("tool-safety-limit-clamping", "Tool safety limit clamping", ToolSafetyLimitClamping),
+                        CreateSyncCase("tool-audit-sanitizer-coverage", "Tool audit sanitizer coverage", ToolAuditSanitizerCoverage),
+                        CreateSyncCase("json-string-or-raw-json-converter", "JSON string or raw JSON converter", JsonStringOrRawJsonConverterCoverage),
+                        CreateSyncCase("working-directory-guard-error-coverage", "Working directory guard error coverage", WorkingDirectoryGuardErrorCoverage),
                         CreateAsyncCase("ollama-tool-model-classification", "Ollama tool model classification", OllamaToolModelClassificationAsync),
                         CreateAsyncCase("tool-service-foundation", "Tool service foundation", ToolServiceFoundationAsync),
                         CreateAsyncCase("tool-diagnostics-api", "Tool diagnostics API", ToolDiagnosticsApiAsync),
@@ -777,6 +782,195 @@ namespace Test.Shared
             ModelRunnerSettings unsupported = new ModelRunnerSettings { ApiType = "Custom", Endpoint = "http://localhost:9999" };
             ModelRunnerSettings.ApplyToolDefaults(unsupported);
             if (unsupported.SupportsTools) throw new InvalidOperationException("Unsupported API types should not default to tool support.");
+        }
+
+        private static void ToolPolicyResolutionCoverage()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-policy-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                Settings configured = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        DestructiveToolsRequireApproval = false
+                    }
+                };
+                ToolService configuredService = new ToolService(configured);
+                ToolDescriptor? write = configuredService.GetTool("WRITE_FILE");
+                if (write == null || !write.Available) throw new InvalidOperationException("Expected case-insensitive built-in tool lookup.");
+                if (write.RequiresApproval) throw new InvalidOperationException("Expected destructive approval setting to flow into descriptors.");
+                if (!String.Equals(write.DisplayName, "Write File", StringComparison.Ordinal)) throw new InvalidOperationException("Expected built-in display name formatting.");
+
+                Settings noSearchProviders = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        WebSearch = new WebSearchToolSettings
+                        {
+                            Enabled = true,
+                            Providers = new List<WebSearchProviderSettings>()
+                        }
+                    }
+                };
+                ToolDescriptor? webSearch = new ToolService(noSearchProviders).GetTool("web_search");
+                if (webSearch == null || webSearch.Available || !String.Equals(webSearch.UnavailableReason, "No enabled web search provider is configured.", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected web_search to explain missing providers.");
+
+                Settings searchDisabled = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        WebSearch = new WebSearchToolSettings { Enabled = false }
+                    }
+                };
+                ToolDescriptor? disabledSearch = new ToolService(searchDisabled).GetTool("web_search");
+                if (disabledSearch == null || disabledSearch.Available || !String.Equals(disabledSearch.UnavailableReason, "Web search is disabled.", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected web_search disabled reason.");
+
+                Settings processOnly = new Settings
+                {
+                    Tools = new ToolsSettings
+                    {
+                        Enabled = true,
+                        WorkingDirectory = workspace,
+                        AllowedRoots = new List<string> { workspace },
+                        EnabledToolNames = new List<string> { "RUN_PROCESS" }
+                    }
+                };
+                List<ToolDescriptor> visible = new ToolService(processOnly).ListTools(false);
+                if (visible.Count != 1 || !String.Equals(visible[0].Name, "run_process", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected case-insensitive enabled tool allow-list.");
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static void ToolSafetyLimitClamping()
+        {
+            ToolSafetyLimits defaults = ToolSafetyLimits.FromSettings(null);
+            if (defaults.MaxReadFileBytes != 1048576 || defaults.ToolTimeoutMs != 30000 || defaults.ProcessTimeoutMs != 120000)
+                throw new InvalidOperationException("Unexpected default tool safety limits.");
+
+            ToolSafetyLimits minimums = ToolSafetyLimits.FromSettings(new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    MaxReadFileBytes = -1,
+                    MaxToolResultBytes = -1,
+                    MaxToolOutputChars = -1,
+                    MaxToolResultItems = -1,
+                    ToolTimeoutMs = -1,
+                    ProcessTimeoutMs = -1
+                }
+            });
+            if (minimums.MaxReadFileBytes != 1 || minimums.MaxToolResultBytes != 1024 || minimums.MaxToolOutputChars != 1024 || minimums.MaxToolResultItems != 1 || minimums.ToolTimeoutMs != 1000 || minimums.ProcessTimeoutMs != 1000)
+                throw new InvalidOperationException("Expected lower-bound clamping for tool safety limits.");
+
+            ToolSafetyLimits maximums = ToolSafetyLimits.FromSettings(new Settings
+            {
+                Tools = new ToolsSettings
+                {
+                    MaxReadFileBytes = Int32.MaxValue,
+                    MaxToolResultBytes = Int32.MaxValue,
+                    MaxToolOutputChars = Int32.MaxValue,
+                    MaxToolResultItems = Int32.MaxValue,
+                    ToolTimeoutMs = Int32.MaxValue,
+                    ProcessTimeoutMs = Int32.MaxValue
+                }
+            });
+            if (maximums.MaxReadFileBytes != 104857600 || maximums.MaxToolResultBytes != 10485760 || maximums.MaxToolOutputChars != 200000 || maximums.MaxToolResultItems != 1000 || maximums.ToolTimeoutMs != 300000 || maximums.ProcessTimeoutMs != 600000)
+                throw new InvalidOperationException("Expected upper-bound clamping for tool safety limits.");
+        }
+
+        private static void ToolAuditSanitizerCoverage()
+        {
+            string bearerText = ToolAuditSanitizer.RedactText("Header Bearer abc.def");
+            if (!bearerText.Contains("Bearer [redacted]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected bearer token text redaction.");
+
+            string redactedText = ToolAuditSanitizer.RedactText("Authorization: Bearer abc.def password=secret api_key:'key' safe=value");
+            if (!redactedText.Contains("Authorization: [redacted]", StringComparison.Ordinal) || !redactedText.Contains("password=[redacted]", StringComparison.Ordinal) || !redactedText.Contains("api_key:[redacted]", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected unstructured tool audit text redaction.");
+            if (!redactedText.Contains("safe=value", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected non-sensitive unstructured text to remain.");
+
+            string json = ToolAuditSanitizer.RedactJson("""{"apiKey":"abc","nested":{"client_secret":"def","safe":"ok"},"items":[{"token":"ghi"},{"value":3}],"message":"Bearer zzz"}""");
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                if (!String.Equals(document.RootElement.GetProperty("apiKey").GetString(), "[redacted]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected top-level JSON secret redaction.");
+                if (!String.Equals(document.RootElement.GetProperty("nested").GetProperty("client_secret").GetString(), "[redacted]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected nested JSON secret redaction.");
+                if (!String.Equals(document.RootElement.GetProperty("nested").GetProperty("safe").GetString(), "ok", StringComparison.Ordinal)) throw new InvalidOperationException("Expected non-sensitive JSON value to remain.");
+                if (!String.Equals(document.RootElement.GetProperty("items")[0].GetProperty("token").GetString(), "[redacted]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected array JSON secret redaction.");
+                if (!String.Equals(document.RootElement.GetProperty("message").GetString(), "Bearer [redacted]", StringComparison.Ordinal)) throw new InvalidOperationException("Expected string payload redaction inside JSON.");
+            }
+
+            string invalidJson = ToolAuditSanitizer.RedactJson("password=secret");
+            if (!invalidJson.Contains("[redacted]", StringComparison.Ordinal) || invalidJson.Contains("secret", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected invalid JSON to be wrapped and redacted.");
+
+            string capped = ToolAuditSanitizer.RedactAndCapJson("""{"password":"secret","content":"abcdefghijklmnopqrstuvwxyz"}""", 20);
+            using (JsonDocument cappedDocument = JsonDocument.Parse(capped))
+            {
+                if (!cappedDocument.RootElement.GetProperty("truncated").GetBoolean()) throw new InvalidOperationException("Expected capped JSON wrapper.");
+                if (capped.Contains("secret", StringComparison.Ordinal)) throw new InvalidOperationException("Expected capped JSON to redact before truncating.");
+            }
+        }
+
+        private static void JsonStringOrRawJsonConverterCoverage()
+        {
+            JsonSerializerOptions options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            options.Converters.Add(new JsonStringOrRawJsonConverter());
+
+            RawJsonEnvelope? stringValue = JsonSerializer.Deserialize<RawJsonEnvelope>("""{"value":"plain"}""", options);
+            if (stringValue == null || !String.Equals(stringValue.Value, "plain", StringComparison.Ordinal)) throw new InvalidOperationException("Expected JSON string value to deserialize as plain text.");
+
+            RawJsonEnvelope? objectValue = JsonSerializer.Deserialize<RawJsonEnvelope>("""{"value":{"one":1,"two":[true,null]}}""", options);
+            if (String.IsNullOrWhiteSpace(objectValue?.Value) || !objectValue.Value.Contains("\"one\":1", StringComparison.Ordinal) || !objectValue.Value.Contains("\"two\":[true,null]", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected raw JSON object value to deserialize into a string.");
+
+            RawJsonEnvelope? nullValue = JsonSerializer.Deserialize<RawJsonEnvelope>("""{"value":null}""", options);
+            if (nullValue == null || nullValue.Value != null) throw new InvalidOperationException("Expected JSON null to remain null.");
+
+            string serialized = JsonSerializer.Serialize(new RawJsonEnvelope { Value = """{"not":"raw"}""" }, options);
+            using (JsonDocument serializedDocument = JsonDocument.Parse(serialized))
+            {
+                if (!String.Equals(serializedDocument.RootElement.GetProperty("Value").GetString(), """{"not":"raw"}""", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected converter to write values as JSON strings.");
+            }
+        }
+
+        private static void WorkingDirectoryGuardErrorCoverage()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-guard-errors-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            try
+            {
+                ToolExecutionContext context = GuardContext(workspace, true);
+                ExpectToolExecutionException("invalid_path", () => WorkingDirectoryGuard.ResolvePath("", context));
+                ExpectToolExecutionException("missing_working_directory", () => WorkingDirectoryGuard.ValidateContext(new ToolExecutionContext { Settings = new Settings { Tools = new ToolsSettings { AllowedRoots = new List<string> { workspace } } } }));
+                ExpectToolExecutionException("working_directory_not_found", () => WorkingDirectoryGuard.ValidateContext(new ToolExecutionContext { Settings = new Settings { Tools = new ToolsSettings { WorkingDirectory = Path.Combine(workspace, "missing"), AllowedRoots = new List<string> { workspace } } } }));
+
+                Directory.CreateDirectory(Path.Combine(workspace, ".ssh"));
+                ExpectToolExecutionException("secret_path_blocked", () => WorkingDirectoryGuard.ResolvePath(Path.Combine(".ssh", "config"), context));
+                ExpectToolExecutionException("secret_path_blocked", () => WorkingDirectoryGuard.ResolvePath("appsettings.Development.json", context));
+                ExpectToolExecutionException("secret_path_blocked", () => WorkingDirectoryGuard.ResolvePath("id_rsa.pem", context));
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
         }
 
         private static async Task OllamaToolModelClassificationAsync()
@@ -3029,6 +3223,12 @@ namespace Test.Shared
             if (status.LastUnhealthyUtc != lastUnhealthy) throw new InvalidOperationException("Expected last unhealthy timestamp to be preserved.");
             if (status.UptimePercentage <= 0) throw new InvalidOperationException("Expected positive uptime percentage.");
             if (status.History.Count != 1) throw new InvalidOperationException("Expected health history snapshot.");
+        }
+
+        private sealed class RawJsonEnvelope
+        {
+            [JsonConverter(typeof(JsonStringOrRawJsonConverter))]
+            public string? Value { get; set; }
         }
     }
 }
