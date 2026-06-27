@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye,
+  Activity, AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye, FileText,
   Gauge, History, Info, KeyRound, LayoutDashboard, ListFilter, LogOut,
   MessageSquarePlus, Moon, MoreVertical, Pencil, Play, Plus, RefreshCw, Save,
   Search, Send, Server, Settings, Square, Sun, Trash2, ThumbsDown, ThumbsUp, Users, X
@@ -20,6 +20,7 @@ const text = {
   chat: 'Chat',
   history: 'Conversations',
   requests: 'Request History',
+  prompts: 'Prompts',
   explorer: 'API Explorer',
   settings: 'Settings',
   tenants: 'Tenants',
@@ -127,6 +128,10 @@ const fieldMeta = {
   healthCheckUseAuth: ['Use auth', 'Send this model server API key with health probes.'],
   title: ['Title', 'Human-readable conversation title.'],
   name: ['Name', 'Human-readable name.'],
+  kind: ['Kind', 'Prompt template kind.'],
+  description: ['Description', 'Human-readable description.'],
+  content: ['Content', 'Prompt template content.'],
+  isDefault: ['Default', 'Whether this prompt is the tenant default for its kind.'],
   email: ['Email', 'User email address.'],
   firstName: ['First name', 'User first name.'],
   lastName: ['Last name', 'User last name.'],
@@ -148,6 +153,14 @@ const fieldMeta = {
   streamingTimeMs: ['Streaming time (ms)', 'Milliseconds spent receiving generated tokens.'],
   totalTimeMs: ['Total time (ms)', 'Total model inference time in milliseconds.'],
   totalToolElapsedMs: ['Total tool elapsed (ms)', 'Total time spent executing tools in milliseconds.'],
+  systemPromptId: ['System prompt ID', 'System prompt template used for this request.'],
+  systemPromptName: ['System prompt', 'System prompt template name used for this request.'],
+  systemPromptDefault: ['System default', 'Whether the system prompt was the default template.'],
+  systemPromptHash: ['System prompt hash', 'SHA-256 hash of the system prompt content sent to the model.'],
+  toolPromptId: ['Tool prompt ID', 'Tool prompt template used for this request.'],
+  toolPromptName: ['Tool prompt', 'Tool prompt template name used for this request.'],
+  toolPromptDefault: ['Tool default', 'Whether the tool prompt was the default template.'],
+  toolPromptHash: ['Tool prompt hash', 'SHA-256 hash of the tool prompt content sent to the model.'],
   tokensUsed: ['Tokens used', 'Estimated prompt and response tokens used by this message or request.'],
   tokenEstimate: ['Token estimate', 'Estimated token count for this message.'],
   requestHeaders: ['Request headers', 'HTTP request headers captured for this request.'],
@@ -193,6 +206,7 @@ function App() {
     ]],
     ['MANAGE', [
       ['models', 'Model Servers', Server],
+      ['prompts', text.prompts, FileText],
       ['history', text.history, History],
       ['feedback', text.feedback, ThumbsUp],
       ['requests', text.requests, ListFilter],
@@ -226,8 +240,9 @@ function App() {
       <main className="workspace">
         <Topbar session={session} theme={theme} onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')} onLogout={logout} />
         <div className="workspace-body">
-          {view === 'chat' && <Chat api={api} />}
+          {view === 'chat' && <Chat api={api} onOpenPrompts={() => setView('prompts')} />}
           {view === 'models' && <ModelServersView api={api} />}
+          {view === 'prompts' && <PromptsView api={api} />}
           {view === 'history' && <HistoryView api={api} />}
           {view === 'requests' && <RequestHistory api={api} />}
           {view === 'explorer' && <ApiExplorer api={api} />}
@@ -354,7 +369,7 @@ function chatModelsForRunner(runner) {
   return runner.models || [];
 }
 
-function Chat({ api }) {
+function Chat({ api, onOpenPrompts }) {
   const [runners, setRunners] = useState([]);
   const [conversations, setConversations] = useState([]);
   const [conversation, setConversation] = useState(null);
@@ -370,6 +385,9 @@ function Chat({ api }) {
   });
   const [toolCatalog, setToolCatalog] = useState([]);
   const [toolInstructions, setToolInstructions] = useState('');
+  const [promptTemplates, setPromptTemplates] = useState([]);
+  const [systemPromptId, setSystemPromptId] = useState(() => localStorage.getItem('wilson.chat.systemPromptId') || '');
+  const [toolPromptId, setToolPromptId] = useState(() => localStorage.getItem('wilson.chat.toolPromptId') || '');
   const [toolSystemPrompt, setToolSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.toolSystemPrompt') || '');
   const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('wilson.chat.systemPrompt') || defaultSystemPrompt);
   const [completionSettings, setCompletionSettings] = useState(() => {
@@ -439,6 +457,8 @@ function Chat({ api }) {
   }, [prompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.systemPrompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('wilson.chat.toolSystemPrompt', toolSystemPrompt); }, [toolSystemPrompt]);
+  useEffect(() => { localStorage.setItem('wilson.chat.systemPromptId', systemPromptId); }, [systemPromptId]);
+  useEffect(() => { localStorage.setItem('wilson.chat.toolPromptId', toolPromptId); }, [toolPromptId]);
   useEffect(() => { localStorage.setItem('wilson.chat.completionSettings', JSON.stringify(completionSettings)); }, [completionSettings]);
   useEffect(() => { localStorage.setItem('wilson.chat.toolsEnabled', String(toolsEnabled)); }, [toolsEnabled]);
   useEffect(() => { localStorage.setItem('wilson.chat.toolApprovalPolicy', toolApprovalPolicy); }, [toolApprovalPolicy]);
@@ -450,6 +470,11 @@ function Chat({ api }) {
   useEffect(() => {
     let cancelled = false;
     api.toolInstructions().then(result => { if (!cancelled) setToolInstructions(result?.systemPrompt || ''); }).catch(() => { if (!cancelled) setToolInstructions(''); });
+    return () => { cancelled = true; };
+  }, [api]);
+  useEffect(() => {
+    let cancelled = false;
+    api.prompts({ pageNumber: 1, pageSize: 500 }).then(result => { if (!cancelled) setPromptTemplates(enumerationObjects(result)); }).catch(() => { if (!cancelled) setPromptTemplates([]); });
     return () => { cancelled = true; };
   }, [api]);
 
@@ -465,6 +490,23 @@ function Chat({ api }) {
       setModelError('No chat-capable models available. Use Model Servers to verify this runner has a completion model.');
     }
   }, [runnerId, runners, model]);
+
+  const systemPromptOptions = useMemo(() => promptTemplates.filter(item => promptKindKey(item.kind) === 'system' && item.active !== false), [promptTemplates]);
+  const toolPromptOptions = useMemo(() => promptTemplates.filter(item => promptKindKey(item.kind) === 'tool' && item.active !== false), [promptTemplates]);
+  const selectedSystemPrompt = systemPromptOptions.find(item => item.id === systemPromptId) || systemPromptOptions.find(item => item.isDefault) || systemPromptOptions[0] || null;
+  const selectedToolPrompt = toolPromptOptions.find(item => item.id === toolPromptId) || toolPromptOptions.find(item => item.isDefault) || toolPromptOptions[0] || null;
+
+  useEffect(() => {
+    if (!selectedSystemPrompt) return;
+    if (systemPromptId !== selectedSystemPrompt.id) setSystemPromptId(selectedSystemPrompt.id);
+    setSystemPrompt(selectedSystemPrompt.content || defaultSystemPrompt);
+  }, [selectedSystemPrompt?.id]);
+
+  useEffect(() => {
+    if (!selectedToolPrompt) return;
+    if (toolPromptId !== selectedToolPrompt.id) setToolPromptId(selectedToolPrompt.id);
+    setToolSystemPrompt(selectedToolPrompt.content || '');
+  }, [selectedToolPrompt?.id]);
 
   async function loadConversation(item, options = {}) {
     desiredSelection.current = { runnerId: item.runnerId, model: item.model };
@@ -525,8 +567,16 @@ function Chat({ api }) {
     }
     const controller = new AbortController();
     generationAbort.current = controller;
-    const visibleToolSystemPrompt = toolRequestEnabled ? (toolSystemPrompt || effectiveToolInstructions) : '';
-    const body = { conversationId: conversation?.id, runnerId, model, prompt, settings: normalizeCompletionSettings(systemPrompt, visibleToolSystemPrompt, completionSettings) };
+    const visibleToolSystemPrompt = toolRequestEnabled ? renderToolPromptTemplate(toolSystemPrompt || selectedToolPrompt?.content || effectiveToolInstructions, effectiveToolInstructions) : '';
+    const body = {
+      conversationId: conversation?.id,
+      runnerId,
+      model,
+      prompt,
+      systemPromptId: selectedSystemPrompt?.id || systemPromptId || '',
+      toolPromptId: toolRequestEnabled ? (selectedToolPrompt?.id || toolPromptId || '') : '',
+      settings: normalizeCompletionSettings(systemPrompt || selectedSystemPrompt?.content || defaultSystemPrompt, visibleToolSystemPrompt, completionSettings)
+    };
     body.toolsEnabled = toolRequestEnabled;
     if (toolRequestEnabled) body.approvalPolicy = toolApprovalPolicy;
     const user = { id: `local-${Date.now()}`, role: 'user', content: prompt };
@@ -719,6 +769,12 @@ function Chat({ api }) {
           <label title="Select the model server used for chat requests">{text.runner}<select title="Select the model server used for chat requests" value={runnerId} onChange={e => setRunnerId(e.target.value)}>{runners.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label title="Select any model returned by the configured server">{text.model}<select title="Select the model to use for chat requests" value={model} onChange={e => setModel(e.target.value)} disabled={modelOptions.length < 1}>{modelOptions.length < 1 ? <option value="">{loadingModels ? 'Loading models' : text.noModels}</option> : modelOptions.map(item => <option key={item}>{item}</option>)}</select></label>
           <div className="chat-toolbar-actions">
+            <select className="prompt-select" title="System prompt used for this chat request" value={selectedSystemPrompt?.id || ''} onChange={e => { const next = systemPromptOptions.find(item => item.id === e.target.value); setSystemPromptId(e.target.value); setSystemPrompt(next?.content || defaultSystemPrompt); }}>
+              {systemPromptOptions.length < 1 ? <option value="">Default system prompt</option> : systemPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
+            </select>
+            <select className="prompt-select" title={toolRequestEnabled ? 'Tool prompt used for this chat request' : 'Tool prompt is not sent while tools are unavailable or disabled'} value={selectedToolPrompt?.id || ''} disabled={!toolRequestEnabled} onChange={e => { const next = toolPromptOptions.find(item => item.id === e.target.value); setToolPromptId(e.target.value); setToolSystemPrompt(next?.content || ''); }}>
+              {toolPromptOptions.length < 1 ? <option value="">Default tool prompt</option> : toolPromptOptions.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? ' (default)' : ''}</option>)}
+            </select>
             <button className="icon-button" title="Refresh model servers and query Ollama model lists" onClick={loadRunners}><RefreshCw size={16} /></button>
             {canLoadModel && <button className="secondary toolbar-button model-load-button" title={`Load ${model} into Ollama memory`} onClick={loadSelectedModel} disabled={modelLoading}>{modelLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}<span className="button-label">Load Model</span></button>}
             <button className="secondary toolbar-button system-prompt-button" title="Edit the system prompt used for chat completion requests" onClick={() => setSystemPromptOpen(true)}><Pencil size={16} /><span className="button-label">System Prompt</span></button>
@@ -751,7 +807,7 @@ function Chat({ api }) {
           <button className={busy ? 'send stop' : 'send'} onClick={busy ? stopGeneration : send} disabled={!busy && (!prompt.trim() || !model)} title={busy ? 'Stop the current model response' : 'Send this message to Wilson'}>{busy ? <Square size={18} /> : <Send size={20} />}</button>
         </div>
       </section>
-      {systemPromptOpen && <SystemPromptModal value={systemPrompt} toolsEnabled={toolRequestEnabled} toolValue={toolSystemPrompt || toolInstructions} defaultToolInstructions={toolInstructions} onChange={setSystemPrompt} onToolChange={setToolSystemPrompt} onClose={() => setSystemPromptOpen(false)} />}
+      {systemPromptOpen && <SystemPromptModal value={systemPrompt} toolsEnabled={toolRequestEnabled} toolValue={toolSystemPrompt || toolInstructions} defaultToolInstructions={toolInstructions} onChange={setSystemPrompt} onToolChange={setToolSystemPrompt} onOpenPrompts={() => { setSystemPromptOpen(false); onOpenPrompts?.(); }} onClose={() => setSystemPromptOpen(false)} />}
       {completionSettingsOpen && <CompletionSettingsModal settings={completionSettings} runner={selectedRunner} onChange={setCompletionSettings} onClose={() => setCompletionSettingsOpen(false)} />}
       {toolCatalogOpen && <ToolCatalogModal tools={toolCatalog} onClose={() => setToolCatalogOpen(false)} />}
       {modelLoading && <ModelLoadingModal model={model} runnerName={selectedRunner?.name || runnerId} />}
@@ -935,7 +991,7 @@ function normalizeCompletionSettings(systemPrompt, toolSystemPrompt, settings) {
   };
 }
 
-function SystemPromptModal({ value, toolsEnabled, toolValue, defaultToolInstructions, onChange, onToolChange, onClose }) {
+function SystemPromptModal({ value, toolsEnabled, toolValue, defaultToolInstructions, onChange, onToolChange, onOpenPrompts, onClose }) {
   const [draft, setDraft] = useState(value || defaultSystemPrompt);
   const [toolDraft, setToolDraft] = useState(toolValue || '');
   const [toolEdited, setToolEdited] = useState(false);
@@ -967,6 +1023,7 @@ function SystemPromptModal({ value, toolsEnabled, toolValue, defaultToolInstruct
         </div>
       </div>
       <div className="modal-actions">
+        <button className="secondary" title="Open the prompt template management page" onClick={onOpenPrompts}><FileText size={16} />Open in Prompts</button>
         <button className="secondary" title="Close without saving system prompt changes" onClick={onClose}>Cancel</button>
         <button className="primary" title="Save these prompt settings for future chat requests" onClick={() => { onChange(draft.trim() || defaultSystemPrompt); onToolChange(toolDraft.trim()); onClose(); }}><Save size={16} />Save</button>
       </div>
@@ -1706,6 +1763,165 @@ function FeedbackCommentModal({ draft, onChange, onClose, onSave }) {
   );
 }
 
+function PromptsView({ api }) {
+  const [rows, setRows] = useState([]);
+  const [enumeration, setEnumeration] = useState(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [modal, setModal] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setError('');
+      const result = await api.prompts({ pageNumber: page + 1, pageSize, includeInactive: true });
+      setEnumeration(result);
+      setRows(enumerationObjects(result));
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  }, [api, page, pageSize]);
+  useEffect(() => { load(); }, [load]);
+
+  async function savePrompt(prompt) {
+    const payload = {
+      ...prompt,
+      kind: canonicalPromptKind(prompt.kind),
+      name: String(prompt.name || '').trim(),
+      description: String(prompt.description || '').trim(),
+      content: String(prompt.content || '').trim()
+    };
+    if (!payload.name || !payload.content) throw new Error('Name and content are required.');
+    if (prompt.id) await api.updatePrompt(prompt.id, payload);
+    else await api.createPrompt(payload);
+    setModal(null);
+    await load();
+  }
+
+  async function deletePrompt(row) {
+    await api.deletePrompt(row.id);
+    setModal(null);
+    await load();
+  }
+
+  async function setDefaultPrompt(row) {
+    await api.setDefaultPrompt(row.id);
+    await load();
+  }
+
+  function duplicatePrompt(row) {
+    setModal({ type: 'edit', row: { ...row, id: '', name: `${row.name || 'Prompt'} Copy`, isDefault: false, isProtected: false } });
+  }
+
+  const actions = (row) => {
+    const items = [
+      { label: text.view, tooltip: 'View prompt details', icon: Eye, onClick: () => setModal({ type: 'view', row }) },
+      { label: text.edit, tooltip: 'Edit prompt template', icon: Pencil, onClick: () => setModal({ type: 'edit', row }) },
+      { label: 'Duplicate', tooltip: 'Create a copy of this prompt template', icon: Copy, onClick: () => duplicatePrompt(row) },
+      { label: text.viewJson, tooltip: 'View prompt JSON', icon: Code, onClick: () => setModal({ type: 'json', row }) }
+    ];
+    if (!row.isDefault && row.active) items.splice(2, 0, { label: 'Set Default', tooltip: 'Make this the default prompt for its kind', icon: Check, onClick: () => setDefaultPrompt(row) });
+    if (!row.isDefault && !row.isProtected) items.push({ label: text.delete, tooltip: 'Delete this prompt template', icon: Trash2, danger: true, onClick: () => setModal({ type: 'delete', row }) });
+    return items;
+  };
+
+  return (
+    <div className="page prompts-page">
+      <PageIntro title={text.prompts} description="Manage tenant-scoped system and tool prompts used by Chat." actions={
+        <div className="page-actions">
+          <button className="secondary" title="Create a system prompt" onClick={() => setModal({ type: 'edit', row: newPrompt('system') })}><Plus size={16} />System Prompt</button>
+          <button className="primary" title="Create a tool prompt" onClick={() => setModal({ type: 'edit', row: newPrompt('tool') })}><Plus size={16} />Tool Prompt</button>
+        </div>
+      } />
+      {error && <PermissionPanel message={error} />}
+      <DataTable rows={rows} enumeration={enumeration} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} columns={['kind', 'name', 'description', 'isDefault', 'active', 'isProtected', 'lastUpdateUtc']} onRefresh={load} onRowClick={(row) => setModal({ type: 'edit', row })} actions={actions} />
+      {loading && <div className="loading-strip" title="Prompt templates are loading">Loading prompts...</div>}
+      {modal?.type === 'view' && <RecordModal title="Prompt" row={modal.row} onClose={() => setModal(null)} />}
+      {modal?.type === 'json' && <JsonModal title="Prompt JSON" row={modal.row} onClose={() => setModal(null)} />}
+      {modal?.type === 'edit' && <PromptEditorModal row={modal.row} onSave={savePrompt} onClose={() => setModal(null)} />}
+      {modal?.type === 'delete' && <ConfirmModal title="Delete Prompt" message={`Delete ${modal.row.name || modal.row.id}?`} onCancel={() => setModal(null)} onConfirm={() => deletePrompt(modal.row)} />}
+    </div>
+  );
+}
+
+function newPrompt(kind = 'system') {
+  return {
+    kind: canonicalPromptKind(kind),
+    name: '',
+    description: '',
+    content: kind === 'tool' ? defaultToolPromptTemplate : defaultSystemPrompt,
+    isDefault: false,
+    active: true,
+    isProtected: false
+  };
+}
+
+function canonicalPromptKind(kind) {
+  return String(kind || '').toLowerCase() === 'tool' ? 'Tool' : 'System';
+}
+
+function promptKindKey(kind) {
+  return String(kind || '').toLowerCase() === 'tool' ? 'tool' : 'system';
+}
+
+function renderToolPromptTemplate(template, toolCatalogInstructions) {
+  return String(template || '').replace(/\{\{tool_catalog\}\}/gi, toolCatalogInstructions || '');
+}
+
+const defaultToolPromptTemplate = `You can use Wilson tools when they help answer the user's request. The available tools, their arguments, and their execution rules are listed below.
+
+{{tool_catalog}}
+
+Use tools only when they materially improve correctness, freshness, inspection, calculation, or action. Before calling a tool, choose the smallest safe action that satisfies the request. Respect approval requirements. If a tool is unavailable, denied, fails, or returns incomplete information, explain the limitation and continue with the best available answer. After tool use, summarize results in plain language and do not expose raw internal payloads unless the user asks for them.`;
+
+function PromptEditorModal({ row, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => ({ ...row, kind: canonicalPromptKind(row.kind) }));
+  const [error, setError] = useState('');
+  const set = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
+  const restoreDefaultContent = () => set('content', promptKindKey(draft.kind) === 'tool' ? defaultToolPromptTemplate : defaultSystemPrompt);
+  async function save() {
+    try {
+      setError('');
+      await onSave(draft);
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  }
+  return (
+    <Modal title={draft.id ? 'Edit Prompt' : 'Create Prompt'} onClose={onClose} wide>
+      <div className="prompt-editor-form">
+        <div className="form-grid">
+          <label title="Prompt kind">
+            Kind
+            <select title="Select prompt kind" value={promptKindKey(draft.kind)} onChange={e => set('kind', canonicalPromptKind(e.target.value))}>
+              <option value="system">System</option>
+              <option value="tool">Tool</option>
+            </select>
+          </label>
+          <FormInput label="Name" tooltip="Human-readable prompt name shown in Chat selectors" value={draft.name || ''} onChange={v => set('name', v)} />
+          <FormInput label="Description" tooltip="Short description for operators and chat users" value={draft.description || ''} onChange={v => set('description', v)} />
+          <label className="toggle" title="Whether users can select this prompt in Chat"><input type="checkbox" checked={draft.active !== false} onChange={e => set('active', e.target.checked)} />Active</label>
+          <label className="toggle" title="Whether this prompt is the default for its tenant and kind"><input type="checkbox" checked={!!draft.isDefault} onChange={e => set('isDefault', e.target.checked)} />Default</label>
+          {draft.isProtected && <div className="field-note" title="Seeded default prompt records are protected from deletion">Protected</div>}
+        </div>
+        <label className="prompt-content-field" title="Prompt content sent to the model when selected">
+          Prompt content
+          <textarea className="prompt-template-textarea" title="Edit the full prompt template content. Tool prompts can include {{tool_catalog}}." value={draft.content || ''} onChange={e => set('content', e.target.value)} />
+        </label>
+        {error && <div className="error" title="Prompt save error">{error}</div>}
+      </div>
+      <div className="modal-actions">
+        {(draft.isDefault || draft.isProtected) && <button className="secondary" title="Restore the seeded Wilson default content for this prompt kind" onClick={restoreDefaultContent}>Restore Default</button>}
+        <button className="secondary" title="Close without saving prompt changes" onClick={onClose}>Cancel</button>
+        <button className="primary" title="Save prompt template" onClick={save}><Save size={16} />Save</button>
+      </div>
+    </Modal>
+  );
+}
+
 function HistoryView({ api }) {
   const [items, setItems] = useState([]);
   const [enumeration, setEnumeration] = useState(null);
@@ -2002,6 +2218,10 @@ function RequestHistoryDetailModal({ api, row, onClose }) {
               <tr><th title="Tool calls executed during this request">Tool calls</th><td>{row.toolCallCount || 0}</td></tr>
               <tr><th title="Milliseconds spent in tools during this request">Tool time (ms)</th><td>{formatNumber(row.toolElapsedMs || 0)}</td></tr>
               <tr><th title="Tool-agent iterations used by this request">Tool iterations</th><td>{row.agentIterations || 0}</td></tr>
+              <tr><th title="System prompt template used by this request">System prompt</th><td>{row.systemPromptName || '-'}</td></tr>
+              <tr><th title="Tool prompt template used by this request">Tool prompt</th><td>{row.toolPromptName || '-'}</td></tr>
+              <tr><th title="SHA-256 hash of the system prompt content sent to the model">System prompt hash</th><td>{row.systemPromptHash || '-'}</td></tr>
+              <tr><th title="SHA-256 hash of the tool prompt content sent to the model">Tool prompt hash</th><td>{row.toolPromptHash || '-'}</td></tr>
               <tr><th title="HTTP method used by this request">Method</th><td><span className={`method-badge ${String(row.method).toLowerCase()}`}>{row.method}</span></td></tr>
               <tr><th title="HTTP response status code">HTTP Status</th><td><span className={`http-status ${statusClass(row.statusCode)}`}>{row.statusCode || '-'}</span></td></tr>
             </tbody>

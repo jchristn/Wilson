@@ -134,6 +134,65 @@ namespace Wilson.Core.Models
     }
 
     /// <summary>
+    /// Prompt template kind.
+    /// </summary>
+    public enum PromptTemplateKind
+    {
+        /// <summary>System prompt applied to chat requests.</summary>
+        System,
+        /// <summary>Tool prompt applied when tool calls are enabled.</summary>
+        Tool
+    }
+
+    /// <summary>
+    /// Built-in prompt template defaults.
+    /// </summary>
+    public static class PromptTemplateDefaults
+    {
+        /// <summary>Default system prompt template name.</summary>
+        public const string DefaultSystemPromptName = "Default system prompt";
+        /// <summary>Default tool prompt template name.</summary>
+        public const string DefaultToolPromptName = "Default tool prompt";
+        /// <summary>Default system prompt template content.</summary>
+        public const string DefaultSystemPromptContent = "Use prior turns only as context. Respond to the latest user message directly and accurately. Do not replay or quote earlier assistant responses unless the user asks. Be clear about uncertainty, ask concise clarifying questions only when necessary, and keep the answer focused on the user's requested outcome.";
+        /// <summary>Default tool prompt template content.</summary>
+        public const string DefaultToolPromptContent = "You can use Wilson tools when they help answer the user's request. The available tools, their arguments, and their execution rules are listed below.\n\n{{tool_catalog}}\n\nUse tools only when they materially improve correctness, freshness, inspection, calculation, or action. Before calling a tool, choose the smallest safe action that satisfies the request. Respect approval requirements. If a tool is unavailable, denied, fails, or returns incomplete information, explain the limitation and continue with the best available answer. After tool use, summarize results in plain language and do not expose raw internal payloads unless the user asks for them.";
+    }
+
+    /// <summary>
+    /// Tenant-scoped prompt template.
+    /// </summary>
+    public class PromptTemplate
+    {
+        /// <summary>Prompt template identifier.</summary>
+        public string Id { get; set; } = IdGenerator.PromptTemplate();
+        /// <summary>Tenant identifier.</summary>
+        public string TenantId { get; set; } = String.Empty;
+        /// <summary>Prompt template kind.</summary>
+        public PromptTemplateKind Kind { get; set; } = PromptTemplateKind.System;
+        /// <summary>Human-readable prompt template name.</summary>
+        public string Name { get; set; } = String.Empty;
+        /// <summary>Optional prompt template description.</summary>
+        public string Description { get; set; } = String.Empty;
+        /// <summary>Prompt template content.</summary>
+        public string Content { get; set; } = String.Empty;
+        /// <summary>Whether this prompt is the default for its tenant and kind.</summary>
+        public bool IsDefault { get; set; } = false;
+        /// <summary>Whether this prompt is protected from deletion.</summary>
+        public bool IsProtected { get; set; } = false;
+        /// <summary>Whether this prompt can be selected for chat.</summary>
+        public bool Active { get; set; } = true;
+        /// <summary>User who created this prompt template.</summary>
+        public string CreatedByUserId { get; set; } = String.Empty;
+        /// <summary>User who last updated this prompt template.</summary>
+        public string UpdatedByUserId { get; set; } = String.Empty;
+        /// <summary>Created UTC.</summary>
+        public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>Last update UTC.</summary>
+        public DateTime LastUpdateUtc { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Conversation record.
     /// </summary>
     public class Conversation
@@ -294,6 +353,22 @@ namespace Wilson.Core.Models
         public double ToolElapsedMs { get; set; } = 0;
         /// <summary>Tool-agent iterations used during the request.</summary>
         public int AgentIterations { get; set; } = 0;
+        /// <summary>Selected system prompt template identifier.</summary>
+        public string SystemPromptId { get; set; } = String.Empty;
+        /// <summary>Selected system prompt template name.</summary>
+        public string SystemPromptName { get; set; } = String.Empty;
+        /// <summary>Whether the selected system prompt was the default prompt.</summary>
+        public bool SystemPromptDefault { get; set; } = false;
+        /// <summary>SHA-256 hash of the system prompt content sent to the model.</summary>
+        public string SystemPromptHash { get; set; } = String.Empty;
+        /// <summary>Selected tool prompt template identifier.</summary>
+        public string ToolPromptId { get; set; } = String.Empty;
+        /// <summary>Selected tool prompt template name.</summary>
+        public string ToolPromptName { get; set; } = String.Empty;
+        /// <summary>Whether the selected tool prompt was the default prompt.</summary>
+        public bool ToolPromptDefault { get; set; } = false;
+        /// <summary>SHA-256 hash of the tool prompt content sent to the model.</summary>
+        public string ToolPromptHash { get; set; } = String.Empty;
         /// <summary>Created UTC.</summary>
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     }

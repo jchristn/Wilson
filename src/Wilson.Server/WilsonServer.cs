@@ -7,6 +7,7 @@ namespace Wilson.Server
     using System.IO;
     using System.Linq;
     using System.Reflection;
+    using System.Security.Cryptography;
     using System.Text;
     using System.Text.Json;
     using System.Text.Json.Serialization;
@@ -109,6 +110,7 @@ namespace Wilson.Server
             WilsonServer server = new WilsonServer(settings, settingsFile);
             await server.Database.InitializeAsync().ConfigureAwait(false);
             await server.Database.SeedAsync(settings.Seed).ConfigureAwait(false);
+            await server.Database.EnsureDefaultPromptTemplatesAsync().ConfigureAwait(false);
             await server.ReloadMcpAsync(CancellationToken.None).ConfigureAwait(false);
             return server;
         }
@@ -375,7 +377,15 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         ToolRunId = capture?.ToolRunId ?? String.Empty,
                         ToolCallCount = capture?.ToolCallCount ?? 0,
                         ToolElapsedMs = capture?.ToolElapsedMs ?? 0,
-                        AgentIterations = capture?.AgentIterations ?? 0
+                        AgentIterations = capture?.AgentIterations ?? 0,
+                        SystemPromptId = capture?.SystemPromptId ?? String.Empty,
+                        SystemPromptName = capture?.SystemPromptName ?? String.Empty,
+                        SystemPromptDefault = capture?.SystemPromptDefault ?? false,
+                        SystemPromptHash = capture?.SystemPromptHash ?? String.Empty,
+                        ToolPromptId = capture?.ToolPromptId ?? String.Empty,
+                        ToolPromptName = capture?.ToolPromptName ?? String.Empty,
+                        ToolPromptDefault = capture?.ToolPromptDefault ?? false,
+                        ToolPromptHash = capture?.ToolPromptHash ?? String.Empty
                     };
                     _ = Task.Run(async () =>
                     {
@@ -572,7 +582,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 RequireAdmin(requestContext);
                 if (method == "GET") { await SendJsonAsync(ctx, Enumerate(await Database.GetTenantsAsync(ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false); return; }
-                if (method == "POST") { Tenant item = Body<Tenant>(ctx); if (String.IsNullOrWhiteSpace(item.Id)) item.Id = IdGenerator.Tenant(); await Database.CreateTenantAsync(item, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 201; await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
+                if (method == "POST") { Tenant item = Body<Tenant>(ctx); if (String.IsNullOrWhiteSpace(item.Id)) item.Id = IdGenerator.Tenant(); await Database.CreateTenantAsync(item, ctx.Token).ConfigureAwait(false); await Database.EnsureDefaultPromptTemplatesAsync(item.Id, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 201; await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
             }
 
             if (path.StartsWith("/v1.0/api/tenants/", StringComparison.OrdinalIgnoreCase))
@@ -624,6 +634,79 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 if (method == "GET") { await SendJsonAsync(ctx, existing).ConfigureAwait(false); return; }
                 if (method == "PUT") { Credential item = Body<Credential>(ctx); item.Id = id; item.TenantId = tenantId; item.UserId = existing.UserId; item.AccessKey = existing.AccessKey; item.SecretLast4 = existing.SecretLast4; await Database.UpdateCredentialAsync(item, ctx.Token).ConfigureAwait(false); await SendJsonAsync(ctx, item).ConfigureAwait(false); return; }
                 if (method == "DELETE") { await Database.DeleteCredentialAsync(tenantId, id, ctx.Token).ConfigureAwait(false); ctx.Response.StatusCode = 204; await ctx.Response.Send(ctx.Token).ConfigureAwait(false); return; }
+            }
+
+            if (path == "/v1.0/api/prompts")
+            {
+                RequireAuth(requestContext);
+                string? tenantId = requestContext!.IsAdmin ? Query(ctx, "tenantId") : requestContext.TenantId;
+                PromptTemplateKind? kind = ParsePromptKind(Query(ctx, "kind"), false);
+                bool includeInactive = String.Equals(Query(ctx, "includeInactive"), "true", StringComparison.OrdinalIgnoreCase) && (requestContext.IsAdmin || requestContext.IsTenantAdmin);
+                if (method == "GET")
+                {
+                    await SendJsonAsync(ctx, Enumerate(await Database.GetPromptTemplatesAsync(tenantId, kind, includeInactive, ctx.Token).ConfigureAwait(false), Enumeration(ctx))).ConfigureAwait(false);
+                    return;
+                }
+
+                if (method == "POST")
+                {
+                    RequireTenantAdmin(requestContext);
+                    PromptTemplate item = Body<PromptTemplate>(ctx);
+                    if (String.IsNullOrWhiteSpace(item.Id)) item.Id = IdGenerator.PromptTemplate();
+                    item.TenantId = requestContext.IsAdmin ? item.TenantId : requestContext.TenantId!;
+                    if (String.IsNullOrWhiteSpace(item.TenantId)) throw new ArgumentException("tenantId is required.");
+                    item.CreatedByUserId = requestContext.UserId ?? String.Empty;
+                    item.UpdatedByUserId = requestContext.UserId ?? String.Empty;
+                    await ValidatePromptNameAvailableAsync(item, ctx.Token).ConfigureAwait(false);
+                    await Database.CreatePromptTemplateAsync(item, ctx.Token).ConfigureAwait(false);
+                    ctx.Response.StatusCode = 201;
+                    await SendJsonAsync(ctx, item).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            if (path.StartsWith("/v1.0/api/prompts/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/default", StringComparison.OrdinalIgnoreCase) && method == "POST")
+            {
+                RequireTenantAdmin(requestContext);
+                string id = Segment(path, 3);
+                PromptTemplate existing = await GetPromptTemplateForRequestAsync(requestContext!, id, ctx.Token).ConfigureAwait(false);
+                await Database.SetDefaultPromptTemplateAsync(existing.TenantId, existing.Id, existing.Kind, requestContext!.UserId ?? String.Empty, ctx.Token).ConfigureAwait(false);
+                PromptTemplate updated = await Database.GetPromptTemplateAsync(existing.TenantId, existing.Id, ctx.Token).ConfigureAwait(false) ?? existing;
+                await SendJsonAsync(ctx, updated).ConfigureAwait(false);
+                return;
+            }
+
+            if (path.StartsWith("/v1.0/api/prompts/", StringComparison.OrdinalIgnoreCase))
+            {
+                RequireAuth(requestContext);
+                string id = Segment(path, 3);
+                PromptTemplate existing = await GetPromptTemplateForRequestAsync(requestContext!, id, ctx.Token).ConfigureAwait(false);
+                if (method == "GET") { await SendJsonAsync(ctx, existing).ConfigureAwait(false); return; }
+                if (method == "PUT")
+                {
+                    RequireTenantAdmin(requestContext);
+                    PromptTemplate item = Body<PromptTemplate>(ctx);
+                    item.Id = existing.Id;
+                    item.TenantId = existing.TenantId;
+                    item.CreatedByUserId = existing.CreatedByUserId;
+                    item.CreatedUtc = existing.CreatedUtc;
+                    item.UpdatedByUserId = requestContext!.UserId ?? String.Empty;
+                    if (existing.IsProtected) item.IsProtected = true;
+                    await ValidatePromptNameAvailableAsync(item, ctx.Token).ConfigureAwait(false);
+                    await Database.UpdatePromptTemplateAsync(item, ctx.Token).ConfigureAwait(false);
+                    await SendJsonAsync(ctx, item).ConfigureAwait(false);
+                    return;
+                }
+
+                if (method == "DELETE")
+                {
+                    RequireTenantAdmin(requestContext);
+                    if (existing.IsProtected || existing.IsDefault) throw new ArgumentException("Default or protected prompt templates cannot be deleted.");
+                    await Database.DeletePromptTemplateAsync(existing.TenantId, existing.Id, ctx.Token).ConfigureAwait(false);
+                    ctx.Response.StatusCode = 204;
+                    await ctx.Response.Send(ctx.Token).ConfigureAwait(false);
+                    return;
+                }
             }
 
             if (path == "/v1.0/api/conversations" && method == "GET")
@@ -777,6 +860,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
 
             ChatToolPlan toolPlan = ResolveChatToolPlan(body, requestContext, runner, streaming);
+            PromptSelection promptSelection = await ResolvePromptSelectionAsync(body, requestContext, toolPlan, ctx.Token).ConfigureAwait(false);
             Conversation? conversation = String.IsNullOrWhiteSpace(body.ConversationId) ? null : await Database.GetConversationAsync(requestContext.TenantId!, body.ConversationId, ctx.Token).ConfigureAwait(false);
             if (conversation == null)
             {
@@ -803,7 +887,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 if (toolPlan.Enabled)
                 {
-                    await ChatWithToolsAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan).ConfigureAwait(false);
+                    await ChatWithToolsAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan, promptSelection).ConfigureAwait(false);
                     return;
                 }
 
@@ -815,7 +899,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ChatMessage assistantMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = answer, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = outputTokens, TimeToFirstTokenMs = inference.Elapsed.TotalMilliseconds, StreamingTimeMs = 0, TotalTimeMs = inference.Elapsed.TotalMilliseconds, TokensUsed = inputTokens + outputTokens };
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
-                SetRequestCapture(assistantMessage, answer);
+                SetRequestCapture(assistantMessage, answer, promptSelection: promptSelection);
                 await SendJsonAsync(ctx, new ChatResponse { Conversation = conversation, UserMessage = userMessage, AssistantMessage = assistantMessage, Truncation = truncation }).ConfigureAwait(false);
                 return;
             }
@@ -826,7 +910,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ctx.Response.ChunkedTransfer = true;
             if (toolPlan.Enabled)
             {
-                await ChatWithToolsStreamingAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan).ConfigureAwait(false);
+                await ChatWithToolsStreamingAsync(ctx, requestContext, body, runner, conversation, messages, userMessage, truncation, toolPlan, promptSelection).ConfigureAwait(false);
                 return;
             }
 
@@ -855,7 +939,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ChatMessage stored = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = full.ToString(), RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = storedTokens, TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = totalTokens };
                 await Database.CreateMessageAsync(stored, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, stored, ctx.Token).ConfigureAwait(false);
-                SetRequestCapture(stored, full.ToString());
+                SetRequestCapture(stored, full.ToString(), promptSelection: promptSelection);
                 await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
                 await SendSseAsync(ctx, "done", stored, true).ConfigureAwait(false);
             }
@@ -863,7 +947,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 if (streamingTimer.IsRunning) streamingTimer.Stop();
                 total.Stop();
-                SetRequestCapture(new ChatMessage { TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = InferenceService.EstimateTokens(prompt) }, ex.Message);
+                SetRequestCapture(new ChatMessage { TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = InferenceService.EstimateTokens(prompt) }, ex.Message, promptSelection: promptSelection);
                 await SendSseAsync(ctx, "error", new { error = "The selected model could not generate a chat response. Confirm that it is a chat or completion model, not an embedding-only model.", detail = ex.Message }, true).ConfigureAwait(false);
             }
         }
@@ -877,9 +961,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             List<ChatMessage> previousMessages,
             ChatMessage userMessage,
             ChatTruncationNotice truncation,
-            ChatToolPlan toolPlan)
+            ChatToolPlan toolPlan,
+            PromptSelection promptSelection)
         {
-            ChatResponse response = await CompleteToolChatAsync(ctx, requestContext, body, runner, conversation, previousMessages, userMessage, truncation, toolPlan, null).ConfigureAwait(false);
+            ChatResponse response = await CompleteToolChatAsync(ctx, requestContext, body, runner, conversation, previousMessages, userMessage, truncation, toolPlan, promptSelection, null).ConfigureAwait(false);
             await SendJsonAsync(ctx, response).ConfigureAwait(false);
         }
 
@@ -892,7 +977,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             List<ChatMessage> previousMessages,
             ChatMessage userMessage,
             ChatTruncationNotice truncation,
-            ChatToolPlan toolPlan)
+            ChatToolPlan toolPlan,
+            PromptSelection promptSelection)
         {
             await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
             await SendSseAsync(ctx, "truncation", truncation, false).ConfigureAwait(false);
@@ -910,6 +996,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     userMessage,
                     truncation,
                     toolPlan,
+                    promptSelection,
                     async (progress, token) =>
                     {
                         if (toolPlan.Settings.Tools.EmitProgressEvents)
@@ -960,6 +1047,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ChatMessage userMessage,
             ChatTruncationNotice truncation,
             ChatToolPlan toolPlan,
+            PromptSelection promptSelection,
             ToolAgentService.ToolProgressHandler? progressHandler)
         {
             Stopwatch total = Stopwatch.StartNew();
@@ -1052,7 +1140,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await UpsertToolRecordsAsync(toolRun, toolRecords, ctx.Token).ConfigureAwait(false);
 
             conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
-            SetRequestCapture(assistantMessage, answer, toolRun, metrics);
+            SetRequestCapture(assistantMessage, answer, toolRun, metrics, promptSelection);
 
             return new ChatResponse
             {
@@ -1204,6 +1292,85 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private static string ToolRunApprovalKey(string tenantId, string runId)
         {
             return (tenantId ?? String.Empty) + ":" + (runId ?? String.Empty);
+        }
+
+        private async Task<PromptSelection> ResolvePromptSelectionAsync(ChatRequest body, RequestContext requestContext, ChatToolPlan toolPlan, CancellationToken token)
+        {
+            string tenantId = requestContext.TenantId ?? String.Empty;
+            if (String.IsNullOrWhiteSpace(tenantId)) throw new ArgumentException("Chat requests require a tenant-scoped user.");
+
+            PromptTemplate systemTemplate = await ResolvePromptTemplateAsync(tenantId, body.SystemPromptId, PromptTemplateKind.System, token).ConfigureAwait(false);
+            string systemPrompt = String.IsNullOrWhiteSpace(body.Settings.SystemPrompt) || String.Equals(body.Settings.SystemPrompt, CompletionRequestSettings.DefaultSystemPrompt, StringComparison.Ordinal)
+                ? systemTemplate.Content
+                : body.Settings.SystemPrompt;
+            body.SystemPromptId = systemTemplate.Id;
+            body.Settings.SystemPrompt = systemPrompt;
+
+            PromptSelection selection = new PromptSelection
+            {
+                SystemPromptId = systemTemplate.Id,
+                SystemPromptName = systemTemplate.Name,
+                SystemPromptDefault = systemTemplate.IsDefault,
+                SystemPromptHash = PromptContentHash(systemPrompt)
+            };
+
+            if (!toolPlan.Enabled)
+            {
+                body.ToolPromptId = String.Empty;
+                body.Settings.ToolSystemPrompt = String.Empty;
+                return selection;
+            }
+
+            PromptTemplate toolTemplate = await ResolvePromptTemplateAsync(tenantId, body.ToolPromptId, PromptTemplateKind.Tool, token).ConfigureAwait(false);
+            string toolPrompt = String.IsNullOrWhiteSpace(body.Settings.ToolSystemPrompt)
+                ? toolTemplate.Content
+                : body.Settings.ToolSystemPrompt;
+            string toolInstructions = ToolAgentService.BuildToolSystemInstruction(toolPlan.ToolService);
+            toolPrompt = RenderToolPrompt(toolPrompt, toolInstructions);
+            body.ToolPromptId = toolTemplate.Id;
+            body.Settings.ToolSystemPrompt = toolPrompt;
+            selection.ToolPromptId = toolTemplate.Id;
+            selection.ToolPromptName = toolTemplate.Name;
+            selection.ToolPromptDefault = toolTemplate.IsDefault;
+            selection.ToolPromptHash = PromptContentHash(toolPrompt);
+            return selection;
+        }
+
+        private async Task<PromptTemplate> ResolvePromptTemplateAsync(string tenantId, string? promptId, PromptTemplateKind kind, CancellationToken token)
+        {
+            PromptTemplate? prompt;
+            if (String.IsNullOrWhiteSpace(promptId))
+            {
+                prompt = await Database.GetDefaultPromptTemplateAsync(tenantId, kind, token).ConfigureAwait(false);
+                if (prompt == null)
+                {
+                    await Database.EnsureDefaultPromptTemplatesAsync(tenantId, token).ConfigureAwait(false);
+                    prompt = await Database.GetDefaultPromptTemplateAsync(tenantId, kind, token).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                prompt = await Database.GetPromptTemplateAsync(tenantId, promptId, token).ConfigureAwait(false);
+            }
+
+            if (prompt == null) throw new KeyNotFoundException(kind + " prompt template not found.");
+            if (prompt.Kind != kind) throw new ArgumentException("Selected prompt template is not a " + kind.ToString().ToLowerInvariant() + " prompt.");
+            if (!prompt.Active) throw new ArgumentException("Selected prompt template is inactive.");
+            return prompt;
+        }
+
+        private static string RenderToolPrompt(string prompt, string toolInstructions)
+        {
+            string value = prompt ?? String.Empty;
+            if (value.Contains("{{tool_catalog}}", StringComparison.OrdinalIgnoreCase))
+                value = value.Replace("{{tool_catalog}}", toolInstructions ?? String.Empty, StringComparison.OrdinalIgnoreCase);
+            return value;
+        }
+
+        private static string PromptContentHash(string prompt)
+        {
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(prompt ?? String.Empty));
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
         private ChatToolPlan ResolveChatToolPlan(ChatRequest body, RequestContext requestContext, ModelRunnerSettings runner, bool streaming)
@@ -1586,6 +1753,47 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
         }
 
+        private async Task<PromptTemplate> GetPromptTemplateForRequestAsync(RequestContext requestContext, string id, CancellationToken token)
+        {
+            PromptTemplate? existing = null;
+            if (requestContext.IsAdmin && String.IsNullOrWhiteSpace(requestContext.TenantId))
+            {
+                existing = (await Database.GetPromptTemplatesAsync(null, null, true, token).ConfigureAwait(false)).FirstOrDefault(item => String.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                existing = await Database.GetPromptTemplateAsync(requestContext.TenantId ?? String.Empty, id, token).ConfigureAwait(false);
+            }
+
+            if (existing == null) throw new KeyNotFoundException("Prompt template not found.");
+            if (!requestContext.IsAdmin && !String.Equals(existing.TenantId, requestContext.TenantId, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Prompt template access denied.");
+            if (!existing.Active && !requestContext.IsAdmin && !requestContext.IsTenantAdmin)
+                throw new KeyNotFoundException("Prompt template not found.");
+            return existing;
+        }
+
+        private async Task ValidatePromptNameAvailableAsync(PromptTemplate item, CancellationToken token)
+        {
+            if (String.IsNullOrWhiteSpace(item.Name)) throw new ArgumentException("Prompt template name is required.");
+            if (String.IsNullOrWhiteSpace(item.Content)) throw new ArgumentException("Prompt template content is required.");
+            List<PromptTemplate> existing = await Database.GetPromptTemplatesAsync(item.TenantId, item.Kind, true, token).ConfigureAwait(false);
+            if (existing.Any(prompt => !String.Equals(prompt.Id, item.Id, StringComparison.OrdinalIgnoreCase) && String.Equals(prompt.Name, item.Name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("A prompt template with this name already exists for the tenant and kind.");
+        }
+
+        private static PromptTemplateKind? ParsePromptKind(string? value, bool required)
+        {
+            if (String.IsNullOrWhiteSpace(value))
+            {
+                if (required) throw new ArgumentException("Prompt kind is required.");
+                return null;
+            }
+
+            if (Enum.TryParse(value, true, out PromptTemplateKind kind)) return kind;
+            throw new ArgumentException("Prompt kind must be system or tool.");
+        }
+
         private T Body<T>(HttpContextBase ctx)
         {
             string body = ctx.Request.DataAsString;
@@ -1601,7 +1809,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await ctx.Response.Send(JsonSerializer.Serialize(value, _Json), ctx.Token).ConfigureAwait(false);
         }
 
-        private void SetRequestCapture(ChatMessage message, string responseBody, ToolRun? toolRun = null, ChatToolMetrics? metrics = null)
+        private void SetRequestCapture(ChatMessage message, string responseBody, ToolRun? toolRun = null, ChatToolMetrics? metrics = null, PromptSelection? promptSelection = null)
         {
             RequestCapture? capture = _RequestCapture.Value;
             if (capture == null) return;
@@ -1614,6 +1822,17 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             capture.ToolCallCount = metrics?.ToolCallCount ?? 0;
             capture.ToolElapsedMs = metrics?.TotalToolElapsedMs ?? 0;
             capture.AgentIterations = metrics?.IterationCount ?? 0;
+            if (promptSelection != null)
+            {
+                capture.SystemPromptId = promptSelection.SystemPromptId;
+                capture.SystemPromptName = promptSelection.SystemPromptName;
+                capture.SystemPromptDefault = promptSelection.SystemPromptDefault;
+                capture.SystemPromptHash = promptSelection.SystemPromptHash;
+                capture.ToolPromptId = promptSelection.ToolPromptId;
+                capture.ToolPromptName = promptSelection.ToolPromptName;
+                capture.ToolPromptDefault = promptSelection.ToolPromptDefault;
+                capture.ToolPromptHash = promptSelection.ToolPromptHash;
+            }
         }
 
         private static List<ToolTrace> BuildSafeToolTraces(List<ToolTrace> traces, List<ToolExecutionRecord> records)
@@ -1816,6 +2035,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     new { name = "Model Runners", description = "Configured model runner inventory, health, and Ollama model actions." },
                     new { name = "Administration", description = "Settings, tenants, users, and credentials." },
                     new { name = "Tools", description = "Tool catalog, diagnostics, and run history." },
+                    new { name = "Prompts", description = "Tenant-scoped system and tool prompt templates." },
                     new { name = "Chat", description = "Conversations, messages, and model chat requests." },
                     new { name = "Feedback", description = "User feedback capture and review." },
                     new { name = "Request History", description = "Captured request metadata, timing, and summaries." }
@@ -1846,6 +2066,14 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "/v1.0/api/tools/{name}", Path(Operation("get", "getTool", "Tools", "Get tool descriptor", "Returns one effective tool descriptor by name.", "ToolDescriptor", true, parameters: Parameters(PathParameter("name", "Tool name.")))) },
                     { "/v1.0/api/tool-runs/{id}", Path(Operation("get", "getToolRun", "Tools", "Get tool run", "Returns one persisted tool run and its redacted tool-call records.", "ToolRunResponse", true, parameters: Parameters(PathParameter("id", "Tool run identifier."), TenantScopeParameter()))) },
                     { "/v1.0/api/tool-runs/{runId}/tool-calls/{toolCallId}/approval", Path(Operation("post", "approveToolCall", "Tools", "Approve or deny a tool call", "Approves or denies a proposed or pending tool call for a conversation visible to the authenticated principal.", "ToolApprovalResponse", true, parameters: Parameters(PathParameter("runId", "Tool run identifier."), PathParameter("toolCallId", "Tool call identifier."), TenantScopeParameter()), requestSchema: "ToolApprovalRequest")) },
+                    { "/v1.0/api/prompts", Path(
+                        Operation("get", "listPrompts", "Prompts", "List prompt templates", "Lists active prompt templates visible to the authenticated principal. Tenant administrators can include inactive templates.", "PromptTemplateEnumeration", true, parameters: WithPagination(TenantScopeParameter(), QueryParameter("kind", "Optional prompt kind: system or tool.", StringSchema()), QueryParameter("includeInactive", "When true, tenant administrators can include inactive prompt templates.", BooleanSchema()))),
+                        Operation("post", "createPrompt", "Prompts", "Create prompt template", "Creates a tenant-scoped system or tool prompt template. Requires tenant administrator access.", "PromptTemplate", true, requestSchema: "PromptTemplate", successStatus: "201", successDescription: "Prompt template created.")) },
+                    { "/v1.0/api/prompts/{id}", Path(
+                        Operation("get", "getPrompt", "Prompts", "Get prompt template", "Returns one prompt template visible to the authenticated principal.", "PromptTemplate", true, parameters: Parameters(PathParameter("id", "Prompt template identifier."), TenantScopeParameter())),
+                        Operation("put", "updatePrompt", "Prompts", "Update prompt template", "Updates a prompt template. Requires tenant administrator access.", "PromptTemplate", true, parameters: Parameters(PathParameter("id", "Prompt template identifier."), TenantScopeParameter()), requestSchema: "PromptTemplate"),
+                        Operation("delete", "deletePrompt", "Prompts", "Delete prompt template", "Deletes a non-default, non-protected prompt template. Requires tenant administrator access.", null, true, parameters: Parameters(PathParameter("id", "Prompt template identifier."), TenantScopeParameter()), successStatus: "204", successDescription: "Prompt template deleted.")) },
+                    { "/v1.0/api/prompts/{id}/default", Path(Operation("post", "setDefaultPrompt", "Prompts", "Set default prompt template", "Makes one active prompt template the tenant default for its kind. Requires tenant administrator access.", "PromptTemplate", true, parameters: Parameters(PathParameter("id", "Prompt template identifier."), TenantScopeParameter()))) },
                     { "/v1.0/api/tenants", Path(
                         Operation("get", "listTenants", "Administration", "List tenants", "Lists tenant records. Requires a global administrator bearer token.", "TenantEnumeration", true, parameters: WithPagination()),
                         Operation("post", "createTenant", "Administration", "Create tenant", "Creates a tenant record. Requires a global administrator bearer token.", "Tenant", true, requestSchema: "Tenant", successStatus: "201", successDescription: "Tenant created.")) },
@@ -2105,6 +2333,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(Tenant));
             AddComponentSchema(schemas, typeof(User));
             AddComponentSchema(schemas, typeof(Credential));
+            AddComponentSchema(schemas, typeof(PromptTemplate));
             AddComponentSchema(schemas, typeof(Conversation));
             AddComponentSchema(schemas, typeof(ChatMessage));
             AddComponentSchema(schemas, typeof(ChatTruncationNotice));
@@ -2146,6 +2375,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             schemas["TenantEnumeration"] = EnumerationSchema("Tenant");
             schemas["UserEnumeration"] = EnumerationSchema("User");
             schemas["CredentialEnumeration"] = EnumerationSchema("Credential");
+            schemas["PromptTemplateEnumeration"] = EnumerationSchema("PromptTemplate");
             schemas["ConversationEnumeration"] = EnumerationSchema("Conversation");
             schemas["ChatMessageEnumeration"] = EnumerationSchema("ChatMessage");
             schemas["FeedbackEnumeration"] = EnumerationSchema("Feedback");
@@ -2299,6 +2529,26 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public int ToolCallCount { get; set; }
         public double ToolElapsedMs { get; set; }
         public int AgentIterations { get; set; }
+        public string SystemPromptId { get; set; } = String.Empty;
+        public string SystemPromptName { get; set; } = String.Empty;
+        public bool SystemPromptDefault { get; set; }
+        public string SystemPromptHash { get; set; } = String.Empty;
+        public string ToolPromptId { get; set; } = String.Empty;
+        public string ToolPromptName { get; set; } = String.Empty;
+        public bool ToolPromptDefault { get; set; }
+        public string ToolPromptHash { get; set; } = String.Empty;
+    }
+
+    internal sealed class PromptSelection
+    {
+        public string SystemPromptId { get; set; } = String.Empty;
+        public string SystemPromptName { get; set; } = String.Empty;
+        public bool SystemPromptDefault { get; set; }
+        public string SystemPromptHash { get; set; } = String.Empty;
+        public string ToolPromptId { get; set; } = String.Empty;
+        public string ToolPromptName { get; set; } = String.Empty;
+        public bool ToolPromptDefault { get; set; }
+        public string ToolPromptHash { get; set; } = String.Empty;
     }
 
     internal sealed class ChatToolPlan
@@ -2328,6 +2578,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         public string Prompt { get; set; } = String.Empty;
         /// <summary>Completion settings.</summary>
         public CompletionRequestSettings Settings { get; set; } = new CompletionRequestSettings();
+        /// <summary>Selected system prompt template identifier. Leave blank to use the tenant default.</summary>
+        public string? SystemPromptId { get; set; } = null;
+        /// <summary>Selected tool prompt template identifier. Leave blank to use the tenant default when tools are enabled.</summary>
+        public string? ToolPromptId { get; set; } = null;
         /// <summary>Override whether tools are enabled for this request. Null uses server settings.</summary>
         public bool? ToolsEnabled { get; set; } = null;
         /// <summary>Override approval policy for this request. Accepted values: deny, ask, auto.</summary>

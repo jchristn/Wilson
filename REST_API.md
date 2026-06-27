@@ -38,6 +38,47 @@ Write, edit, delete, directory-management, and process tools are marked dangerou
 
 Tool audit payloads are redacted before persistence. Persisted arguments are redacted and capped when argument storage is enabled. Full result payloads are not persisted unless `tools.storeFullToolResults` is explicitly enabled; otherwise Wilson stores redacted summaries and previews. Chat responses always use safe tool traces, not audit records.
 
+## Prompt APIs
+
+Prompt templates are tenant-scoped database records. Wilson seeds one default `System` prompt and one default `Tool` prompt for each tenant at server startup. Tenant administrators can manage prompts; normal authenticated users can list active prompts for chat selection.
+
+### List Prompts
+
+```http
+GET /v1.0/api/prompts?kind=System&pageNumber=1&pageSize=100
+```
+
+Global administrators may include `tenantId`. Tenant administrators may pass `includeInactive=true`; normal users only see active prompts.
+
+### Create Prompt
+
+```http
+POST /v1.0/api/prompts
+Content-Type: application/json
+
+{
+  "kind": "Tool",
+  "name": "Default tool prompt",
+  "description": "Tool instructions",
+  "content": "Use Wilson tools when helpful.\n\n{{tool_catalog}}",
+  "isDefault": true,
+  "active": true
+}
+```
+
+`kind` is an enum value: `System` or `Tool`.
+
+### Read, Update, Delete, And Set Default
+
+```http
+GET /v1.0/api/prompts/{id}
+PUT /v1.0/api/prompts/{id}
+DELETE /v1.0/api/prompts/{id}
+POST /v1.0/api/prompts/{id}/default
+```
+
+Protected seeded defaults and current defaults cannot be deleted. Setting a prompt as default clears the previous default for that tenant and kind.
+
 ### List Tools
 
 ```http
@@ -139,14 +180,22 @@ Non-streaming chat accepts these tool fields:
 
 ```json
 {
+  "systemPromptId": "prm_system",
+  "toolPromptId": "prm_tool",
   "toolsEnabled": true,
   "approvalPolicy": "auto",
   "toolNames": ["read_file"],
-  "workingDirectory": "C:\\Code\\Wilson"
+  "workingDirectory": "C:\\Code\\Wilson",
+  "settings": {
+    "systemPrompt": "Visible system prompt text",
+    "toolSystemPrompt": "Visible rendered tool prompt text"
+  }
 }
 ```
 
 Only administrators may override `workingDirectory` per request. `approvalPolicy` accepts `deny`, `ask`, or `auto`; non-streaming chat rejects interactive `ask` approval until streaming approval events are implemented.
+
+`systemPromptId` and `toolPromptId` identify selected prompt templates. Blank IDs use the tenant defaults. Wilson validates that selected prompt IDs belong to the request tenant and have the correct enum kind. The prompt text sent to the model is the visible text in `settings.systemPrompt` and `settings.toolSystemPrompt`; Wilson does not append a hidden secondary prompt. Tool prompt text is used only when tools are effectively enabled for the selected request.
 
 Tool-capable runners must advertise a supported tool-call format before Wilson sends tool definitions. Use `OpenAIChatCompletions` for OpenAI/OpenAI-compatible chat-completions endpoints. Use `OllamaChat` for Ollama `/api/chat` when the selected Ollama model supports tools. If a runner is disabled for tools, lacks a supported wire format, or rejects tool calls, Wilson leaves standard chat behavior available and tool diagnostics report the compatibility problem.
 
@@ -170,5 +219,7 @@ Request-history entries include tool metrics for tool-enabled chat requests:
 - `toolCallCount`
 - `toolElapsedMs`
 - `agentIterations`
+- `systemPromptId`, `systemPromptName`, `systemPromptDefault`, `systemPromptHash`
+- `toolPromptId`, `toolPromptName`, `toolPromptDefault`, `toolPromptHash`
 
 Linked tool-call records are attached after the request-history row is persisted.

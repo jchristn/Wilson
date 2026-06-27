@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added tenant-scoped system and tool prompt templates with seeded defaults, dashboard management, chat prompt selection, REST/OpenAPI coverage, SDK methods, and request-history prompt metadata.
 - Added opt-in model tool calling with built-in file read/discovery, file/directory mutation, and process execution tools, runner capability controls, and dashboard tool enablement settings.
 - Added persisted tool runs and redacted tool-call records linked to conversations, assistant messages, and request history.
 - Added tool catalog, tool-run, conversation tool-call, and request-history tool-call REST/OpenAPI endpoints.

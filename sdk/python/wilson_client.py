@@ -65,6 +65,24 @@ class WilsonClient:
     def chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1.0/api/chat", payload)
 
+    def prompts(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/v1.0/api/prompts", query=params)
+
+    def prompt(self, prompt_id: str, **params: Any) -> dict[str, Any]:
+        return self.request("GET", f"/v1.0/api/prompts/{quote(prompt_id, safe='')}", query=params)
+
+    def create_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/v1.0/api/prompts", payload)
+
+    def update_prompt(self, prompt_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("PUT", f"/v1.0/api/prompts/{quote(prompt_id, safe='')}", payload)
+
+    def delete_prompt(self, prompt_id: str) -> None:
+        self.request("DELETE", f"/v1.0/api/prompts/{quote(prompt_id, safe='')}")
+
+    def set_default_prompt(self, prompt_id: str) -> dict[str, Any]:
+        return self.request("POST", f"/v1.0/api/prompts/{quote(prompt_id, safe='')}/default", {})
+
     def tools(self) -> list[dict[str, Any]]:
         return self.request("GET", "/v1.0/api/tools")
 

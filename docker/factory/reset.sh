@@ -33,4 +33,5 @@ mkdir -p docker/data
 log "Restoring factory-default Docker settings files."
 cp docker/factory/wilson.json docker/wilson.json
 
+log "Prompt template defaults will be recreated by Wilson on next server startup."
 log "Factory reset completed."

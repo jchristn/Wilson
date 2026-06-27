@@ -6,9 +6,15 @@ Wilson includes small first-party SDK surfaces for common API automation:
 - `javascript/` - browser/Node client
 - `python/` - standard-library Python client
 
-Each SDK exposes authentication, model-server enumeration, model-server health, and read APIs for Wilson tool metadata:
+Each SDK exposes authentication, model-server enumeration, model-server health, prompt templates, and read APIs for Wilson tool metadata:
 
 - `POST /v1.0/api/chat`
+- `GET /v1.0/api/prompts`
+- `GET /v1.0/api/prompts/{id}`
+- `POST /v1.0/api/prompts`
+- `PUT /v1.0/api/prompts/{id}`
+- `DELETE /v1.0/api/prompts/{id}`
+- `POST /v1.0/api/prompts/{id}/default`
 - `GET /v1.0/api/model-runners`
 - `GET /v1.0/api/model-runners/health`
 - `GET /v1.0/api/model-runners/{id}/health`
@@ -22,7 +28,7 @@ Each SDK exposes authentication, model-server enumeration, model-server health, 
 - `GET /v1.0/api/conversations/{id}/tool-calls`
 - `GET /v1.0/api/request-history/{id}/tool-calls`
 
-Tool-enabled non-streaming chat can pass `toolsEnabled`, `approvalPolicy`, `toolNames`, and admin-only `workingDirectory` request options. Chat responses expose safe `toolCalls` trace metadata and aggregate `toolMetrics`.
+Chat requests can pass `systemPromptId` and `toolPromptId` along with visible prompt text in `settings.systemPrompt` and `settings.toolSystemPrompt`. Tool-enabled non-streaming chat can also pass `toolsEnabled`, `approvalPolicy`, `toolNames`, and admin-only `workingDirectory` request options. Chat responses expose safe `toolCalls` trace metadata and aggregate `toolMetrics`.
 
 Tool-call records are redacted summaries intended for chat history, audit review, and operations dashboards. Normal SDK responses do not expose raw model arguments, raw tool output, or provider request identifiers from chat traces.
 

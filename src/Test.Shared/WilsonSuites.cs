@@ -45,6 +45,12 @@ namespace Test.Shared
                         CreateAsyncCase("database-round-trip", "Database round trip", DatabaseRoundTripAsync),
                         CreateAsyncCase("database-parameterization", "Database parameterization", DatabaseParameterizationAsync),
                         CreateAsyncCase("postgres-database-path", "PostgreSQL database path", PostgresDatabasePathAsync, !DockerAvailable(), "Docker is not available; PostgreSQL integration test skipped."),
+                        CreateAsyncCase("prompt-template-persistence", "Prompt template persistence", PromptTemplatePersistenceAsync),
+                        CreateAsyncCase("prompt-template-tenant-isolation", "Prompt template tenant isolation", PromptTemplateTenantIsolationAsync),
+                        CreateAsyncCase("default-prompt-seeding", "Default prompt seeding", DefaultPromptSeedingAsync),
+                        CreateAsyncCase("request-history-prompt-metadata", "Request history prompt metadata", RequestHistoryPromptMetadataAsync),
+                        CreateAsyncCase("prompt-api-authorization", "Prompt API authorization", PromptApiAuthorizationAsync),
+                        CreateAsyncCase("postgres-prompt-template-path", "PostgreSQL prompt template path", PostgresPromptTemplatePathAsync, !DockerAvailable(), "Docker is not available; PostgreSQL prompt integration test skipped."),
                         CreateAsyncCase("tool-persistence", "Tool persistence", ToolPersistenceAsync),
                         CreateAsyncCase("tool-audit-redaction-persistence", "Tool audit redaction persistence", ToolAuditRedactionPersistenceAsync),
                         CreateSyncCase("id-length", "Identifier length", IdLength),
@@ -357,6 +363,329 @@ namespace Test.Shared
                 ToolExecutionRecord? storedRecord = await database.GetToolCallAsync(tenantId, record.Id).ConfigureAwait(false);
                 if (storedRecord == null || !storedRecord.Success) throw new InvalidOperationException("Expected PostgreSQL tool call update to persist.");
                 if ((await database.GetToolCallsForConversationAsync("other-tenant", conversation.Id).ConfigureAwait(false)).Count != 0) throw new InvalidOperationException("PostgreSQL tool calls leaked across tenants.");
+            }
+            finally
+            {
+                await RunProcessAsync("docker", new List<string> { "stop", containerName }, 30000).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task PromptTemplatePersistenceAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-prompts-db-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+                string tenantId = "tenant-prompts";
+                await database.CreateTenantAsync(new Tenant { Id = tenantId, Name = "Prompt Tenant" }).ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync(tenantId).ConfigureAwait(false);
+
+                PromptTemplate? defaultSystem = await database.GetDefaultPromptTemplateAsync(tenantId, PromptTemplateKind.System).ConfigureAwait(false);
+                PromptTemplate? defaultTool = await database.GetDefaultPromptTemplateAsync(tenantId, PromptTemplateKind.Tool).ConfigureAwait(false);
+                if (defaultSystem == null || defaultTool == null) throw new InvalidOperationException("Expected seeded default prompts.");
+                if (!defaultSystem.IsProtected || !defaultTool.IsProtected) throw new InvalidOperationException("Expected seeded prompts to be protected.");
+
+                PromptTemplate custom = new PromptTemplate
+                {
+                    TenantId = tenantId,
+                    Kind = PromptTemplateKind.System,
+                    Name = "Custom system",
+                    Description = "Custom system prompt",
+                    Content = "Answer in concise test language.",
+                    CreatedByUserId = "user-prompts",
+                    UpdatedByUserId = "user-prompts"
+                };
+                await database.CreatePromptTemplateAsync(custom).ConfigureAwait(false);
+                custom.Content = "Answer in updated test language.";
+                custom.IsDefault = true;
+                await database.UpdatePromptTemplateAsync(custom).ConfigureAwait(false);
+
+                PromptTemplate? stored = await database.GetPromptTemplateAsync(tenantId, custom.Id).ConfigureAwait(false);
+                if (stored == null || stored.Kind != PromptTemplateKind.System || !stored.IsDefault || !stored.Content.Contains("updated", StringComparison.Ordinal)) throw new InvalidOperationException("Expected updated custom prompt to persist.");
+                PromptTemplate? currentDefault = await database.GetDefaultPromptTemplateAsync(tenantId, PromptTemplateKind.System).ConfigureAwait(false);
+                if (currentDefault == null || !String.Equals(currentDefault.Id, custom.Id, StringComparison.Ordinal)) throw new InvalidOperationException("Expected custom prompt to become the system default.");
+
+                bool protectedDeleteRejected = false;
+                try
+                {
+                    await database.DeletePromptTemplateAsync(tenantId, defaultTool.Id).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
+                {
+                    protectedDeleteRejected = true;
+                }
+
+                if (!protectedDeleteRejected) throw new InvalidOperationException("Expected protected default prompt delete to be rejected.");
+
+                PromptTemplate disposable = new PromptTemplate
+                {
+                    TenantId = tenantId,
+                    Kind = PromptTemplateKind.Tool,
+                    Name = "Disposable tool",
+                    Description = "Disposable tool prompt",
+                    Content = "{{tool_catalog}}",
+                    CreatedByUserId = "user-prompts",
+                    UpdatedByUserId = "user-prompts"
+                };
+                await database.CreatePromptTemplateAsync(disposable).ConfigureAwait(false);
+                await database.DeletePromptTemplateAsync(tenantId, disposable.Id).ConfigureAwait(false);
+                if (await database.GetPromptTemplateAsync(tenantId, disposable.Id).ConfigureAwait(false) != null) throw new InvalidOperationException("Expected disposable prompt to be deleted.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static async Task PromptTemplateTenantIsolationAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-prompts-isolation-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+                string tenantA = "tenant-prompt-a";
+                string tenantB = "tenant-prompt-b";
+                await database.CreateTenantAsync(new Tenant { Id = tenantA, Name = "Tenant A" }).ConfigureAwait(false);
+                await database.CreateTenantAsync(new Tenant { Id = tenantB, Name = "Tenant B" }).ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync().ConfigureAwait(false);
+
+                PromptTemplate promptA = new PromptTemplate { TenantId = tenantA, Kind = PromptTemplateKind.System, Name = "Shared name", Content = "A", CreatedByUserId = "user-a", UpdatedByUserId = "user-a" };
+                PromptTemplate promptB = new PromptTemplate { TenantId = tenantB, Kind = PromptTemplateKind.System, Name = "Shared name", Content = "B", CreatedByUserId = "user-b", UpdatedByUserId = "user-b" };
+                await database.CreatePromptTemplateAsync(promptA).ConfigureAwait(false);
+                await database.CreatePromptTemplateAsync(promptB).ConfigureAwait(false);
+
+                if (await database.GetPromptTemplateAsync(tenantA, promptB.Id).ConfigureAwait(false) != null) throw new InvalidOperationException("Prompt lookup leaked across tenants.");
+                if ((await database.GetPromptTemplatesAsync(tenantA, PromptTemplateKind.System, true).ConfigureAwait(false)).Any(item => String.Equals(item.Id, promptB.Id, StringComparison.Ordinal))) throw new InvalidOperationException("Prompt listing leaked across tenants.");
+                if ((await database.GetPromptTemplatesAsync(tenantB, PromptTemplateKind.System, true).ConfigureAwait(false)).All(item => !String.Equals(item.Id, promptB.Id, StringComparison.Ordinal))) throw new InvalidOperationException("Tenant B prompt was not visible to Tenant B.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static async Task DefaultPromptSeedingAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-prompts-defaults-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+                await database.SeedAsync(new SeedSettings { AccessKey = "prompt-default-token", UserEmail = "prompt-default@example.com" }).ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync().ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync().ConfigureAwait(false);
+                Tenant tenant = (await database.GetTenantsAsync().ConfigureAwait(false)).First();
+                List<PromptTemplate> prompts = await database.GetPromptTemplatesAsync(tenant.Id, null, true).ConfigureAwait(false);
+                if (prompts.Count(item => item.Kind == PromptTemplateKind.System && item.IsDefault) != 1) throw new InvalidOperationException("Expected exactly one default system prompt.");
+                if (prompts.Count(item => item.Kind == PromptTemplateKind.Tool && item.IsDefault) != 1) throw new InvalidOperationException("Expected exactly one default tool prompt.");
+                if (prompts.Count != 2) throw new InvalidOperationException("Default prompt seeding should be idempotent.");
+
+                string newTenantId = "tenant-new-prompts";
+                await database.CreateTenantAsync(new Tenant { Id = newTenantId, Name = "New Prompt Tenant" }).ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync(newTenantId).ConfigureAwait(false);
+                if (await database.GetDefaultPromptTemplateAsync(newTenantId, PromptTemplateKind.System).ConfigureAwait(false) == null) throw new InvalidOperationException("Expected new tenant system default prompt.");
+                if (await database.GetDefaultPromptTemplateAsync(newTenantId, PromptTemplateKind.Tool).ConfigureAwait(false) == null) throw new InvalidOperationException("Expected new tenant tool default prompt.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static async Task RequestHistoryPromptMetadataAsync()
+        {
+            string filename = Path.Combine(Path.GetTempPath(), "wilson-prompts-history-" + Guid.NewGuid().ToString("N") + ".db");
+            DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Sqlite", Filename = filename });
+            try
+            {
+                await database.InitializeAsync().ConfigureAwait(false);
+                string tenantId = "tenant-history-prompts";
+                await database.CreateTenantAsync(new Tenant { Id = tenantId, Name = "History Prompt Tenant" }).ConfigureAwait(false);
+                RequestHistoryEntry entry = new RequestHistoryEntry
+                {
+                    TenantId = tenantId,
+                    UserId = "user-history",
+                    Method = "POST",
+                    Path = "/v1.0/api/chat",
+                    StatusCode = 200,
+                    SystemPromptId = "system-prompt",
+                    SystemPromptName = "System prompt",
+                    SystemPromptDefault = true,
+                    SystemPromptHash = "abc123",
+                    ToolPromptId = "tool-prompt",
+                    ToolPromptName = "Tool prompt",
+                    ToolPromptDefault = false,
+                    ToolPromptHash = "def456"
+                };
+                await database.CreateRequestHistoryAsync(entry).ConfigureAwait(false);
+
+                RequestHistoryEntry stored = (await database.GetRequestHistoryAsync(tenantId).ConfigureAwait(false)).Single();
+                if (!String.Equals(stored.SystemPromptId, "system-prompt", StringComparison.Ordinal) || !stored.SystemPromptDefault || !String.Equals(stored.SystemPromptHash, "abc123", StringComparison.Ordinal)) throw new InvalidOperationException("Expected system prompt request-history metadata.");
+                if (!String.Equals(stored.ToolPromptId, "tool-prompt", StringComparison.Ordinal) || stored.ToolPromptDefault || !String.Equals(stored.ToolPromptHash, "def456", StringComparison.Ordinal)) throw new InvalidOperationException("Expected tool prompt request-history metadata.");
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(filename)) File.Delete(filename);
+            }
+        }
+
+        private static async Task PromptApiAuthorizationAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-prompts-api-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            string settingsFile = Path.Combine(workspace, "wilson.json");
+            string databaseFile = Path.Combine(workspace, "wilson.db");
+            int port = GetFreePort();
+
+            try
+            {
+                Settings settings = new Settings
+                {
+                    Rest = new RestSettings { Hostname = "127.0.0.1", Port = port, Ssl = false },
+                    Database = new DatabaseSettings { Type = "Sqlite", Filename = databaseFile },
+                    Auth = new AuthSettings { AdminBearerTokens = new List<string> { "test-admin-token" } },
+                    RequestHistory = new RequestHistorySettings { Enabled = false },
+                    Seed = new SeedSettings { AccessKey = "tenant-admin-token", UserEmail = "prompt-admin@example.com" }
+                };
+                File.WriteAllText(settingsFile, JsonSerializer.Serialize(settings, TestJson()));
+                WilsonServer server = await WilsonServer.CreateAsync(new[] { settingsFile }).ConfigureAwait(false);
+
+                Tenant tenant = (await server.Database.GetTenantsAsync().ConfigureAwait(false)).First();
+                User normalUser = new User { TenantId = tenant.Id, FirstName = "Prompt", LastName = "User", Email = "prompt-user@example.com", IsAdmin = false, IsTenantAdmin = false };
+                await server.Database.CreateUserAsync(normalUser).ConfigureAwait(false);
+                await server.Database.CreateCredentialAsync(new Credential { TenantId = tenant.Id, UserId = normalUser.Id, Name = "Prompt user token", AccessKey = "prompt-user-token" }).ConfigureAwait(false);
+
+                using (CancellationTokenSource serverStop = new CancellationTokenSource())
+                using (HttpClient adminClient = new HttpClient())
+                using (HttpClient tenantAdminClient = new HttpClient())
+                using (HttpClient userClient = new HttpClient())
+                using (HttpClient anonymousClient = new HttpClient())
+                {
+                    Task serverTask = Task.Run(() => server.Server.StartAsync(serverStop.Token), serverStop.Token);
+                    adminClient.BaseAddress = new Uri("http://127.0.0.1:" + port);
+                    adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-admin-token");
+                    tenantAdminClient.BaseAddress = adminClient.BaseAddress;
+                    tenantAdminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "tenant-admin-token");
+                    userClient.BaseAddress = adminClient.BaseAddress;
+                    userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "prompt-user-token");
+                    anonymousClient.BaseAddress = adminClient.BaseAddress;
+
+                    try
+                    {
+                        await WaitForHttpAsync(adminClient).ConfigureAwait(false);
+
+                        using (JsonDocument listed = await GetJsonDocumentAsync(userClient, "/v1.0/api/prompts?kind=system").ConfigureAwait(false))
+                        {
+                            AssertEnumerationCount(listed, 1, "active system prompts for normal user");
+                        }
+
+                        await ExpectGetStatusAsync(anonymousClient, "/v1.0/api/prompts", HttpStatusCode.Unauthorized).ConfigureAwait(false);
+                        await ExpectStatusAsync(userClient, "/v1.0/api/prompts", new { kind = "System", name = "Denied", content = "Denied" }, HttpStatusCode.Unauthorized).ConfigureAwait(false);
+
+                        PromptTemplate created = await PostJsonAsync<PromptTemplate>(
+                            tenantAdminClient,
+                            "/v1.0/api/prompts",
+                            new PromptTemplate { TenantId = tenant.Id, Kind = PromptTemplateKind.Tool, Name = "Tenant admin tool prompt", Description = "Created by tenant admin", Content = "{{tool_catalog}}" }).ConfigureAwait(false);
+                        if (created.Kind != PromptTemplateKind.Tool || String.IsNullOrWhiteSpace(created.TenantId)) throw new InvalidOperationException("Expected tenant admin prompt create to return tool prompt.");
+
+                        using (JsonDocument toolPrompts = await GetJsonDocumentAsync(adminClient, "/v1.0/api/prompts?tenantId=" + tenant.Id + "&kind=tool&includeInactive=true").ConfigureAwait(false))
+                        {
+                            AssertEnumerationCount(toolPrompts, 2, "global admin scoped tool prompts");
+                        }
+
+                        PromptTemplate updatedDefault = await PostJsonAsync<PromptTemplate>(tenantAdminClient, "/v1.0/api/prompts/" + created.Id + "/default", new { }).ConfigureAwait(false);
+                        if (!updatedDefault.IsDefault) throw new InvalidOperationException("Expected set-default endpoint to mark prompt default.");
+
+                        using (JsonDocument openApi = await GetJsonDocumentAsync(adminClient, "/openapi.json").ConfigureAwait(false))
+                        {
+                            JsonElement root = openApi.RootElement;
+                            if (!root.GetProperty("paths").TryGetProperty("/v1.0/api/prompts", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI prompt list path.");
+                            if (!root.GetProperty("components").GetProperty("schemas").TryGetProperty("PromptTemplate", out JsonElement _)) throw new InvalidOperationException("Expected OpenAPI prompt template schema.");
+                        }
+                    }
+                    finally
+                    {
+                        serverStop.Cancel();
+                        StopServerIfRunning(server);
+                        try
+                        {
+                            await serverTask.ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                TryDeleteDirectory(workspace);
+            }
+        }
+
+        private static async Task PostgresPromptTemplatePathAsync()
+        {
+            int port = GetFreePort();
+            string containerName = "wilson-test-postgres-prompts-" + Guid.NewGuid().ToString("N");
+            string connectionString = "Host=127.0.0.1;Port=" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + ";Database=wilson_test;Username=wilson;Password=wilson";
+            ProcessResult run = await RunProcessAsync(
+                "docker",
+                new List<string>
+                {
+                    "run",
+                    "-d",
+                    "--rm",
+                    "--name",
+                    containerName,
+                    "-e",
+                    "POSTGRES_DB=wilson_test",
+                    "-e",
+                    "POSTGRES_USER=wilson",
+                    "-e",
+                    "POSTGRES_PASSWORD=wilson",
+                    "-p",
+                    "127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":5432",
+                    "postgres:16-alpine"
+                },
+                60000).ConfigureAwait(false);
+            if (run.ExitCode != 0) throw new InvalidOperationException("Unable to start PostgreSQL prompt test container: " + run.Error);
+
+            try
+            {
+                DatabaseDriver database = new DatabaseDriver(new DatabaseSettings { Type = "Postgres", ConnectionString = connectionString });
+                await WaitForPostgresAsync(database).ConfigureAwait(false);
+                await database.SeedAsync(new SeedSettings { AccessKey = "postgres-prompt-token", UserEmail = "postgres-prompt@example.com" }).ConfigureAwait(false);
+                await database.EnsureDefaultPromptTemplatesAsync().ConfigureAwait(false);
+                Tenant tenant = (await database.GetTenantsAsync().ConfigureAwait(false)).First();
+                PromptTemplate? defaultSystem = await database.GetDefaultPromptTemplateAsync(tenant.Id, PromptTemplateKind.System).ConfigureAwait(false);
+                PromptTemplate? defaultTool = await database.GetDefaultPromptTemplateAsync(tenant.Id, PromptTemplateKind.Tool).ConfigureAwait(false);
+                if (defaultSystem == null || defaultTool == null) throw new InvalidOperationException("Expected PostgreSQL default prompts.");
+
+                RequestHistoryEntry entry = new RequestHistoryEntry
+                {
+                    TenantId = tenant.Id,
+                    UserId = "postgres-prompt-user",
+                    Method = "POST",
+                    Path = "/v1.0/api/chat",
+                    StatusCode = 200,
+                    SystemPromptId = defaultSystem.Id,
+                    SystemPromptName = defaultSystem.Name,
+                    SystemPromptDefault = true,
+                    SystemPromptHash = "hash-system",
+                    ToolPromptId = defaultTool.Id,
+                    ToolPromptName = defaultTool.Name,
+                    ToolPromptDefault = true,
+                    ToolPromptHash = "hash-tool"
+                };
+                await database.CreateRequestHistoryAsync(entry).ConfigureAwait(false);
+                RequestHistoryEntry stored = (await database.GetRequestHistoryAsync(tenant.Id).ConfigureAwait(false)).Single();
+                if (!String.Equals(stored.SystemPromptId, defaultSystem.Id, StringComparison.Ordinal) || !String.Equals(stored.ToolPromptId, defaultTool.Id, StringComparison.Ordinal)) throw new InvalidOperationException("Expected PostgreSQL prompt request-history metadata.");
             }
             finally
             {
@@ -737,6 +1066,7 @@ namespace Test.Shared
                 Wilson.Core.Helpers.IdGenerator.Message(),
                 Wilson.Core.Helpers.IdGenerator.Feedback(),
                 Wilson.Core.Helpers.IdGenerator.Request(),
+                Wilson.Core.Helpers.IdGenerator.PromptTemplate(),
                 Wilson.Core.Helpers.IdGenerator.ToolRun(),
                 Wilson.Core.Helpers.IdGenerator.ToolCall(),
                 Wilson.Core.Helpers.IdGenerator.ToolExecution(),

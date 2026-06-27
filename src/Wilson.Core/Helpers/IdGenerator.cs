@@ -91,6 +91,14 @@ namespace Wilson.Core.Helpers
         }
 
         /// <summary>
+        /// Generate a prompt template identifier.
+        /// </summary>
+        public static string PromptTemplate()
+        {
+            return _Generator.GenerateKSortable("prm_", _Length);
+        }
+
+        /// <summary>
         /// Generate an auth session identifier.
         /// </summary>
         public static string Session()

@@ -55,6 +55,7 @@ namespace Wilson.Core.Database
                     "CREATE TABLE IF NOT EXISTS messages (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, conversationid TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, runnerid TEXT NOT NULL, model TEXT NOT NULL, tokenestimate INTEGER NOT NULL, createdutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS feedback (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, messageid TEXT NOT NULL, rating INTEGER NOT NULL, comment TEXT NOT NULL, createdutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS requesthistory (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NULL, userid TEXT NULL, method TEXT NOT NULL, path TEXT NOT NULL, statuscode INTEGER NOT NULL, durationms REAL NOT NULL, createdutc TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS prompttemplates (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, content TEXT NOT NULL, isdefault INTEGER NOT NULL, isprotected INTEGER NOT NULL, active INTEGER NOT NULL, createdbyuserid TEXT NOT NULL, updatedbyuserid TEXT NOT NULL, createdutc TEXT NOT NULL, lastupdateutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS toolruns (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, runnerid TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, startedutc TEXT NOT NULL, completedutc TEXT NULL, elapsedms REAL NOT NULL, iterationcount INTEGER NOT NULL, toolcallcount INTEGER NOT NULL, errorcount INTEGER NOT NULL, createdutc TEXT NOT NULL)",
                     "CREATE TABLE IF NOT EXISTS toolcalls (rowid " + idColumn + ", id TEXT UNIQUE NOT NULL, tenantid TEXT NOT NULL, userid TEXT NOT NULL, conversationid TEXT NOT NULL, runid TEXT NOT NULL, requesthistoryid TEXT NULL, traceid TEXT NULL, origin TEXT NULL, assistantmessageid TEXT NULL, providertoolcallid TEXT NULL, toolcallid TEXT NOT NULL, toolname TEXT NOT NULL, iteration INTEGER NOT NULL, sequencenumber INTEGER NOT NULL, status TEXT NOT NULL, approvalpolicy TEXT NOT NULL, approvedbyuserid TEXT NULL, argumentsjson TEXT NOT NULL, resultjson TEXT NOT NULL, resultsummaryjson TEXT NOT NULL, resultpreview TEXT NOT NULL, success INTEGER NOT NULL, denied INTEGER NOT NULL, truncated INTEGER NOT NULL, outputcharacters INTEGER NOT NULL, inputbytes INTEGER NOT NULL, outputbytes INTEGER NOT NULL, errortype TEXT NULL, errorcode TEXT NULL, errormessage TEXT NULL, provider TEXT NULL, model TEXT NULL, startedutc TEXT NOT NULL, completedutc TEXT NULL, elapsedms REAL NOT NULL, active INTEGER NOT NULL, createdutc TEXT NOT NULL, updatedutc TEXT NOT NULL)"
                 };
@@ -89,6 +90,18 @@ namespace Wilson.Core.Database
                 EnsureColumn(connection, "requesthistory", "toolcallcount", "INTEGER NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "requesthistory", "toolelapsedms", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "requesthistory", "agentiterations", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "systempromptid", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "systempromptname", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "systempromptdefault", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "systemprompthash", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "toolpromptid", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "toolpromptname", "TEXT NOT NULL DEFAULT ''");
+                EnsureColumn(connection, "requesthistory", "toolpromptdefault", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn(connection, "requesthistory", "toolprompthash", "TEXT NOT NULL DEFAULT ''");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_prompttemplates_tenant_kind_active ON prompttemplates (tenantid,kind,active)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_prompttemplates_tenant_kind_default ON prompttemplates (tenantid,kind,isdefault)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_prompttemplates_tenant_name ON prompttemplates (tenantid,name)");
+                EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_prompttemplates_tenant_updated ON prompttemplates (tenantid,lastupdateutc)");
                 EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolruns_tenant_conversation_created ON toolruns (tenantid,conversationid,createdutc)");
                 EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_conversation_run ON toolcalls (tenantid,conversationid,runid)");
                 EnsureIndex(connection, "CREATE INDEX IF NOT EXISTS idx_toolcalls_tenant_assistantmessage ON toolcalls (tenantid,assistantmessageid)");
@@ -141,6 +154,48 @@ namespace Wilson.Core.Database
                 };
                 await CreateCredentialAsync(credential, token).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Ensure every tenant has default prompt templates.
+        /// </summary>
+        public async Task EnsureDefaultPromptTemplatesAsync(CancellationToken token = default)
+        {
+            List<Tenant> tenants = await GetTenantsAsync(token).ConfigureAwait(false);
+            foreach (Tenant tenant in tenants)
+            {
+                await EnsureDefaultPromptTemplatesAsync(tenant.Id, token).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Ensure a tenant has default prompt templates.
+        /// </summary>
+        public async Task EnsureDefaultPromptTemplatesAsync(string tenantId, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(tenantId)) throw new ArgumentException("Tenant ID is required.", nameof(tenantId));
+            await EnsureDefaultPromptTemplateAsync(tenantId, PromptTemplateKind.System, PromptTemplateDefaults.DefaultSystemPromptName, "Default Wilson behavior for chat responses.", PromptTemplateDefaults.DefaultSystemPromptContent, token).ConfigureAwait(false);
+            await EnsureDefaultPromptTemplateAsync(tenantId, PromptTemplateKind.Tool, PromptTemplateDefaults.DefaultToolPromptName, "Default Wilson instructions for tool-capable chat.", PromptTemplateDefaults.DefaultToolPromptContent, token).ConfigureAwait(false);
+        }
+
+        private async Task EnsureDefaultPromptTemplateAsync(string tenantId, PromptTemplateKind kind, string name, string description, string content, CancellationToken token)
+        {
+            PromptTemplate? existing = await GetDefaultPromptTemplateAsync(tenantId, kind, token).ConfigureAwait(false);
+            if (existing != null) return;
+            PromptTemplate prompt = new PromptTemplate
+            {
+                TenantId = tenantId,
+                Kind = kind,
+                Name = name,
+                Description = description,
+                Content = content,
+                IsDefault = true,
+                IsProtected = true,
+                Active = true,
+                CreatedByUserId = "system",
+                UpdatedByUserId = "system"
+            };
+            await CreatePromptTemplateAsync(prompt, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -291,6 +346,91 @@ namespace Wilson.Core.Database
         }
 
         /// <summary>
+        /// Create a prompt template.
+        /// </summary>
+        public async Task CreatePromptTemplateAsync(PromptTemplate item, CancellationToken token = default)
+        {
+            ValidatePromptTemplate(item);
+            if (item.IsDefault) await ClearDefaultPromptTemplateAsync(item.TenantId, item.Kind, token).ConfigureAwait(false);
+            await ExecuteAsync("INSERT INTO prompttemplates (id,tenantid,kind,name,description,content,isdefault,isprotected,active,createdbyuserid,updatedbyuserid,createdutc,lastupdateutc) VALUES (@id,@tenantid,@kind,@name,@description,@content,@isdefault,@isprotected,@active,@createdbyuserid,@updatedbyuserid,@createdutc,@lastupdateutc)", AddPromptTemplate, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Update a prompt template.
+        /// </summary>
+        public async Task UpdatePromptTemplateAsync(PromptTemplate item, CancellationToken token = default)
+        {
+            ValidatePromptTemplate(item);
+            item.LastUpdateUtc = DateTime.UtcNow;
+            if (item.IsDefault) await ClearDefaultPromptTemplateAsync(item.TenantId, item.Kind, token).ConfigureAwait(false);
+            await ExecuteAsync("UPDATE prompttemplates SET kind=@kind, name=@name, description=@description, content=@content, isdefault=@isdefault, isprotected=@isprotected, active=@active, updatedbyuserid=@updatedbyuserid, lastupdateutc=@lastupdateutc WHERE tenantid=@tenantid AND id=@id", AddPromptTemplate, item, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Delete a prompt template.
+        /// </summary>
+        public async Task DeletePromptTemplateAsync(string tenantId, string id, CancellationToken token = default)
+        {
+            PromptTemplate? existing = await GetPromptTemplateAsync(tenantId, id, token).ConfigureAwait(false);
+            if (existing == null) return;
+            if (existing.IsDefault || existing.IsProtected) throw new InvalidOperationException("Default or protected prompt templates cannot be deleted.");
+            await ExecuteSimpleAsync("DELETE FROM prompttemplates WHERE tenantid=@tenantid AND id=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get prompt templates.
+        /// </summary>
+        public async Task<List<PromptTemplate>> GetPromptTemplatesAsync(string? tenantId, PromptTemplateKind? kind = null, bool includeInactive = false, CancellationToken token = default)
+        {
+            List<string> filters = new List<string>();
+            if (!String.IsNullOrWhiteSpace(tenantId)) filters.Add("tenantid=@tenantid");
+            if (kind.HasValue) filters.Add("kind=@kind");
+            if (!includeInactive) filters.Add("active=1");
+            string sql = "SELECT * FROM prompttemplates" + (filters.Count > 0 ? " WHERE " + String.Join(" AND ", filters) : String.Empty) + " ORDER BY kind ASC, isdefault DESC, name ASC";
+            return await QueryAsync(sql, ReadPromptTemplate, command =>
+            {
+                if (!String.IsNullOrWhiteSpace(tenantId)) Add(command, "@tenantid", tenantId);
+                if (kind.HasValue) Add(command, "@kind", PromptKindValue(kind.Value));
+            }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Get a prompt template by identifier.
+        /// </summary>
+        public async Task<PromptTemplate?> GetPromptTemplateAsync(string tenantId, string id, CancellationToken token = default)
+        {
+            List<PromptTemplate> items = await QueryAsync("SELECT * FROM prompttemplates WHERE tenantid=@tenantid AND id=@id", ReadPromptTemplate, command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); }, token).ConfigureAwait(false);
+            return items.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Get a tenant default prompt template by kind.
+        /// </summary>
+        public async Task<PromptTemplate?> GetDefaultPromptTemplateAsync(string tenantId, PromptTemplateKind kind, CancellationToken token = default)
+        {
+            List<PromptTemplate> items = await QueryAsync("SELECT * FROM prompttemplates WHERE tenantid=@tenantid AND kind=@kind AND isdefault=1 AND active=1 ORDER BY lastupdateutc DESC", ReadPromptTemplate, command => { Add(command, "@tenantid", tenantId); Add(command, "@kind", PromptKindValue(kind)); }, token).ConfigureAwait(false);
+            return items.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Set the default prompt template for a tenant and kind.
+        /// </summary>
+        public async Task SetDefaultPromptTemplateAsync(string tenantId, string id, PromptTemplateKind kind, string updatedByUserId, CancellationToken token = default)
+        {
+            PromptTemplate? existing = await GetPromptTemplateAsync(tenantId, id, token).ConfigureAwait(false);
+            if (existing == null) throw new KeyNotFoundException("Prompt template not found.");
+            if (existing.Kind != kind) throw new ArgumentException("Prompt template kind mismatch.");
+            if (!existing.Active) throw new ArgumentException("Inactive prompt templates cannot be made default.");
+            await ClearDefaultPromptTemplateAsync(tenantId, kind, token).ConfigureAwait(false);
+            await ExecuteSimpleAsync("UPDATE prompttemplates SET isdefault=1, updatedbyuserid=@updatedbyuserid, lastupdateutc=@lastupdateutc WHERE tenantid=@tenantid AND id=@id", command => { Add(command, "@tenantid", tenantId); Add(command, "@id", id); Add(command, "@updatedbyuserid", updatedByUserId ?? String.Empty); Add(command, "@lastupdateutc", Iso(DateTime.UtcNow)); }, token).ConfigureAwait(false);
+        }
+
+        private async Task ClearDefaultPromptTemplateAsync(string tenantId, PromptTemplateKind kind, CancellationToken token)
+        {
+            await ExecuteSimpleAsync("UPDATE prompttemplates SET isdefault=0, lastupdateutc=@lastupdateutc WHERE tenantid=@tenantid AND kind=@kind AND isdefault=1", command => { Add(command, "@tenantid", tenantId); Add(command, "@kind", PromptKindValue(kind)); Add(command, "@lastupdateutc", Iso(DateTime.UtcNow)); }, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// Create a conversation.
         /// </summary>
         public async Task CreateConversationAsync(Conversation item, CancellationToken token = default)
@@ -376,7 +516,7 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task CreateRequestHistoryAsync(RequestHistoryEntry item, CancellationToken token = default)
         {
-            await ExecuteAsync("INSERT INTO requesthistory (id,tenantid,userid,method,path,statuscode,durationms,requestheaders,requestbody,responseheaders,responsebody,timetofirsttokenms,streamingtimems,totaltimems,tokensused,toolrunid,toolcallcount,toolelapsedms,agentiterations,createdutc) VALUES (@id,@tenantid,@userid,@method,@path,@statuscode,@durationms,@requestheaders,@requestbody,@responseheaders,@responsebody,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@toolrunid,@toolcallcount,@toolelapsedms,@agentiterations,@createdutc)", AddRequestHistory, item, token).ConfigureAwait(false);
+            await ExecuteAsync("INSERT INTO requesthistory (id,tenantid,userid,method,path,statuscode,durationms,requestheaders,requestbody,responseheaders,responsebody,timetofirsttokenms,streamingtimems,totaltimems,tokensused,toolrunid,toolcallcount,toolelapsedms,agentiterations,systempromptid,systempromptname,systempromptdefault,systemprompthash,toolpromptid,toolpromptname,toolpromptdefault,toolprompthash,createdutc) VALUES (@id,@tenantid,@userid,@method,@path,@statuscode,@durationms,@requestheaders,@requestbody,@responseheaders,@responsebody,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@toolrunid,@toolcallcount,@toolelapsedms,@agentiterations,@systempromptid,@systempromptname,@systempromptdefault,@systemprompthash,@toolpromptid,@toolpromptname,@toolpromptdefault,@toolprompthash,@createdutc)", AddRequestHistory, item, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -723,6 +863,37 @@ namespace Wilson.Core.Database
             return new Credential { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), Name = S(record, "name"), AccessKey = S(record, "accesskey"), SecretLast4 = S(record, "secretlast4"), Active = B(record, "active"), IsProtected = B(record, "isprotected"), CreatedUtc = D(record, "createdutc"), LastUpdateUtc = D(record, "lastupdateutc"), LastUsedUtc = N(record, "lastusedutc") };
         }
 
+        private static void ValidatePromptTemplate(PromptTemplate item)
+        {
+            if (String.IsNullOrWhiteSpace(item.TenantId)) throw new ArgumentException("Prompt template tenant ID is required.");
+            if (String.IsNullOrWhiteSpace(item.Name)) throw new ArgumentException("Prompt template name is required.");
+            if (String.IsNullOrWhiteSpace(item.Content)) throw new ArgumentException("Prompt template content is required.");
+            item.Name = item.Name.Trim();
+            item.Description = item.Description?.Trim() ?? String.Empty;
+            item.Content = item.Content.Trim();
+        }
+
+        private static string PromptKindValue(PromptTemplateKind kind)
+        {
+            return kind == PromptTemplateKind.Tool ? "tool" : "system";
+        }
+
+        private static PromptTemplateKind ReadPromptKind(IDataRecord record)
+        {
+            string value = S(record, "kind");
+            return String.Equals(value, "tool", StringComparison.OrdinalIgnoreCase) ? PromptTemplateKind.Tool : PromptTemplateKind.System;
+        }
+
+        private static void AddPromptTemplate(IDbCommand command, PromptTemplate item)
+        {
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@kind", PromptKindValue(item.Kind)); Add(command, "@name", item.Name); Add(command, "@description", item.Description); Add(command, "@content", item.Content); Add(command, "@isdefault", item.IsDefault ? 1 : 0); Add(command, "@isprotected", item.IsProtected ? 1 : 0); Add(command, "@active", item.Active ? 1 : 0); Add(command, "@createdbyuserid", item.CreatedByUserId); Add(command, "@updatedbyuserid", item.UpdatedByUserId); Add(command, "@createdutc", Iso(item.CreatedUtc)); Add(command, "@lastupdateutc", Iso(item.LastUpdateUtc));
+        }
+
+        private static PromptTemplate ReadPromptTemplate(IDataRecord record)
+        {
+            return new PromptTemplate { Id = S(record, "id"), TenantId = S(record, "tenantid"), Kind = ReadPromptKind(record), Name = S(record, "name"), Description = S(record, "description"), Content = S(record, "content"), IsDefault = B(record, "isdefault"), IsProtected = B(record, "isprotected"), Active = B(record, "active"), CreatedByUserId = S(record, "createdbyuserid"), UpdatedByUserId = S(record, "updatedbyuserid"), CreatedUtc = D(record, "createdutc"), LastUpdateUtc = D(record, "lastupdateutc") };
+        }
+
         private static void AddConversation(IDbCommand command, Conversation item)
         {
             Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@title", item.Title); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@active", item.Active ? 1 : 0); Add(command, "@createdutc", Iso(item.CreatedUtc)); Add(command, "@lastupdateutc", Iso(item.LastUpdateUtc));
@@ -755,12 +926,12 @@ namespace Wilson.Core.Database
 
         private static void AddRequestHistory(IDbCommand command, RequestHistoryEntry item)
         {
-            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@method", item.Method); Add(command, "@path", item.Path); Add(command, "@statuscode", item.StatusCode); Add(command, "@durationms", item.DurationMs); Add(command, "@requestheaders", item.RequestHeaders); Add(command, "@requestbody", item.RequestBody); Add(command, "@responseheaders", item.ResponseHeaders); Add(command, "@responsebody", item.ResponseBody); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@toolrunid", item.ToolRunId); Add(command, "@toolcallcount", item.ToolCallCount); Add(command, "@toolelapsedms", item.ToolElapsedMs); Add(command, "@agentiterations", item.AgentIterations); Add(command, "@createdutc", Iso(item.CreatedUtc));
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@userid", item.UserId); Add(command, "@method", item.Method); Add(command, "@path", item.Path); Add(command, "@statuscode", item.StatusCode); Add(command, "@durationms", item.DurationMs); Add(command, "@requestheaders", item.RequestHeaders); Add(command, "@requestbody", item.RequestBody); Add(command, "@responseheaders", item.ResponseHeaders); Add(command, "@responsebody", item.ResponseBody); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@toolrunid", item.ToolRunId); Add(command, "@toolcallcount", item.ToolCallCount); Add(command, "@toolelapsedms", item.ToolElapsedMs); Add(command, "@agentiterations", item.AgentIterations); Add(command, "@systempromptid", item.SystemPromptId); Add(command, "@systempromptname", item.SystemPromptName); Add(command, "@systempromptdefault", item.SystemPromptDefault ? 1 : 0); Add(command, "@systemprompthash", item.SystemPromptHash); Add(command, "@toolpromptid", item.ToolPromptId); Add(command, "@toolpromptname", item.ToolPromptName); Add(command, "@toolpromptdefault", item.ToolPromptDefault ? 1 : 0); Add(command, "@toolprompthash", item.ToolPromptHash); Add(command, "@createdutc", Iso(item.CreatedUtc));
         }
 
         private static RequestHistoryEntry ReadRequestHistory(IDataRecord record)
         {
-            return new RequestHistoryEntry { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), Method = S(record, "method"), Path = S(record, "path"), StatusCode = Convert.ToInt32(R(record, "statuscode")), DurationMs = R(record, "durationms"), RequestHeaders = S(record, "requestheaders"), RequestBody = S(record, "requestbody"), ResponseHeaders = S(record, "responseheaders"), ResponseBody = S(record, "responsebody"), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), ToolRunId = S(record, "toolrunid"), ToolCallCount = Convert.ToInt32(R(record, "toolcallcount")), ToolElapsedMs = R(record, "toolelapsedms"), AgentIterations = Convert.ToInt32(R(record, "agentiterations")), CreatedUtc = D(record, "createdutc") };
+            return new RequestHistoryEntry { Id = S(record, "id"), TenantId = S(record, "tenantid"), UserId = S(record, "userid"), Method = S(record, "method"), Path = S(record, "path"), StatusCode = Convert.ToInt32(R(record, "statuscode")), DurationMs = R(record, "durationms"), RequestHeaders = S(record, "requestheaders"), RequestBody = S(record, "requestbody"), ResponseHeaders = S(record, "responseheaders"), ResponseBody = S(record, "responsebody"), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), ToolRunId = S(record, "toolrunid"), ToolCallCount = Convert.ToInt32(R(record, "toolcallcount")), ToolElapsedMs = R(record, "toolelapsedms"), AgentIterations = Convert.ToInt32(R(record, "agentiterations")), SystemPromptId = S(record, "systempromptid"), SystemPromptName = S(record, "systempromptname"), SystemPromptDefault = B(record, "systempromptdefault"), SystemPromptHash = S(record, "systemprompthash"), ToolPromptId = S(record, "toolpromptid"), ToolPromptName = S(record, "toolpromptname"), ToolPromptDefault = B(record, "toolpromptdefault"), ToolPromptHash = S(record, "toolprompthash"), CreatedUtc = D(record, "createdutc") };
         }
 
         private static void AddToolRun(IDbCommand command, ToolRun item)

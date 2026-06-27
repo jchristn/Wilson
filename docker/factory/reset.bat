@@ -23,6 +23,7 @@ mkdir docker\data >nul 2>nul
 echo [factory-reset] Restoring factory-default Docker settings files.
 copy /y docker\factory\wilson.json docker\wilson.json >nul
 
+echo [factory-reset] Prompt template defaults will be recreated by Wilson on next server startup.
 echo [factory-reset] Factory reset completed.
 popd >nul
 exit /b 0

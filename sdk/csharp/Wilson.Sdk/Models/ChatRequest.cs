@@ -24,6 +24,14 @@ namespace Wilson.Sdk.Models
         [JsonPropertyName("prompt")]
         public string Prompt { get; set; } = string.Empty;
 
+        /// <summary>Selected system prompt template identifier. Leave empty to use the tenant default.</summary>
+        [JsonPropertyName("systemPromptId")]
+        public string? SystemPromptId { get; set; }
+
+        /// <summary>Selected tool prompt template identifier. Leave empty to use the tenant default when tools are enabled.</summary>
+        [JsonPropertyName("toolPromptId")]
+        public string? ToolPromptId { get; set; }
+
         /// <summary>Completion settings object.</summary>
         [JsonPropertyName("settings")]
         public object? Settings { get; set; }

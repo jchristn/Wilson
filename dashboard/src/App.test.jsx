@@ -170,6 +170,60 @@ describe('ApiClient', () => {
     });
   });
 
+  it('builds prompt template CRUD requests', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ id: 'prm_123' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    })));
+    const api = new ApiClient('http://localhost:9400', 'token');
+
+    await api.prompts({ tenantId: 'tenant/one', kind: 'Tool', includeInactive: true, pageNumber: 2 });
+    await api.prompt('prm/one', { tenantId: 'tenant/one' });
+    await api.createPrompt({ kind: 'System', name: 'A', content: 'Prompt' });
+    await api.updatePrompt('prm two', { kind: 'Tool', name: 'B', content: '{{tool_catalog}}' });
+    await api.setDefaultPrompt('prm three');
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await api.deletePrompt('prm four');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9400/v1.0/api/prompts?tenantId=tenant%2Fone&kind=Tool&includeInactive=true&pageNumber=2');
+    expect(fetchMock.mock.calls[1][0]).toBe('http://localhost:9400/v1.0/api/prompts/prm%2Fone?tenantId=tenant%2Fone');
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ kind: 'System', name: 'A', content: 'Prompt' }) });
+    expect(fetchMock.mock.calls[3][0]).toBe('http://localhost:9400/v1.0/api/prompts/prm%20two');
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'PUT', body: JSON.stringify({ kind: 'Tool', name: 'B', content: '{{tool_catalog}}' }) });
+    expect(fetchMock.mock.calls[4][0]).toBe('http://localhost:9400/v1.0/api/prompts/prm%20three/default');
+    expect(fetchMock.mock.calls[5][0]).toBe('http://localhost:9400/v1.0/api/prompts/prm%20four');
+    expect(fetchMock.mock.calls[5][1].method).toBe('DELETE');
+  });
+
+  it('sends selected prompt IDs and visible prompt text in chat requests', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ answer: 'ok' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+    const api = new ApiClient('http://localhost:9400', 'token');
+
+    await api.chat({
+      runnerId: 'local-ollama',
+      model: 'gpt-oss:20b',
+      prompt: 'What tools do you have?',
+      systemPromptId: 'prm_system',
+      toolPromptId: 'prm_tool',
+      settings: {
+        systemPrompt: 'Visible system prompt',
+        toolSystemPrompt: 'Visible tool prompt with catalog'
+      },
+      toolsEnabled: true
+    });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://localhost:9400/v1.0/api/chat');
+    const body = JSON.parse(options.body);
+    expect(body.systemPromptId).toBe('prm_system');
+    expect(body.toolPromptId).toBe('prm_tool');
+    expect(body.settings.systemPrompt).toBe('Visible system prompt');
+    expect(body.settings.toolSystemPrompt).toBe('Visible tool prompt with catalog');
+  });
+
   it('sends raw bodies without JSON stringifying them', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok', { status: 200 }));
     const api = new ApiClient('http://localhost:9400', 'token');

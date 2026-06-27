@@ -2,10 +2,12 @@ namespace Wilson.Sdk
 {
     using System;
     using System.Collections.Generic;
+    using System.Globalization;
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Text;
     using System.Text.Json;
+    using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
     using Wilson.Sdk.Models;
@@ -15,7 +17,7 @@ namespace Wilson.Sdk
         private readonly HttpClient _HttpClient;
         private readonly bool _DisposeClient;
         private readonly string _BaseUrl;
-        private readonly JsonSerializerOptions _Json = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        private readonly JsonSerializerOptions _Json = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, Converters = { new JsonStringEnumConverter() } };
 
         public WilsonClient(string baseUrl, string? token = null, HttpClient? httpClient = null)
         {
@@ -58,6 +60,91 @@ namespace Wilson.Sdk
         {
             if (String.IsNullOrWhiteSpace(runnerId)) throw new ArgumentException("Runner ID is required.", nameof(runnerId));
             return SendAsync<EndpointHealthStatus>(HttpMethod.Get, "/v1.0/api/model-runners/" + Uri.EscapeDataString(runnerId) + "/health", null, token);
+        }
+
+        /// <summary>
+        /// List tenant-scoped prompt templates.
+        /// </summary>
+        /// <param name="tenantId">Optional tenant scope for global administrators.</param>
+        /// <param name="kind">Optional prompt kind filter.</param>
+        /// <param name="includeInactive">Whether inactive prompts should be included for administrators.</param>
+        /// <param name="pageNumber">Page number.</param>
+        /// <param name="pageSize">Page size.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Paginated prompt templates.</returns>
+        public Task<EnumerationResult<PromptTemplate>> GetPromptsAsync(string? tenantId = null, PromptTemplateKind? kind = null, bool includeInactive = false, int pageNumber = 1, int pageSize = 100, CancellationToken token = default)
+        {
+            string path = "/v1.0/api/prompts?pageNumber=" + pageNumber.ToString(CultureInfo.InvariantCulture)
+                + "&pageSize=" + pageSize.ToString(CultureInfo.InvariantCulture)
+                + "&includeInactive=" + includeInactive.ToString().ToLowerInvariant();
+            if (!String.IsNullOrWhiteSpace(tenantId)) path += "&tenantId=" + Uri.EscapeDataString(tenantId);
+            if (kind.HasValue) path += "&kind=" + Uri.EscapeDataString(kind.Value.ToString());
+            return SendAsync<EnumerationResult<PromptTemplate>>(HttpMethod.Get, path, null, token);
+        }
+
+        /// <summary>
+        /// Get one prompt template.
+        /// </summary>
+        /// <param name="id">Prompt template identifier.</param>
+        /// <param name="tenantId">Optional tenant scope for global administrators.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Prompt template.</returns>
+        public Task<PromptTemplate> GetPromptAsync(string id, string? tenantId = null, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(id)) throw new ArgumentException("Prompt ID is required.", nameof(id));
+            string path = "/v1.0/api/prompts/" + Uri.EscapeDataString(id);
+            if (!String.IsNullOrWhiteSpace(tenantId)) path += "?tenantId=" + Uri.EscapeDataString(tenantId);
+            return SendAsync<PromptTemplate>(HttpMethod.Get, path, null, token);
+        }
+
+        /// <summary>
+        /// Create a prompt template.
+        /// </summary>
+        /// <param name="template">Prompt template payload.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Created prompt template.</returns>
+        public Task<PromptTemplate> CreatePromptAsync(PromptTemplate template, CancellationToken token = default)
+        {
+            ArgumentNullException.ThrowIfNull(template);
+            return SendAsync<PromptTemplate>(HttpMethod.Post, "/v1.0/api/prompts", template, token);
+        }
+
+        /// <summary>
+        /// Update a prompt template.
+        /// </summary>
+        /// <param name="id">Prompt template identifier.</param>
+        /// <param name="template">Prompt template payload.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Updated prompt template.</returns>
+        public Task<PromptTemplate> UpdatePromptAsync(string id, PromptTemplate template, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(id)) throw new ArgumentException("Prompt ID is required.", nameof(id));
+            ArgumentNullException.ThrowIfNull(template);
+            return SendAsync<PromptTemplate>(HttpMethod.Put, "/v1.0/api/prompts/" + Uri.EscapeDataString(id), template, token);
+        }
+
+        /// <summary>
+        /// Delete a prompt template.
+        /// </summary>
+        /// <param name="id">Prompt template identifier.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Task completed after deletion.</returns>
+        public async Task DeletePromptAsync(string id, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(id)) throw new ArgumentException("Prompt ID is required.", nameof(id));
+            await SendNoContentAsync(HttpMethod.Delete, "/v1.0/api/prompts/" + Uri.EscapeDataString(id), null, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Set a prompt template as the tenant default for its kind.
+        /// </summary>
+        /// <param name="id">Prompt template identifier.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Updated default prompt template.</returns>
+        public Task<PromptTemplate> SetDefaultPromptAsync(string id, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(id)) throw new ArgumentException("Prompt ID is required.", nameof(id));
+            return SendAsync<PromptTemplate>(HttpMethod.Post, "/v1.0/api/prompts/" + Uri.EscapeDataString(id) + "/default", new { }, token);
         }
 
         /// <summary>
@@ -238,6 +325,28 @@ namespace Wilson.Sdk
             T? result = JsonSerializer.Deserialize<T>(responseBody, _Json);
             if (result == null) throw new InvalidOperationException("Wilson API returned an empty response.");
             return result;
+        }
+
+        private async Task SendNoContentAsync(HttpMethod method, string path, object? body, CancellationToken token)
+        {
+            using HttpRequestMessage request = new HttpRequestMessage(method, _BaseUrl + path);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (!String.IsNullOrWhiteSpace(Token)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+
+            if (body != null)
+            {
+                string json = JsonSerializer.Serialize(body, _Json);
+                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            }
+
+            using HttpResponseMessage response = await _HttpClient.SendAsync(request, token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(String.IsNullOrWhiteSpace(responseBody)
+                    ? "Wilson API request failed with HTTP " + (int)response.StatusCode
+                    : responseBody);
+            }
         }
     }
 }

@@ -53,6 +53,12 @@ class ApiClient {
   messages(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/messages`, null, params); }
   conversationToolCalls(id, params = {}) { return this.request('GET', `/v1.0/api/conversations/${id}/tool-calls`, null, params); }
   chat(payload, options = {}) { return this.request('POST', '/v1.0/api/chat', payload, null, options); }
+  prompts(params = {}) { return this.request('GET', '/v1.0/api/prompts', null, params); }
+  prompt(id, params = {}) { return this.request('GET', `/v1.0/api/prompts/${encodeURIComponent(id)}`, null, params); }
+  createPrompt(payload) { return this.request('POST', '/v1.0/api/prompts', payload); }
+  updatePrompt(id, payload) { return this.request('PUT', `/v1.0/api/prompts/${encodeURIComponent(id)}`, payload); }
+  deletePrompt(id) { return this.request('DELETE', `/v1.0/api/prompts/${encodeURIComponent(id)}`); }
+  setDefaultPrompt(id) { return this.request('POST', `/v1.0/api/prompts/${encodeURIComponent(id)}/default`, {}); }
   tools() { return this.request('GET', '/v1.0/api/tools'); }
   toolInstructions() { return this.request('GET', '/v1.0/api/tools/instructions'); }
   validateTools(payload = {}) { return this.request('POST', '/v1.0/api/tools/validate', payload); }

@@ -25,6 +25,7 @@ Wilson can:
 - Show which Ollama models are available and currently loaded
 - Capture request history, response timing, and request/response payload metadata
 - Collect thumbs-up/thumbs-down feedback and optional free-form comments
+- Manage tenant-scoped system and tool prompt templates, including seeded defaults
 - Expose model-directed tools when explicitly enabled, with safe chat traces and persisted tool-call history
 - Expose OpenAPI JSON and Swagger UI for the backend API
 
@@ -36,6 +37,7 @@ The waves never answer. Wilson does.
 - **Model server management**: configure Ollama, OpenAI, or OpenAI-compatible runners; inspect health, uptime, and recent health history; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
 - **Tenant-aware auth**: tenants, users, credentials, admin tokens, tenant admins, and bearer-token authentication.
 - **Conversation storage**: saved conversations and messages backed by SQLite or PostgreSQL.
+- **Prompt templates**: a Prompts page for tenant-scoped system prompts and tool prompts, seeded defaults, chat prompt selection, and request-history prompt metadata.
 - **Request history**: latency summary, activity chart, detailed request/response metadata, headers, bodies, timing, and token estimates.
 - **Tool activity**: optional model tool execution with safe inline chat activity, persisted tool runs/tool calls, request-history linkage, and dashboard settings controls.
 - **Feedback review**: admin view for ratings, comments, related message IDs, and model timing fields.
@@ -122,6 +124,8 @@ These reset Docker data and restore Docker settings from `docker/factory`.
 
 Docker Compose mounts a named `/workspace` volume and the Docker settings expose that path to Wilson file and process tools by default. To use a host directory instead, mount that directory to `/workspace` and keep `tools.workingDirectory` plus `tools.allowedRoots` pointed at the container path, not the host path. Do not mount broad host paths such as a home directory or source-drive root unless the deployment is isolated and trusted.
 
+Prompt templates are not stored in `wilson.json`. Fresh Docker deployments and factory resets create the prompt database tables at server startup and seed one default system prompt plus one default tool prompt for each tenant.
+
 ## Configuration
 
 Wilson reads settings from `wilson.json`.
@@ -133,6 +137,7 @@ Important sections:
 - `cors`: allowed origins, methods, and headers
 - `auth`: admin bearer tokens and session lifetime
 - `requestHistory`: request capture settings
+- Prompt templates are database records, not JSON settings. Wilson creates default system and tool prompts on startup when a tenant is missing them.
 - `tools`: global tool enablement, built-in tool policy, safety limits, allowed roots, web search, and MCP settings
 - `modelRunners`: Ollama/OpenAI/OpenAI-compatible model servers
 - `seed`: first-run tenant, user, and access key
@@ -155,6 +160,8 @@ Tool-capable runners must support a structured tool-call wire format. OpenAI and
 
 The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, Test adds selected-runner readiness checks without calling a model or executing tools, and MCP controls reconnect configured servers and show discovered tools.
 
+The Prompts page lets tenant administrators create, edit, duplicate, delete, and set defaults for system prompts and tool prompts. In Chat, users select a system prompt and, for tool-capable chats, a tool prompt. Wilson sends the visible prompt text selected in Chat and records prompt IDs, names, default flags, and content hashes in request history. Tool prompts can include `{{tool_catalog}}`; the dashboard renders the catalog so the user can inspect what is going to the model.
+
 Implemented built-in tools:
 
 - Read/discover: `read_file`, `file_metadata`, `list_directory`, `glob`, `grep`
@@ -175,6 +182,7 @@ Tool audit records are redacted before persistence and before API responses. Cha
 - Model server health: `GET /v1.0/api/model-runners/health`
 - Single model server health: `GET /v1.0/api/model-runners/{id}/health`
 - Tool catalog: `GET /v1.0/api/tools`
+- Prompt templates: `GET /v1.0/api/prompts`, `POST /v1.0/api/prompts`, `GET/PUT/DELETE /v1.0/api/prompts/{id}`, `POST /v1.0/api/prompts/{id}/default`
 - Conversation tool calls: `GET /v1.0/api/conversations/{id}/tool-calls`
 - Request-history tool calls: `GET /v1.0/api/request-history/{id}/tool-calls`
 - Tool run detail: `GET /v1.0/api/tool-runs/{id}`
