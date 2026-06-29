@@ -24,7 +24,7 @@ class ApiClient {
       body: body === null ? undefined : JSON.stringify(body),
       signal: options.signal
     });
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
     if (response.status === 204) return null;
     return response.json();
   }
@@ -87,6 +87,22 @@ class ApiClient {
   deleteRequestHistory(id) { return this.request('DELETE', `/v1.0/api/request-history/${id}`); }
   settings(payload = null) { return payload ? this.request('PUT', '/v1.0/api/settings', payload) : this.request('GET', '/v1.0/api/settings'); }
   openApi() { return this.request('GET', '/openapi.json'); }
+}
+
+async function responseErrorMessage(response) {
+  const payload = await response.text();
+  if (!payload) return `HTTP ${response.status}`;
+
+  try {
+    const parsed = JSON.parse(payload);
+    if (parsed && typeof parsed === 'object') {
+      if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim();
+      if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message.trim();
+    }
+  } catch {
+  }
+
+  return payload;
 }
 
 export default ApiClient;

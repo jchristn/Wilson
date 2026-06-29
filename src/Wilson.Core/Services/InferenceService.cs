@@ -239,7 +239,7 @@ namespace Wilson.Core.Services
             using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
             using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/pull"), content, token).ConfigureAwait(false);
             string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
+            ThrowIfOllamaRequestFailed(response, responseBody, "pull");
 
             return new ModelPullResult
             {
@@ -270,7 +270,7 @@ namespace Wilson.Core.Services
             using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
             using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/generate"), content, token).ConfigureAwait(false);
             string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
+            ThrowIfOllamaRequestFailed(response, responseBody, "load");
 
             return new ModelPullResult
             {
@@ -940,6 +940,42 @@ namespace Wilson.Core.Services
             return "Pull request completed.";
         }
 
+        private static void ThrowIfOllamaRequestFailed(HttpResponseMessage response, string responseBody, string action)
+        {
+            if (response.IsSuccessStatusCode) return;
+
+            int statusCode = (int)response.StatusCode;
+            string message = ExtractOllamaError(responseBody);
+            if (String.IsNullOrWhiteSpace(message))
+            {
+                string reason = String.IsNullOrWhiteSpace(response.ReasonPhrase) ? "HTTP " + statusCode.ToString(System.Globalization.CultureInfo.InvariantCulture) : response.ReasonPhrase!;
+                message = "Ollama " + action + " request failed with HTTP " + statusCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + " (" + reason + ").";
+            }
+
+            throw new ModelServerHttpException(statusCode, message, responseBody);
+        }
+
+        private static string ExtractOllamaError(string responseBody)
+        {
+            if (String.IsNullOrWhiteSpace(responseBody)) return String.Empty;
+            string trimmed = responseBody.Trim();
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.TryGetProperty("error", out JsonElement errorProperty))
+                {
+                    string? error = errorProperty.ValueKind == JsonValueKind.String ? errorProperty.GetString() : errorProperty.GetRawText();
+                    if (!String.IsNullOrWhiteSpace(error)) return error.Trim();
+                }
+            }
+            catch
+            {
+            }
+
+            return trimmed;
+        }
+
         private static ChatCompletionOptions CreateChatOptions(ModelRunnerSettings runner, CompletionRequestSettings? settings)
         {
             settings ??= new CompletionRequestSettings();
@@ -1004,6 +1040,29 @@ namespace Wilson.Core.Services
             }
             if (!String.IsNullOrWhiteSpace(model)) client.Model = model;
             return client;
+        }
+    }
+
+    /// <summary>
+    /// HTTP error returned by a configured model server.
+    /// </summary>
+    public sealed class ModelServerHttpException : Exception
+    {
+        /// <summary>HTTP status code returned by the model server.</summary>
+        public int StatusCode { get; }
+        /// <summary>Raw response body returned by the model server.</summary>
+        public string ResponseBody { get; }
+
+        /// <summary>
+        /// Instantiate a model-server HTTP exception.
+        /// </summary>
+        /// <param name="statusCode">HTTP status code returned by the model server.</param>
+        /// <param name="message">Human-readable error message.</param>
+        /// <param name="responseBody">Raw response body returned by the model server.</param>
+        public ModelServerHttpException(int statusCode, string message, string responseBody) : base(message)
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody ?? String.Empty;
         }
     }
 

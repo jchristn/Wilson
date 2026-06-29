@@ -347,6 +347,16 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ctx.Response.StatusCode = 400;
                 await SendJsonAsync(ctx, new { error = ex.Message }).ConfigureAwait(false);
             }
+            catch (ModelServerHttpException ex)
+            {
+                ctx.Response.StatusCode = ex.StatusCode >= 400 && ex.StatusCode <= 599 ? ex.StatusCode : 502;
+                await SendJsonAsync(ctx, new
+                {
+                    error = ex.Message,
+                    upstreamStatusCode = ex.StatusCode,
+                    upstreamResponseBody = ex.ResponseBody
+                }).ConfigureAwait(false);
+            }
             catch (Exception ex)
             {
                 ctx.Response.StatusCode = 500;

@@ -61,6 +61,7 @@ namespace Test.Shared
                         CreateSyncCase("json-string-or-raw-json-converter", "JSON string or raw JSON converter", JsonStringOrRawJsonConverterCoverage),
                         CreateSyncCase("working-directory-guard-error-coverage", "Working directory guard error coverage", WorkingDirectoryGuardErrorCoverage),
                         CreateAsyncCase("ollama-tool-model-classification", "Ollama tool model classification", OllamaToolModelClassificationAsync),
+                        CreateAsyncCase("ollama-pull-error-propagates", "Ollama pull error propagation", OllamaPullErrorPropagatesAsync),
                         CreateAsyncCase("tool-service-foundation", "Tool service foundation", ToolServiceFoundationAsync),
                         CreateAsyncCase("tool-diagnostics-api", "Tool diagnostics API", ToolDiagnosticsApiAsync),
                         CreateAsyncCase("public-chat-tool-trace-api", "Public chat tool trace API", PublicChatToolTraceApiAsync),
@@ -1349,6 +1350,83 @@ namespace Test.Shared
             }
         }
 
+        private static async Task OllamaPullErrorPropagatesAsync()
+        {
+            string workspace = Path.Combine(Path.GetTempPath(), "wilson-ollama-pull-error-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            string settingsFile = Path.Combine(workspace, "wilson.json");
+            string databaseFile = Path.Combine(workspace, "wilson.db");
+            int serverPort = GetFreePort();
+            int ollamaPort = GetFreePort();
+
+            using CancellationTokenSource fakeOllamaStop = new CancellationTokenSource();
+            Task fakeOllamaTask = RunFakeOllamaPullErrorServerAsync(ollamaPort, fakeOllamaStop.Token);
+            try
+            {
+                Settings settings = new Settings
+                {
+                    Rest = new RestSettings { Hostname = "127.0.0.1", Port = serverPort, Ssl = false },
+                    Database = new DatabaseSettings { Type = "Sqlite", Filename = databaseFile },
+                    Auth = new AuthSettings { AdminBearerTokens = new List<string> { "test-admin-token" } },
+                    RequestHistory = new RequestHistorySettings { Enabled = false },
+                    Seed = new SeedSettings { AccessKey = "test-user-token", UserEmail = "test-user@example.com" },
+                    ModelRunners = new List<ModelRunnerSettings>
+                    {
+                        new ModelRunnerSettings
+                        {
+                            Id = "ollama-error",
+                            Name = "Ollama Error",
+                            ApiType = "Ollama",
+                            Endpoint = "http://127.0.0.1:" + ollamaPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            HealthCheckEnabled = false
+                        }
+                    }
+                };
+
+                File.WriteAllText(settingsFile, JsonSerializer.Serialize(settings, TestJson()));
+                WilsonServer server = await WilsonServer.CreateAsync(new[] { settingsFile }).ConfigureAwait(false);
+
+                using CancellationTokenSource serverStop = new CancellationTokenSource();
+                using HttpClient adminClient = new HttpClient();
+                Task serverTask = Task.Run(() => server.Server.StartAsync(serverStop.Token), serverStop.Token);
+                adminClient.BaseAddress = new Uri("http://127.0.0.1:" + serverPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-admin-token");
+
+                try
+                {
+                    await WaitForHttpAsync(adminClient).ConfigureAwait(false);
+                    string json = JsonSerializer.Serialize(new { model = "ornith:9b" }, TestJson());
+                    using StringContent content = new StringContent(json, Encoding.UTF8, "application/json");
+                    using HttpResponseMessage response = await adminClient.PostAsync("/v1.0/api/model-runners/ollama-error/pull", content).ConfigureAwait(false);
+                    string payload = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (response.StatusCode != HttpStatusCode.PreconditionFailed)
+                        throw new InvalidOperationException("Expected Ollama pull failure to propagate 412 but received " + (int)response.StatusCode + ": " + payload);
+
+                    using JsonDocument document = JsonDocument.Parse(payload);
+                    JsonElement root = document.RootElement;
+                    string error = root.GetProperty("error").GetString() ?? String.Empty;
+                    if (!error.Contains("requires a newer version of Ollama", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected dashboard-safe error message to include Ollama upgrade guidance.");
+                    if (root.GetProperty("upstreamStatusCode").GetInt32() != 412)
+                        throw new InvalidOperationException("Expected upstreamStatusCode to preserve Ollama's 412 status.");
+                    if (!(root.GetProperty("upstreamResponseBody").GetString() ?? String.Empty).Contains("https://ollama.com/download", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected raw upstream response body to preserve Ollama download guidance.");
+                }
+                finally
+                {
+                    serverStop.Cancel();
+                    StopServerIfRunning(server);
+                    try { await serverTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+                }
+            }
+            finally
+            {
+                fakeOllamaStop.Cancel();
+                try { await fakeOllamaTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+                TryDeleteDirectory(workspace);
+            }
+        }
+
         private static async Task ToolServiceFoundationAsync()
         {
             Settings disabled = new Settings { Tools = new ToolsSettings { Enabled = false } };
@@ -1861,6 +1939,30 @@ namespace Test.Shared
             }
         }
 
+        private static async Task RunFakeOllamaPullErrorServerAsync(int port, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    if (!request.StartsWith("POST /api/pull ", StringComparison.Ordinal) || !request.Contains("\"ornith:9b\"", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected fake Ollama pull request for ornith:9b.");
+
+                    string body = """{"error":"pull model manifest: 412:\nThe model you are attempting to pull requires a newer version of Ollama.\n\nPlease download the latest version at:\n\n        https://ollama.com/download"}""";
+                    await WriteHttpResponseAsync(stream, body, token, 412, "Precondition Failed").ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
         private static async Task<string> ReadHttpRequestAsync(NetworkStream stream, CancellationToken token)
         {
             byte[] buffer = new byte[4096];
@@ -1891,10 +1993,10 @@ namespace Test.Shared
             return Encoding.UTF8.GetString(memory.ToArray());
         }
 
-        private static async Task WriteHttpResponseAsync(NetworkStream stream, string body, CancellationToken token)
+        private static async Task WriteHttpResponseAsync(NetworkStream stream, string body, CancellationToken token, int statusCode = 200, string statusText = "OK")
         {
             byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
-            string headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + bodyBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\nConnection: close\r\n\r\n";
+            string headers = "HTTP/1.1 " + statusCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + statusText + "\r\nContent-Type: application/json\r\nContent-Length: " + bodyBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\nConnection: close\r\n\r\n";
             byte[] headerBytes = Encoding.UTF8.GetBytes(headers);
             await stream.WriteAsync(headerBytes.AsMemory(0, headerBytes.Length), token).ConfigureAwait(false);
             await stream.WriteAsync(bodyBytes.AsMemory(0, bodyBytes.Length), token).ConfigureAwait(false);
