@@ -58,48 +58,32 @@ The waves never answer. Wilson does.
 
 ## Quick Start
 
+Run Wilson with Docker. It brings up the backend, the dashboard, and the observability stack together from pinned, prebuilt images — no toolchain to install and nothing to compile. Docker is the only setup these instructions support; running the pieces by hand is for people developing Wilson itself, not for deploying or evaluating it.
+
 ### Prerequisites
 
-- .NET 10 SDK/runtime
-- Node.js and npm
-- Optional: Docker Desktop
+- Docker Desktop, or Docker Engine with the Compose plugin
 - Optional: Ollama if you want local model inference
 
-### Run The Backend
+### Run With Docker
 
 ```powershell
-dotnet run --project src\Wilson.Server
+cd docker
+docker compose pull
+docker compose up -d
 ```
 
-The backend defaults to:
-
-```text
-http://127.0.0.1:9400
-```
-
-On first start, Wilson creates `wilson.json` and seeds default credentials:
+The stack serves the dashboard at `http://127.0.0.1:9401` and the backend at `http://127.0.0.1:9400`. On first start Wilson seeds default credentials:
 
 - Admin bearer token: `wilson-admin-dev-token`
 - User access key: `wilsonadmin`
 
-### Run The Dashboard
-
-```powershell
-cd dashboard
-npm install
-npm run dev
-```
-
-The dashboard defaults to:
-
-```text
-http://127.0.0.1:9401
-```
-
-On the login page:
+Open the dashboard and log in:
 
 - Server URL: `http://127.0.0.1:9400`
 - Access key: `wilsonadmin` or `wilson-admin-dev-token`
+
+Change those seeded credentials before exposing Wilson to anything you do not control. If you are working on the code rather than running Wilson, see [Development (from source)](#development-from-source).
 
 Welcome to the island. Wilson's been expecting you.
 
@@ -130,6 +114,26 @@ These reset Docker data and restore Docker settings from `docker/factory`.
 Docker Compose mounts a named `/workspace` volume and the Docker settings expose that path to Wilson file and process tools by default. To use a host directory instead, mount that directory to `/workspace` and keep `tools.workingDirectory` plus `tools.allowedRoots` pointed at the container path, not the host path. Do not mount broad host paths such as a home directory or source-drive root unless the deployment is isolated and trusted.
 
 Prompt templates are not stored in `wilson.json`. Fresh Docker deployments and factory resets create the prompt database tables at server startup and seed one default system prompt plus one default tool prompt for each tenant.
+
+## Development (from source)
+
+These steps are for working on Wilson's own code. To run or evaluate Wilson, use [Docker](#quick-start) — the from-source path is not the supported deployment configuration, and it skips the observability stack entirely.
+
+You will need the .NET 10 SDK, Node.js with npm, and optionally Ollama for local inference. Run the backend:
+
+```powershell
+dotnet run --project src\Wilson.Server
+```
+
+It listens on `http://127.0.0.1:9400` and, on first start, writes `wilson.json` and seeds the default credentials shown above. Run the dashboard in a second shell:
+
+```powershell
+cd dashboard
+npm install
+npm run dev
+```
+
+The dashboard serves on `http://127.0.0.1:9401`; log in with server URL `http://127.0.0.1:9400` and access key `wilsonadmin`.
 
 ## Configuration
 
@@ -178,6 +182,23 @@ Implemented built-in tools:
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 
 Tool audit records are redacted before persistence and before API responses. Chat responses use safe tool traces that omit raw arguments, raw tool output, provider tool-call IDs, and hidden policy details. Admin audit records may include redacted arguments and, only when `tools.storeFullToolResults` is explicitly enabled, redacted capped result payloads. The database layer uses parameterized commands for tenant, user, conversation, request-history, tool-run, and tool-call values.
+
+## Telemetry
+
+Wilson emits the three observability signals — metrics, traces, and logs — through the Radiant OpenTelemetry SDK. The webserver and every request path are instrumented, along with the chat and inference flow, the tool and agent loop, model-runner health checks, the database layer, and MCP. Wilson also captures .NET process and runtime metrics and the Watson webserver's own HTTP metrics. Everything ships over OTLP to an OpenTelemetry Collector, which fans metrics out to Prometheus, traces to Tempo, and logs to Loki, with Grafana on top. Logs carry the active trace and span IDs, so a log line links back to the trace that produced it.
+
+The Docker stack brings this up for you and enables telemetry in `docker/wilson.json`. With the stack running, the consoles are:
+
+- **Grafana** — `http://127.0.0.1:3000` (anonymous access with the Admin role; no login)
+- **Prometheus** — `http://127.0.0.1:9090`
+- **Tempo** — `http://127.0.0.1:3200` (query API; explore traces through Grafana)
+- **Loki** — `http://127.0.0.1:3100` (query API; explore logs through Grafana)
+
+The dashboard also links these under **Administration → External Services**.
+
+Grafana is provisioned with dashboards organized by functional area: Overview, HTTP, Chat & Inference, Tools, Model Runners, Database, and MCP. Open one, and the panels use rates and p95/p99 latency quantiles rather than averages so a slow route or a failing tool stands out. In Explore, a Tempo trace shows the per-request server span with the chat, tool, and database calls nested underneath; clicking a span jumps to that request's logs in Loki.
+
+Telemetry is controlled by the `telemetry` block in `wilson.json`. It is off by default and turned on in the Docker configuration, pointed at `http://otel-collector:4317`. The block sets the OTLP endpoint and protocol, the trace sampling ratio, which signals to emit, the minimum log severity, and whether process and runtime metrics are included. Telemetry changes are read at startup, so restart the server after editing them. For a quick look without a collector, set `prometheusScrapeEnabled` to `true` and Wilson exposes an in-process Prometheus endpoint on `prometheusScrapePort` (default `9464`) that you can scrape directly.
 
 ## API
 
