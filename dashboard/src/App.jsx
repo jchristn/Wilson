@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, Eye, FileText,
+  Activity, AlertCircle, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Code, Copy, Download, ExternalLink, Eye, FileText,
   Gauge, History, Info, KeyRound, LayoutDashboard, ListFilter, LogOut,
   MessageSquarePlus, Moon, MoreVertical, Pencil, Play, Plus, RefreshCw, Save,
   Search, Send, Server, Settings, Square, Sun, Trash2, ThumbsDown, ThumbsUp, Users, X
@@ -216,6 +216,7 @@ function App() {
       ['tenants', text.tenants, LayoutDashboard],
       ['users', text.users, Users],
       ['credentials', text.credentials, KeyRound],
+      ['externalServices', 'External Services', Gauge],
       ['settings', text.settings, Settings]
     ]]
   ];
@@ -250,6 +251,7 @@ function App() {
           {view === 'users' && <UserAdmin api={api} />}
           {view === 'credentials' && <CredentialAdmin api={api} />}
           {view === 'feedback' && <FeedbackAdmin api={api} />}
+          {view === 'externalServices' && <ExternalServicesView />}
           {view === 'settings' && <SettingsAdmin api={api} />}
         </div>
       </main>
@@ -980,6 +982,37 @@ function MessageInfoModal({ message, onClose }) {
         <KeyValueTable rows={rows} />
       </div>
     </Modal>
+  );
+}
+
+function ExternalServicesView() {
+  const host = (typeof window !== 'undefined' && window.location && window.location.hostname) || 'localhost';
+  const services = [
+    { name: 'Grafana', port: 3000, cred: 'No login — anonymous Admin', description: 'Dashboards for HTTP, chat & inference, tools, model runners, database, and MCP.' },
+    { name: 'Prometheus', port: 9090, cred: 'No authentication', description: 'Metrics store and query UI, scraped from the OpenTelemetry Collector.' },
+    { name: 'Tempo', port: 3200, cred: 'No authentication', description: 'Distributed trace store. Explore traces from Grafana, or query the API directly.' },
+    { name: 'Loki', port: 3100, cred: 'No authentication', description: 'Log store with trace correlation. Explore logs from Grafana, or query the API directly.' }
+  ];
+  return (
+    <div className="page">
+      <PageIntro title="External Services" description="Operator consoles for Wilson's observability stack. Links open in a new tab against the Docker Compose published ports on this host." />
+      <div className="systems-grid">
+        {services.map(svc => {
+          const url = `http://${host}:${svc.port}`;
+          return (
+            <a key={svc.name} className="system-card" href={url} target="_blank" rel="noopener noreferrer" title={`Open ${svc.name} at ${url} in a new tab`}>
+              <span className="system-card-head">
+                <span className="system-name">{svc.name}</span>
+                <ExternalLink size={16} />
+              </span>
+              <span className="system-desc">{svc.description}</span>
+              <span className="system-url">{url.replace('http://', '')}</span>
+              <span className="system-cred">{svc.cred}</span>
+            </a>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
