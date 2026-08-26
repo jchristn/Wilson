@@ -105,10 +105,15 @@ Welcome to the island. Wilson's been expecting you.
 
 ## Docker
 
+The Compose file references the published images `jchristn77/wilson-server:v0.1.0` and `jchristn77/wilson-dashboard:v0.1.0`. Pull them and bring the stack up:
+
 ```powershell
 cd docker
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
+
+`docker/update.bat` (Windows) and `docker/update.sh` (Linux/macOS) wrap the same pull-and-restart flow.
 
 Docker exposes:
 
