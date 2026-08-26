@@ -602,7 +602,7 @@ function Chat({ api, onOpenPrompts }) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         const assistantId = `stream-${Date.now()}`;
-        let assistant = { id: assistantId, role: 'assistant', content: '', toolCalls: [], toolMetrics: null, toolRun: null };
+        let assistant = { id: assistantId, role: 'assistant', content: '', thinking: '', toolCalls: [], toolMetrics: null, toolRun: null };
         let buffer = '';
         setMessages(prev => [...prev, assistant]);
         while (true) {
@@ -623,6 +623,10 @@ function Chat({ api, onOpenPrompts }) {
             if (event === 'truncation') {
               handleTruncationNotice(parsed);
             }
+            if (event === 'thinking') {
+              assistant = { ...assistant, thinking: (assistant.thinking || '') + (parsed.text || '') };
+              setMessages(prev => prev.map(item => item.id === assistant.id ? assistant : item));
+            }
             if (event === 'chunk') {
               assistant = { ...assistant, content: assistant.content + (parsed.text || '') };
               setMessages(prev => prev.map(item => item.id === assistant.id ? assistant : item));
@@ -642,7 +646,7 @@ function Chat({ api, onOpenPrompts }) {
               setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
             }
             if (event === 'done') {
-              assistant = { ...parsed, toolRun: parsed.toolRun || null, toolCalls: parsed.toolCalls || [], toolMetrics: parsed.toolMetrics || null };
+              assistant = { ...parsed, thinking: parsed.thinking || assistant.thinking || '', toolRun: parsed.toolRun || null, toolCalls: parsed.toolCalls || [], toolMetrics: parsed.toolMetrics || null };
               setMessages(prev => prev.map(item => item.id === assistantId ? assistant : item));
             }
           });
@@ -834,7 +838,17 @@ function Message({ api, message, conversation }) {
   }
   return (
     <div className={`message ${message.role}`}>
-      <div className="bubble">{message.content ? <MarkdownMessage content={message.content} /> : (message.role === 'assistant' ? <ThinkingIndicator /> : '')}</div>
+      <div className="bubble">
+        {message.role === 'assistant' && message.thinking ? (
+          <details className="chat-thinking">
+            <summary>Thinking</summary>
+            <div className="chat-thinking-content"><MarkdownMessage content={message.thinking} /></div>
+          </details>
+        ) : null}
+        {message.content
+          ? <MarkdownMessage content={message.content} />
+          : (message.role === 'assistant' && !message.thinking ? <ThinkingIndicator /> : '')}
+      </div>
       {message.role === 'assistant' && toolCalls.length > 0 && <ToolActivity api={api} toolCalls={toolCalls} metrics={message.toolMetrics} />}
       {message.role === 'assistant' && <div className="rating">
         <button onClick={() => setFeedbackDraft({ rating: 1, comment: '' })} disabled={rated} title="Mark this assistant response as helpful and optionally explain why"><ThumbsUp size={15} /></button>

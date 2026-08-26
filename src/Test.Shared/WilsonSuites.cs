@@ -74,6 +74,7 @@ namespace Test.Shared
                         CreateAsyncCase("web-search-tool", "Web search tool", WebSearchToolAsync),
                         CreateAsyncCase("mcp-tools", "MCP tools", McpToolsAsync),
                         CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
+                        CreateSyncCase("think-parser", "Think parser", ThinkParserSplitting),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
                         CreateAsyncCase("tool-agent-loop-coverage", "Tool agent loop coverage", ToolAgentLoopCoverageAsync),
@@ -2929,6 +2930,34 @@ namespace Test.Shared
             {
                 listener.Stop();
             }
+        }
+
+        private static void ThinkParserSplitting()
+        {
+            // Non-streaming strip removes inline reasoning entirely.
+            string stripped = ThinkParser.Strip("<think>plan the answer</think>Hello world");
+            if (!String.Equals(stripped, "Hello world", StringComparison.Ordinal)) throw new InvalidOperationException("Expected inline think block to be stripped from visible text.");
+
+            // Streaming split across chunk boundaries: the marker is broken between fragments.
+            ThinkParser parser = new ThinkParser();
+            StringBuilder visible = new StringBuilder();
+            StringBuilder reasoning = new StringBuilder();
+            foreach (string fragment in new[] { "<thi", "nk>rea", "soning</thi", "nk>Vis", "ible" })
+            {
+                visible.Append(parser.Feed(fragment, out string reasoningDelta));
+                reasoning.Append(reasoningDelta);
+            }
+            visible.Append(parser.Finish());
+
+            if (!String.Equals(visible.ToString(), "Visible", StringComparison.Ordinal)) throw new InvalidOperationException("Expected only visible text to stream when markers straddle chunk boundaries.");
+            if (!String.Equals(reasoning.ToString(), "reasoning", StringComparison.Ordinal)) throw new InvalidOperationException("Expected the reasoning delta to accumulate the think-block content.");
+            if (!String.Equals(parser.Thinking, "reasoning", StringComparison.Ordinal)) throw new InvalidOperationException("Expected the parser to capture the full reasoning text.");
+
+            // Text with no reasoning passes through unchanged and captures no thinking.
+            ThinkParser plain = new ThinkParser();
+            string plainVisible = plain.Feed("Just an answer.", out string plainReasoning) + plain.Finish();
+            if (!String.Equals(plainVisible, "Just an answer.", StringComparison.Ordinal)) throw new InvalidOperationException("Expected plain text to pass through unchanged.");
+            if (plainReasoning.Length != 0 || plain.Thinking.Length != 0) throw new InvalidOperationException("Expected no reasoning to be captured for plain text.");
         }
 
         private static void ToolCapableInferenceParsing()
