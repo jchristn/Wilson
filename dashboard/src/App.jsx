@@ -241,7 +241,11 @@ function App() {
       <main className="workspace">
         <Topbar session={session} theme={theme} onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')} onLogout={logout} />
         <div className="workspace-body">
-          {view === 'chat' && <Chat api={api} onOpenPrompts={() => setView('prompts')} />}
+          {/* Chat stays mounted from dashboard open so model servers and models prefetch
+              immediately (not on first navigation to Chat); hidden when another view is active. */}
+          <div style={{ display: view === 'chat' ? 'contents' : 'none' }}>
+            <Chat api={api} onOpenPrompts={() => setView('prompts')} />
+          </div>
           {view === 'models' && <ModelServersView api={api} />}
           {view === 'prompts' && <PromptsView api={api} />}
           {view === 'history' && <HistoryView api={api} />}
