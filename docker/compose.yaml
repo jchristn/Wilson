@@ -1,8 +1,7 @@
 services:
   wilson-server:
-    build:
-      context: ..
-      dockerfile: docker/server/Dockerfile
+    container_name: 'wilson-server'
+    image: 'jchristn77/wilson-server:v0.1.0'
     ports:
       - "9400:9400"
     volumes:
@@ -13,9 +12,8 @@ services:
       - otel-collector
 
   wilson-dashboard:
-    build:
-      context: ..
-      dockerfile: docker/dashboard/Dockerfile
+    container_name: 'wilson-dashboard'
+    image: 'jchristn77/wilson-dashboard:v0.1.0'
     environment:
       WILSON_SERVER_URL: http://127.0.0.1:9400
     ports:
