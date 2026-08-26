@@ -100,6 +100,7 @@ async function responseErrorMessage(response) {
       if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message.trim();
     }
   } catch {
+    // Body is not JSON; fall through and return the raw payload.
   }
 
   return payload;

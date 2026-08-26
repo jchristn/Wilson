@@ -15,6 +15,7 @@ namespace Wilson.Core.Services
     using PolyPrompt.Options;
     using Wilson.Core.Models;
     using Wilson.Core.Settings;
+    using ChatMessage = Wilson.Core.Models.ChatMessage;
 
     /// <summary>
     /// Inference integration service.

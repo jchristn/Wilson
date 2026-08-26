@@ -10,6 +10,8 @@ namespace Wilson.Core.Tools
     using Voltaic;
     using Wilson.Core.Models;
     using Wilson.Core.Settings;
+    using McpClient = Voltaic.Mcp.McpClient;
+    using McpHttpClient = Voltaic.Mcp.McpHttpClient;
     using WilsonToolDefinition = Wilson.Core.Models.ToolDefinition;
 
     /// <summary>

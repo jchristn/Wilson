@@ -8,6 +8,7 @@ namespace Test.Shared
     using System.Threading;
     using System.Threading.Tasks;
     using Voltaic;
+    using McpHttpServer = Voltaic.Mcp.McpHttpServer;
 
     /// <summary>
     /// Minimal streamable HTTP MCP server fixture.
@@ -52,9 +53,7 @@ namespace Test.Shared
                 },
                 args =>
                 {
-                    string text = args?.TryGetProperty("text", out JsonElement textElement) == true
-                        ? textElement.GetString() ?? String.Empty
-                        : String.Empty;
+                    string text = args?.GetString("text") ?? String.Empty;
 
                     return (object)new
                     {

@@ -8,13 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.11" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
-    <PackageReference Include="PolyPrompt" Version="0.2.0" />
+    <PackageReference Include="PolyPrompt" Version="2.2.1" />
     <PackageReference Include="PrettyId" Version="2.0.1" />
-    <PackageReference Include="SourceGear.sqlite3" Version="3.50.4.5" />
-    <PackageReference Include="SQLitePCLRaw.config.e_sqlite3" Version="3.0.3" />
-    <PackageReference Include="Voltaic" Version="0.1.11" />
+    <PackageReference Include="Radiant" Version="0.1.2" />
+    <PackageReference Include="SourceGear.sqlite3" Version="3.53.4" />
+    <PackageReference Include="SQLitePCLRaw.config.e_sqlite3" Version="3.0.5" />
+    <PackageReference Include="Voltaic" Version="0.6.1" />
   </ItemGroup>
 
 </Project>
