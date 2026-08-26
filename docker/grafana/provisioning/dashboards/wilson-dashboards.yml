@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: Wilson
+    orgId: 1
+    folder: Wilson
+    type: file
+    disableDeletion: false
+    editable: true
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/wilson
+      foldersFromFilesStructure: false

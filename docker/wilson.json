@@ -40,6 +40,22 @@
     "enabled": true,
     "retentionDays": 30
   },
+  "telemetry": {
+    "enabled": true,
+    "serviceName": "wilson-server",
+    "otlpEndpoint": "http://otel-collector:4317",
+    "otlpProtocol": "grpc",
+    "tracesSamplingRatio": 1.0,
+    "metricsEnabled": true,
+    "tracesEnabled": true,
+    "logsEnabled": true,
+    "logMinimumSeverity": "Information",
+    "includeProcessMetrics": true,
+    "includeRuntimeMetrics": true,
+    "prometheusScrapeEnabled": false,
+    "prometheusScrapePort": 9464,
+    "metricCatalogStrict": false
+  },
   "tools": {
     "enabled": true,
     "builtInsEnabled": true,

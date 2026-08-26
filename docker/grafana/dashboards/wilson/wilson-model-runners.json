@@ -1,0 +1,54 @@
+{
+  "uid": "wilson-model-runners",
+  "title": "Wilson — Model Runners",
+  "tags": ["wilson", "model-runners"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "state-timeline",
+      "title": "Runner health",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "showValue": "never" },
+      "targets": [ { "refId": "A", "expr": "wilson_model_runner_health", "legendFormat": "{{runner}}" } ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Health-check rate by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "sum by (runner, outcome) (rate(wilson_model_runner_health_checks_total[5m]))", "legendFormat": "{{runner}} {{outcome}}" } ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Health-check duration p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (runner, le) (rate(wilson_model_runner_health_check_duration_seconds_bucket[5m])))", "legendFormat": "{{runner}}" } ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Health state transitions",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "points", "lineWidth": 1, "fillOpacity": 0, "showPoints": "always", "pointSize": 8 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "sum by (runner, to_state) (increase(wilson_model_runner_state_transitions_total[5m]))", "legendFormat": "{{runner}} -> {{to_state}}" } ]
+    }
+  ]
+}

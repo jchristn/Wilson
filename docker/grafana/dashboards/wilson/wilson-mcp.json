@@ -1,0 +1,54 @@
+{
+  "uid": "wilson-mcp",
+  "title": "Wilson — MCP",
+  "tags": ["wilson", "mcp"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "state-timeline",
+      "title": "MCP servers up",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "showValue": "never" },
+      "targets": [ { "refId": "A", "expr": "wilson_mcp_servers_up", "legendFormat": "{{server}}" } ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Tools loaded per server",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "wilson_mcp_tools_loaded", "legendFormat": "{{server}}" } ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "MCP reloads by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "points", "lineWidth": 1, "fillOpacity": 0, "showPoints": "always", "pointSize": 8 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "sum by (outcome) (increase(wilson_mcp_reloads_total[10m]))", "legendFormat": "{{outcome}}" } ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "MCP reload duration p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(wilson_mcp_reload_duration_seconds_bucket[5m])))", "legendFormat": "p95" } ]
+    }
+  ]
+}
