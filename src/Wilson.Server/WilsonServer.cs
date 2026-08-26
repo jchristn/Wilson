@@ -13,14 +13,17 @@ namespace Wilson.Server
     using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
+    using Microsoft.Extensions.Logging;
     using WatsonWebserver;
     using WatsonWebserver.Core;
     using Wilson.Core.Database;
     using Wilson.Core.Helpers;
     using Wilson.Core.Models;
+    using Wilson.Core.Observability;
     using Wilson.Core.Services;
     using Wilson.Core.Settings;
     using Wilson.Core.Tools;
+    using Radiant;
 
     /// <summary>
     /// Wilson Watson server host.
@@ -71,17 +74,26 @@ namespace Wilson.Server
         /// </summary>
         public Webserver Server { get; }
 
+        /// <summary>
+        /// Telemetry (metrics, traces, logs) service.
+        /// </summary>
+        public TelemetryService Telemetry { get; }
+
+        private readonly ILogger _Logger;
+
         private WilsonServer(Settings settings, string settingsFile)
         {
             Settings = settings;
             _SettingsFile = settingsFile;
             _Json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
             _Json.Converters.Add(new JsonStringEnumConverter());
-            Database = new DatabaseDriver(settings.Database);
+            Telemetry = new TelemetryService(settings.Telemetry);
+            _Logger = Telemetry.CreateLogger("Wilson.Server");
+            Database = new DatabaseDriver(settings.Database, Telemetry);
             Inference = new InferenceService(settings);
-            McpTools = new McpToolManager();
-            ToolService = new ToolService(settings, McpTools);
-            HealthChecks = new ModelRunnerHealthCheckService(settings);
+            McpTools = new McpToolManager(Telemetry);
+            ToolService = new ToolService(settings, McpTools, Telemetry);
+            HealthChecks = new ModelRunnerHealthCheckService(settings, Telemetry);
             WebserverSettings webserverSettings = new WebserverSettings(settings.Rest.Hostname, settings.Rest.Port, settings.Rest.Ssl);
             Server = new Webserver(webserverSettings, DefaultRouteAsync);
             ConfigureWatson();
@@ -137,6 +149,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             Console.WriteLine("Wilson server listening on " + Settings.Rest.Hostname + ":" + Settings.Rest.Port);
             Console.WriteLine("Default admin bearer token: " + String.Join(", ", Settings.Auth.AdminBearerTokens));
             Console.WriteLine("Default user access key: " + Settings.Seed.AccessKey);
+            _Logger.LogInformation("Wilson server listening on {Host}:{Port} (telemetry enabled: {Telemetry})", Settings.Rest.Hostname, Settings.Rest.Port, Telemetry.Enabled);
             HealthChecks.Start(_TokenSource.Token);
             _ = Task.Run(() => Server.StartAsync(_TokenSource.Token), _TokenSource.Token);
             Console.CancelKeyPress += (sender, eventArgs) =>
@@ -154,6 +167,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             finally
             {
                 await HealthChecks.StopAsync().ConfigureAwait(false);
+                Telemetry.Dispose();
             }
         }
 
@@ -183,6 +197,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 runner.Models ??= new List<string>();
                 ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
             }
+
+            settings.Telemetry ??= new TelemetrySettings();
+            if (String.IsNullOrWhiteSpace(settings.Telemetry.ServiceName)) settings.Telemetry.ServiceName = "wilson-server";
+            if (String.IsNullOrWhiteSpace(settings.Telemetry.OtlpEndpoint)) settings.Telemetry.OtlpEndpoint = "http://localhost:4317";
+            if (!String.Equals(settings.Telemetry.OtlpProtocol, "httpprotobuf", StringComparison.OrdinalIgnoreCase)) settings.Telemetry.OtlpProtocol = "grpc";
+            settings.Telemetry.TracesSamplingRatio = Math.Clamp(settings.Telemetry.TracesSamplingRatio, 0.0, 1.0);
+            if (settings.Telemetry.PrometheusScrapePort <= 0 || settings.Telemetry.PrometheusScrapePort > 65535) settings.Telemetry.PrometheusScrapePort = 9464;
         }
 
         private static void NormalizeTools(ToolsSettings tools, bool applyWorkspaceDefaults = false)
@@ -325,7 +346,17 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             RequestContext? requestContext = null;
             string path = ctx.Request.Url.RawWithoutQuery;
             string method = ctx.Request.Method.ToString().ToUpperInvariant();
+            string normalizedRoute = RouteNormalizer.Normalize(path);
             _RequestCapture.Value = new RequestCapture();
+            using TelemetryOperation httpOp = Telemetry.Track(
+                method + " " + normalizedRoute,
+                SpanKindEnum.Server,
+                WilsonConventions.Http.Requests,
+                WilsonConventions.Http.Duration,
+                WilsonConventions.Http.Active,
+                new RadiantTag(SemConv.Http.AttributeMethod, method),
+                new RadiantTag(SemConv.Http.AttributeRoute, normalizedRoute),
+                new RadiantTag(SemConv.Http.AttributeScheme, Settings.Rest.Ssl ? "https" : "http"));
             try
             {
                 ApplyCors(ctx.Response);
@@ -365,6 +396,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             finally
             {
                 stopwatch.Stop();
+                httpOp.SetStatus(ctx.Response.StatusCode);
                 if (Settings.RequestHistory.Enabled && !path.Equals("/v1.0/api/request-history", StringComparison.OrdinalIgnoreCase))
                 {
                     RequestCapture? capture = _RequestCapture.Value;
@@ -407,7 +439,10 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                                 await Database.AttachToolCallsToRequestHistoryByRunIdAsync(entry.TenantId, entry.ToolRunId, entry.Id).ConfigureAwait(false);
                             }
                         }
-                        catch { }
+                        catch (Exception historyError)
+                        {
+                            _Logger.LogWarning(historyError, "Failed to persist request history for {Method} {Path}", entry.Method, entry.Path);
+                        }
                     });
                 }
                 _RequestCapture.Value = null;
@@ -852,6 +887,20 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await SendJsonAsync(ctx, new { error = "Not found" }).ConfigureAwait(false);
         }
 
+        private void RecordChatMetrics(string runnerId, string model, string mode, string outcome, double seconds, double ttftSeconds, int inputTokens, int outputTokens)
+        {
+            if (!Telemetry.Enabled) return;
+            RadiantTag runnerTag = new RadiantTag("runner", runnerId ?? String.Empty);
+            RadiantTag modelTag = new RadiantTag("model", model ?? String.Empty);
+            RadiantTag modeTag = new RadiantTag("mode", mode);
+            RadiantTag outcomeTag = new RadiantTag("outcome", outcome);
+            Telemetry.Increment(WilsonConventions.Chat.Requests, 1, runnerTag, modelTag, modeTag, outcomeTag);
+            Telemetry.Record(WilsonConventions.Chat.Duration, seconds, runnerTag, modelTag, modeTag, outcomeTag);
+            if (ttftSeconds > 0) Telemetry.Record(WilsonConventions.Chat.TimeToFirstToken, ttftSeconds, runnerTag, modelTag);
+            if (inputTokens > 0) Telemetry.Increment(WilsonConventions.Chat.Tokens, inputTokens, runnerTag, modelTag, new RadiantTag("direction", "input"));
+            if (outputTokens > 0) Telemetry.Increment(WilsonConventions.Chat.Tokens, outputTokens, runnerTag, modelTag, new RadiantTag("direction", "output"));
+        }
+
         private async Task ChatAsync(HttpContextBase ctx, RequestContext requestContext, bool streaming)
         {
             ChatRequest body = Body<ChatRequest>(ctx);
@@ -911,6 +960,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(assistantMessage, answer, promptSelection: promptSelection);
+                RecordChatMetrics(body.RunnerId, body.Model, "sync", "ok", inference.Elapsed.TotalSeconds, 0, inputTokens, outputTokens);
                 await SendJsonAsync(ctx, new ChatResponse { Conversation = conversation, UserMessage = userMessage, AssistantMessage = assistantMessage, Truncation = truncation }).ConfigureAwait(false);
                 return;
             }
@@ -961,6 +1011,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 await Database.CreateMessageAsync(stored, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, stored, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(stored, full.ToString(), promptSelection: promptSelection);
+                RecordChatMetrics(body.RunnerId, body.Model, "stream", "ok", total.Elapsed.TotalSeconds, firstTokenMs / 1000.0, InferenceService.EstimateTokens(prompt), storedTokens);
                 await SendSseAsync(ctx, "conversation", conversation, false).ConfigureAwait(false);
                 await SendSseAsync(ctx, "done", stored, true).ConfigureAwait(false);
             }
@@ -968,6 +1019,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             {
                 if (streamingTimer.IsRunning) streamingTimer.Stop();
                 total.Stop();
+                RecordChatMetrics(body.RunnerId, body.Model, "stream", "error", total.Elapsed.TotalSeconds, firstTokenMs / 1000.0, InferenceService.EstimateTokens(prompt), 0);
                 SetRequestCapture(new ChatMessage { TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = InferenceService.EstimateTokens(prompt) }, ex.Message, promptSelection: promptSelection);
                 await SendSseAsync(ctx, "error", new { error = "The selected model could not generate a chat response. Confirm that it is a chat or completion model, not an embedding-only model.", detail = ex.Message }, true).ConfigureAwait(false);
             }
@@ -1178,6 +1230,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, previousMessages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
             SetRequestCapture(assistantMessage, answer, toolRun, metrics, promptSelection);
+
+            RecordChatMetrics(body.RunnerId, body.Model, "tools", "ok", total.Elapsed.TotalSeconds, 0, inputTokens, outputTokens);
+            if (Telemetry.Enabled)
+            {
+                Telemetry.Increment(WilsonConventions.Tools.AgentRuns, 1, new RadiantTag("outcome", "ok"));
+                Telemetry.Record(WilsonConventions.Tools.AgentIterations, agentResponse.IterationCount, new RadiantTag("outcome", "ok"));
+            }
 
             return new ChatResponse
             {
@@ -1473,7 +1532,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 throw new ArgumentException("Non-streaming tool approval is not implemented. Set approvalPolicy to 'auto' for safe tools, or disable tools for this request.");
 
             Settings effectiveSettings = new Settings { Tools = tools };
-            ToolService effectiveToolService = new ToolService(effectiveSettings, McpTools);
+            ToolService effectiveToolService = new ToolService(effectiveSettings, McpTools, Telemetry);
             if (effectiveToolService.GetModelToolDefinitions().Count == 0)
             {
                 if (body.ToolsEnabled == true) throw new ArgumentException("No executable tools are available for this request. Check tool working directory, allowed roots, and enabled tool names.");
@@ -1628,7 +1687,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
         private async Task ReloadMcpAsync(CancellationToken token)
         {
             await McpTools.InitializeAsync(Settings, token).ConfigureAwait(false);
-            ToolService = new ToolService(Settings, McpTools);
+            ToolService = new ToolService(Settings, McpTools, Telemetry);
         }
 
         private static ModelRunnerSettings CloneRunner(ModelRunnerSettings source)

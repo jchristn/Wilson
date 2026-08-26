@@ -52,6 +52,87 @@ namespace Wilson.Core.Settings
         /// First-run seed records.
         /// </summary>
         public SeedSettings Seed { get; set; } = new SeedSettings();
+
+        /// <summary>
+        /// Observability (metrics, traces, logs) settings.
+        /// </summary>
+        public TelemetrySettings Telemetry { get; set; } = new TelemetrySettings();
+    }
+
+    /// <summary>
+    /// Observability settings controlling the Radiant/OpenTelemetry pipeline.
+    /// </summary>
+    public class TelemetrySettings
+    {
+        /// <summary>
+        /// Master switch. When false the telemetry pipeline is inert and every emit is a no-op.
+        /// </summary>
+        public bool Enabled { get; set; } = false;
+
+        /// <summary>
+        /// Service name reported as <c>service.name</c> and used as the default meter/activity-source name.
+        /// </summary>
+        public string ServiceName { get; set; } = "wilson-server";
+
+        /// <summary>
+        /// OTLP endpoint. Point at the OpenTelemetry Collector (e.g. http://otel-collector:4317 in Docker).
+        /// </summary>
+        public string OtlpEndpoint { get; set; } = "http://localhost:4317";
+
+        /// <summary>
+        /// OTLP wire protocol, either "grpc" (default) or "httpprotobuf".
+        /// </summary>
+        public string OtlpProtocol { get; set; } = "grpc";
+
+        /// <summary>
+        /// Head trace sampling ratio in the range 0..1. 1.0 samples everything.
+        /// </summary>
+        public double TracesSamplingRatio { get; set; } = 1.0;
+
+        /// <summary>
+        /// Emit metrics.
+        /// </summary>
+        public bool MetricsEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Emit traces.
+        /// </summary>
+        public bool TracesEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Emit logs.
+        /// </summary>
+        public bool LogsEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Minimum log severity to emit, e.g. Trace, Debug, Information, Warning, Error, Critical, None.
+        /// </summary>
+        public string LogMinimumSeverity { get; set; } = "Information";
+
+        /// <summary>
+        /// Include process metrics (memory, uptime, threads).
+        /// </summary>
+        public bool IncludeProcessMetrics { get; set; } = true;
+
+        /// <summary>
+        /// Include .NET runtime metrics (GC, thread pool, JIT).
+        /// </summary>
+        public bool IncludeRuntimeMetrics { get; set; } = true;
+
+        /// <summary>
+        /// Enable an in-process Prometheus scrape endpoint (for local debugging without a collector).
+        /// </summary>
+        public bool PrometheusScrapeEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Port for the in-process Prometheus scrape endpoint when enabled.
+        /// </summary>
+        public int PrometheusScrapePort { get; set; } = 9464;
+
+        /// <summary>
+        /// Enforce strict metric label policy (throws on undeclared labels in Debug).
+        /// </summary>
+        public bool MetricCatalogStrict { get; set; } = false;
     }
 
     /// <summary>

@@ -9,7 +9,9 @@ namespace Wilson.Core.Database
     using System.Threading.Tasks;
     using Microsoft.Data.Sqlite;
     using Npgsql;
+    using Radiant;
     using Wilson.Core.Models;
+    using Wilson.Core.Observability;
     using Wilson.Core.Settings;
 
     /// <summary>
@@ -19,16 +21,55 @@ namespace Wilson.Core.Database
     {
         private readonly DatabaseSettings _Settings;
         private readonly bool _Postgres;
+        private readonly TelemetryService? _Telemetry;
 
         /// <summary>
         /// Instantiate the database driver.
         /// </summary>
-        public DatabaseDriver(DatabaseSettings settings)
+        /// <param name="settings">Database settings.</param>
+        /// <param name="telemetry">Optional telemetry service.</param>
+        public DatabaseDriver(DatabaseSettings settings, TelemetryService? telemetry = null)
         {
             ArgumentNullException.ThrowIfNull(settings);
             _Settings = settings;
+            _Telemetry = telemetry;
             _Postgres = String.Equals(settings.Type, "Postgres", StringComparison.OrdinalIgnoreCase)
                 || String.Equals(settings.Type, "Postgresql", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private TelemetryOperation? TrackDb(string sql)
+        {
+            if (_Telemetry == null || !_Telemetry.Enabled) return null;
+            string operation = DbOperationName(sql);
+            return _Telemetry.Track(
+                "db." + operation,
+                SpanKindEnum.Client,
+                WilsonConventions.Db.Operations,
+                WilsonConventions.Db.Duration,
+                null,
+                new RadiantTag(SemConv.Db.AttributeSystem, _Postgres ? "postgresql" : "sqlite"),
+                new RadiantTag(SemConv.Db.AttributeOperation, operation),
+                new RadiantTag("operation", operation));
+        }
+
+        private static string DbOperationName(string sql)
+        {
+            if (String.IsNullOrWhiteSpace(sql)) return "unknown";
+            string[] parts = sql.TrimStart().Split(new[] { ' ', '\r', '\n', '\t', '(' }, StringSplitOptions.RemoveEmptyEntries);
+            string verb = parts.Length > 0 ? parts[0].ToUpperInvariant() : "UNKNOWN";
+            string table = String.Empty;
+            for (int i = 1; i < parts.Length - 1; i++)
+            {
+                string word = parts[i].ToUpperInvariant();
+                if (word == "INTO" || word == "FROM" || word == "UPDATE" || word == "TABLE")
+                {
+                    table = parts[i + 1].Trim().Split('(')[0];
+                    break;
+                }
+            }
+
+            if (verb == "UPDATE" && parts.Length > 1) table = parts[1].Split('(')[0];
+            return String.IsNullOrWhiteSpace(table) ? verb.ToLowerInvariant() : verb.ToLowerInvariant() + "." + table.ToLowerInvariant();
         }
 
         /// <summary>
@@ -728,15 +769,25 @@ namespace Wilson.Core.Database
         private async Task ExecuteAsync<T>(string sql, Action<IDbCommand, T> bind, T item, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            using (IDbConnection connection = CreateConnection())
+            using TelemetryOperation? op = TrackDb(sql);
+            try
             {
-                connection.Open();
-                using (IDbCommand command = connection.CreateCommand())
+                using (IDbConnection connection = CreateConnection())
                 {
-                    command.CommandText = sql;
-                    bind(command, item);
-                    command.ExecuteNonQuery();
+                    connection.Open();
+                    using (IDbCommand command = connection.CreateCommand())
+                    {
+                        command.CommandText = sql;
+                        bind(command, item);
+                        command.ExecuteNonQuery();
+                    }
                 }
+                op?.SetOk();
+            }
+            catch (Exception ex)
+            {
+                op?.Fail(ex);
+                throw;
             }
             await Task.CompletedTask.ConfigureAwait(false);
         }
@@ -744,15 +795,25 @@ namespace Wilson.Core.Database
         private async Task ExecuteSimpleAsync(string sql, Action<IDbCommand> bind, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            using (IDbConnection connection = CreateConnection())
+            using TelemetryOperation? op = TrackDb(sql);
+            try
             {
-                connection.Open();
-                using (IDbCommand command = connection.CreateCommand())
+                using (IDbConnection connection = CreateConnection())
                 {
-                    command.CommandText = sql;
-                    bind(command);
-                    command.ExecuteNonQuery();
+                    connection.Open();
+                    using (IDbCommand command = connection.CreateCommand())
+                    {
+                        command.CommandText = sql;
+                        bind(command);
+                        command.ExecuteNonQuery();
+                    }
                 }
+                op?.SetOk();
+            }
+            catch (Exception ex)
+            {
+                op?.Fail(ex);
+                throw;
             }
             await Task.CompletedTask.ConfigureAwait(false);
         }
@@ -760,22 +821,32 @@ namespace Wilson.Core.Database
         private async Task<List<T>> QueryAsync<T>(string sql, Func<IDataRecord, T> read, Action<IDbCommand>? bind, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            using TelemetryOperation? op = TrackDb(sql);
             List<T> items = new List<T>();
-            using (IDbConnection connection = CreateConnection())
+            try
             {
-                connection.Open();
-                using (IDbCommand command = connection.CreateCommand())
+                using (IDbConnection connection = CreateConnection())
                 {
-                    command.CommandText = sql;
-                    bind?.Invoke(command);
-                    using (IDataReader reader = command.ExecuteReader())
+                    connection.Open();
+                    using (IDbCommand command = connection.CreateCommand())
                     {
-                        while (reader.Read())
+                        command.CommandText = sql;
+                        bind?.Invoke(command);
+                        using (IDataReader reader = command.ExecuteReader())
                         {
-                            items.Add(read(reader));
+                            while (reader.Read())
+                            {
+                                items.Add(read(reader));
+                            }
                         }
                     }
                 }
+                op?.SetOk();
+            }
+            catch (Exception ex)
+            {
+                op?.Fail(ex);
+                throw;
             }
             return await Task.FromResult(items).ConfigureAwait(false);
         }

@@ -6,7 +6,9 @@ namespace Wilson.Core.Tools
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
+    using Radiant;
     using Wilson.Core.Models;
+    using Wilson.Core.Observability;
     using Wilson.Core.Settings;
 
     /// <summary>
@@ -18,17 +20,20 @@ namespace Wilson.Core.Tools
         private readonly BuiltInToolRegistry _Registry;
         private readonly McpToolManager? _McpToolManager;
         private readonly ToolPolicyResolver _PolicyResolver = new ToolPolicyResolver();
+        private readonly TelemetryService? _Telemetry;
 
         /// <summary>
         /// Instantiate the tool service.
         /// </summary>
         /// <param name="settings">Wilson settings.</param>
         /// <param name="mcpToolManager">Optional MCP tool manager.</param>
-        public ToolService(Settings settings, McpToolManager? mcpToolManager = null)
+        /// <param name="telemetry">Optional telemetry service.</param>
+        public ToolService(Settings settings, McpToolManager? mcpToolManager = null, TelemetryService? telemetry = null)
         {
             _Settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _Registry = new BuiltInToolRegistry();
             _McpToolManager = mcpToolManager;
+            _Telemetry = telemetry;
         }
 
         /// <summary>
@@ -93,6 +98,36 @@ namespace Wilson.Core.Tools
         public async Task<ToolResult> ExecuteAsync(string toolCallId, string toolName, JsonElement arguments, ToolExecutionContext context, CancellationToken token)
         {
             ToolDescriptor? descriptor = GetTool(toolName);
+            string transport = descriptor != null && String.Equals(descriptor.Category, ToolCategories.Mcp, StringComparison.OrdinalIgnoreCase) ? "mcp" : "builtin";
+            using TelemetryOperation? op = _Telemetry != null && _Telemetry.Enabled
+                ? _Telemetry.Track("tool.execute", SpanKindEnum.Client, WilsonConventions.Tools.Executions, WilsonConventions.Tools.Duration, WilsonConventions.Tools.Active,
+                    new RadiantTag("tool", toolName), new RadiantTag("transport", transport))
+                : null;
+            op?.SetTag("tool.name", toolName);
+            try
+            {
+                ToolResult result = await ExecuteInnerAsync(descriptor, toolCallId, toolName, arguments, context, token).ConfigureAwait(false);
+                op?.Tag("outcome", ToolOutcome(result));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                op?.Fail(ex);
+                throw;
+            }
+        }
+
+        private static string ToolOutcome(ToolResult result)
+        {
+            if (result.Success) return "ok";
+            if (String.Equals(result.ErrorCode, "tool_timed_out", StringComparison.OrdinalIgnoreCase)) return "timeout";
+            if (String.Equals(result.ErrorCode, "tool_call_denied", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(result.ErrorCode, "tool_call_limit_reached", StringComparison.OrdinalIgnoreCase)) return "denied";
+            return "error";
+        }
+
+        private async Task<ToolResult> ExecuteInnerAsync(ToolDescriptor? descriptor, string toolCallId, string toolName, JsonElement arguments, ToolExecutionContext context, CancellationToken token)
+        {
             if (descriptor == null) return ToolResultFactory.Error(toolCallId, "unknown_tool", "Tool '" + toolName + "' is not registered.");
             if (!descriptor.Available) return ToolResultFactory.Error(toolCallId, "tool_unavailable", descriptor.UnavailableReason ?? "Tool is unavailable.");
 

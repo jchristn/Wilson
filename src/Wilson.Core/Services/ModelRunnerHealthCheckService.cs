@@ -7,7 +7,9 @@ namespace Wilson.Core.Services
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
+    using Radiant;
     using Wilson.Core.Models;
+    using Wilson.Core.Observability;
     using Wilson.Core.Settings;
 
     /// <summary>
@@ -20,6 +22,8 @@ namespace Wilson.Core.Services
         private readonly ConcurrentDictionary<string, EndpointHealthState> _States = new ConcurrentDictionary<string, EndpointHealthState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, DateTime> _NextChecksUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private readonly HttpClient _HttpClient = new HttpClient();
+        private readonly TelemetryService? _Telemetry;
+        private readonly HashSet<string> _HealthGauges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Settings _Settings;
         private CancellationTokenSource? _LoopCancellation;
         private Task? _LoopTask;
@@ -29,11 +33,28 @@ namespace Wilson.Core.Services
         /// Instantiate the health check service.
         /// </summary>
         /// <param name="settings">Wilson settings.</param>
-        public ModelRunnerHealthCheckService(Settings settings)
+        /// <param name="telemetry">Optional telemetry service.</param>
+        public ModelRunnerHealthCheckService(Settings settings, TelemetryService? telemetry = null)
         {
             ArgumentNullException.ThrowIfNull(settings);
             _Settings = settings;
+            _Telemetry = telemetry;
             UpdateSettings(settings);
+        }
+
+        private void EnsureHealthGauge(string runnerId)
+        {
+            if (_Telemetry == null || !_Telemetry.Enabled || String.IsNullOrWhiteSpace(runnerId)) return;
+            lock (_HealthGauges)
+            {
+                if (!_HealthGauges.Add(runnerId)) return;
+            }
+
+            string id = runnerId;
+            _Telemetry.RegisterGauge(
+                WilsonConventions.ModelRunners.Health,
+                () => _States.TryGetValue(id, out EndpointHealthState? state) && state.IsHealthy ? 1 : 0,
+                new RadiantTag("runner", id));
         }
 
         /// <summary>
@@ -216,6 +237,7 @@ namespace Wilson.Core.Services
                 HealthCheckResult result = await PerformCheckAsync(probeRunner, token).ConfigureAwait(false);
                 foreach (ModelRunnerSettings runner in subscriptions)
                 {
+                    EnsureHealthGauge(runner.Id);
                     if (_States.TryGetValue(runner.Id, out EndpointHealthState? state))
                     {
                         UpdateState(state, result.Success, result.ErrorMessage, runner);
@@ -225,6 +247,18 @@ namespace Wilson.Core.Services
         }
 
         private async Task<HealthCheckResult> PerformCheckAsync(ModelRunnerSettings runner, CancellationToken token)
+        {
+            using TelemetryOperation? op = _Telemetry != null && _Telemetry.Enabled
+                ? _Telemetry.Track("model_runner.health_check", SpanKindEnum.Client,
+                    WilsonConventions.ModelRunners.HealthChecks, WilsonConventions.ModelRunners.HealthCheckDuration, null,
+                    new RadiantTag("runner", runner.Id))
+                : null;
+            HealthCheckResult checkResult = await PerformCheckInnerAsync(runner, token).ConfigureAwait(false);
+            op?.Tag("outcome", checkResult.Success ? "ok" : "error");
+            return checkResult;
+        }
+
+        private async Task<HealthCheckResult> PerformCheckInnerAsync(ModelRunnerSettings runner, CancellationToken token)
         {
             string url = ResolveHealthCheckUrl(runner);
             HttpMethod method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? HttpMethod.Head : HttpMethod.Get;
@@ -293,6 +327,7 @@ namespace Wilson.Core.Services
                         state.IsHealthy = true;
                         state.LastHealthyUtc = now;
                         state.LastStateChangeUtc = now;
+                        _Telemetry?.Increment(WilsonConventions.ModelRunners.StateTransitions, 1, new RadiantTag("runner", runner.Id), new RadiantTag("to_state", "healthy"));
                     }
                 }
                 else
@@ -316,6 +351,7 @@ namespace Wilson.Core.Services
                         state.IsHealthy = false;
                         state.LastUnhealthyUtc = now;
                         state.LastStateChangeUtc = now;
+                        _Telemetry?.Increment(WilsonConventions.ModelRunners.StateTransitions, 1, new RadiantTag("runner", runner.Id), new RadiantTag("to_state", "unhealthy"));
                     }
                 }
             }

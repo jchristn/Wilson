@@ -7,8 +7,10 @@ namespace Wilson.Core.Tools
     using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
+    using Radiant;
     using Voltaic;
     using Wilson.Core.Models;
+    using Wilson.Core.Observability;
     using Wilson.Core.Settings;
     using McpClient = Voltaic.Mcp.McpClient;
     using McpHttpClient = Voltaic.Mcp.McpHttpClient;
@@ -24,7 +26,18 @@ namespace Wilson.Core.Tools
         private readonly Dictionary<string, McpToolMapping> _ToolMappings = new Dictionary<string, McpToolMapping>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<WilsonToolDefinition>> _ServerTools = new Dictionary<string, List<WilsonToolDefinition>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, McpServerStatus> _Statuses = new Dictionary<string, McpServerStatus>(StringComparer.OrdinalIgnoreCase);
+        private readonly TelemetryService? _Telemetry;
+        private readonly HashSet<string> _Gauges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _Disposed = false;
+
+        /// <summary>
+        /// Instantiate the MCP tool manager.
+        /// </summary>
+        /// <param name="telemetry">Optional telemetry service.</param>
+        public McpToolManager(TelemetryService? telemetry = null)
+        {
+            _Telemetry = telemetry;
+        }
 
         /// <summary>
         /// Initialize enabled MCP servers from settings.
@@ -35,33 +48,68 @@ namespace Wilson.Core.Tools
         public async Task InitializeAsync(Settings settings, CancellationToken token)
         {
             ArgumentNullException.ThrowIfNull(settings);
-            McpToolSettings mcp = settings.Tools?.Mcp ?? new McpToolSettings();
-            List<McpServerSettings> servers = mcp.Servers ?? new List<McpServerSettings>();
-
-            ClearConnections();
-            lock (_Lock)
+            using TelemetryOperation? op = _Telemetry != null && _Telemetry.Enabled
+                ? _Telemetry.Track("mcp.reload", SpanKindEnum.Internal, WilsonConventions.Mcp.Reloads, WilsonConventions.Mcp.ReloadDuration, null)
+                : null;
+            try
             {
-                foreach (McpServerSettings server in servers)
+                McpToolSettings mcp = settings.Tools?.Mcp ?? new McpToolSettings();
+                List<McpServerSettings> servers = mcp.Servers ?? new List<McpServerSettings>();
+
+                ClearConnections();
+                lock (_Lock)
                 {
-                    if (server == null) continue;
-                    _Statuses[server.Name] = new McpServerStatus
+                    foreach (McpServerSettings server in servers)
                     {
-                        Name = server.Name,
-                        Transport = server.Transport,
-                        Enabled = server.Enabled,
-                        Connected = false,
-                        LastAttemptUtc = DateTime.UtcNow
-                    };
+                        if (server == null) continue;
+                        _Statuses[server.Name] = new McpServerStatus
+                        {
+                            Name = server.Name,
+                            Transport = server.Transport,
+                            Enabled = server.Enabled,
+                            Connected = false,
+                            LastAttemptUtc = DateTime.UtcNow
+                        };
+                    }
                 }
+
+                if (mcp.Enabled)
+                {
+                    foreach (McpServerSettings server in servers.Where(item => item != null && item.Enabled))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        await ConnectAndDiscoverAsync(server, token).ConfigureAwait(false);
+                        EnsureServerGauges(server.Name);
+                    }
+                }
+
+                op?.SetOk();
             }
-
-            if (!mcp.Enabled) return;
-
-            foreach (McpServerSettings server in servers.Where(item => item != null && item.Enabled))
+            catch (Exception ex)
             {
-                token.ThrowIfCancellationRequested();
-                await ConnectAndDiscoverAsync(server, token).ConfigureAwait(false);
+                op?.Fail(ex);
+                throw;
             }
+        }
+
+        private void EnsureServerGauges(string serverName)
+        {
+            if (_Telemetry == null || !_Telemetry.Enabled || String.IsNullOrWhiteSpace(serverName)) return;
+            lock (_Gauges)
+            {
+                if (!_Gauges.Add(serverName)) return;
+            }
+
+            string name = serverName;
+            _Telemetry.RegisterGauge(WilsonConventions.Mcp.ServersUp, () =>
+            {
+                lock (_Lock) { return _Statuses.TryGetValue(name, out McpServerStatus? status) && status.Connected ? 1 : 0; }
+            }, new RadiantTag("server", name));
+
+            _Telemetry.RegisterGauge(WilsonConventions.Mcp.ToolsLoaded, () =>
+            {
+                lock (_Lock) { return _ServerTools.TryGetValue(name, out List<WilsonToolDefinition>? tools) ? tools.Count : 0; }
+            }, new RadiantTag("server", name));
         }
 
         /// <summary>
