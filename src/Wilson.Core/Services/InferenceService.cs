@@ -16,6 +16,11 @@ namespace Wilson.Core.Services
     using Wilson.Core.Models;
     using Wilson.Core.Settings;
     using ChatMessage = Wilson.Core.Models.ChatMessage;
+    using PpChatMessage = PolyPrompt.Models.ChatMessage;
+    using PpToolDefinition = PolyPrompt.Models.ToolDefinition;
+    using PpToolCall = PolyPrompt.Models.ToolCall;
+    using PpToolChatRequest = PolyPrompt.Models.ToolChatRequest;
+    using PpToolChatStreamingChunk = PolyPrompt.Models.ToolChatStreamingChunk;
 
     /// <summary>
     /// Inference integration service.
@@ -329,8 +334,42 @@ namespace Wilson.Core.Services
             {
                 ChatResponse response = await client.ChatAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
                 if (!response.Success) throw new InvalidOperationException(response.Error ?? "Inference request failed.");
-                return response.Text ?? String.Empty;
+                // Strip any inline <think> reasoning so callers (e.g. title generation) get clean visible text.
+                return ThinkParser.Strip(response.Text ?? String.Empty);
             }
+        }
+
+        /// <summary>
+        /// Execute a non-streaming chat request and return the visible answer separated from model reasoning.
+        /// Reasoning is sourced from the provider's reasoning channel and any inline &lt;think&gt; blocks.
+        /// </summary>
+        public async Task<InferenceCompletion> ChatWithReasoningAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, CancellationToken token = default)
+        {
+            using (CompletionClientBase client = CreateClient(runner, model))
+            {
+                ChatResponse response = await client.ChatAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
+                if (!response.Success) throw new InvalidOperationException(response.Error ?? "Inference request failed.");
+
+                ThinkParser parser = new ThinkParser();
+                string visible = parser.Feed(response.Text ?? String.Empty) + parser.Finish();
+                return new InferenceCompletion
+                {
+                    Text = visible,
+                    Thinking = MergeReasoning(response.Reasoning, parser.Thinking)
+                };
+            }
+        }
+
+        /// <summary>
+        /// Combine a provider reasoning channel value with inline-parsed think text into a single reasoning string.
+        /// </summary>
+        private static string MergeReasoning(string? channel, string? inline)
+        {
+            string a = (channel ?? String.Empty).Trim();
+            string b = (inline ?? String.Empty).Trim();
+            if (a.Length == 0) return b;
+            if (b.Length == 0) return a;
+            return a + "\n\n" + b;
         }
 
         /// <summary>
@@ -376,19 +415,213 @@ namespace Wilson.Core.Services
         }
 
         /// <summary>
+        /// Execute a streaming tool-capable chat request via PolyPrompt, forwarding visible-text and reasoning
+        /// deltas through <paramref name="onToken"/> and returning the accumulated tool-capable response.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <param name="request">Tool-capable request.</param>
+        /// <param name="onToken">Optional live delta handler (text and reasoning fragments).</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Accumulated tool-capable response.</returns>
+        public async Task<ToolCapableInferenceResponse> ChatWithToolsStreamingAsync(ModelRunnerSettings runner, ToolCapableInferenceRequest request, ToolAgentService.ToolTokenHandler? onToken, CancellationToken token = default)
+        {
+            ArgumentNullException.ThrowIfNull(runner);
+            ArgumentNullException.ThrowIfNull(request);
+            if (request.Messages == null || request.Messages.Count == 0) throw new ArgumentException("At least one message is required.", nameof(request));
+
+            ModelRunnerSettings effectiveRunner = CopyRunner(runner);
+            ModelRunnerSettings.ApplyToolDefaults(effectiveRunner);
+            if (!effectiveRunner.ToolsEnabled || !effectiveRunner.SupportsTools)
+            {
+                return new ToolCapableInferenceResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Runner is not configured for tool-capable requests."
+                };
+            }
+
+            using (CompletionClientBase client = CreateClient(effectiveRunner, request.Model))
+            {
+                PpToolChatRequest ppRequest = BuildPolyPromptToolRequest(request);
+                ToolChatStreamingResponse response = await client.ToolChatStreamingAsync(ppRequest, token).ConfigureAwait(false);
+                if (!response.Success)
+                {
+                    return new ToolCapableInferenceResponse
+                    {
+                        Success = false,
+                        ErrorMessage = response.Error ?? "Streaming tool inference request failed."
+                    };
+                }
+
+                StringBuilder content = new StringBuilder();
+                ThinkParser think = new ThinkParser();
+                if (response.Chunks != null)
+                {
+                    await foreach (PpToolChatStreamingChunk chunk in response.Chunks.WithCancellation(token).ConfigureAwait(false))
+                    {
+                        string reasoningDelta = chunk.ReasoningText ?? String.Empty;
+                        string visible = String.Empty;
+                        if (!String.IsNullOrEmpty(chunk.Text))
+                        {
+                            visible = think.Feed(chunk.Text, out string inlineThink);
+                            if (!String.IsNullOrEmpty(inlineThink)) reasoningDelta += inlineThink;
+                        }
+
+                        if (visible.Length > 0) content.Append(visible);
+                        if (onToken != null && (visible.Length > 0 || reasoningDelta.Length > 0))
+                        {
+                            await onToken(visible.Length > 0 ? visible : null, reasoningDelta.Length > 0 ? reasoningDelta : null, token).ConfigureAwait(false);
+                        }
+                    }
+                }
+
+                string tail = think.Finish();
+                if (!String.IsNullOrEmpty(tail))
+                {
+                    content.Append(tail);
+                    if (onToken != null) await onToken(tail, null, token).ConfigureAwait(false);
+                }
+
+                return new ToolCapableInferenceResponse
+                {
+                    Success = true,
+                    Content = content.ToString(),
+                    Thinking = MergeReasoning(response.Reasoning, think.Thinking),
+                    ToolCalls = MapPolyPromptToolCalls(response.ToolCalls),
+                    FinishReason = response.FinishReason
+                };
+            }
+        }
+
+        /// <summary>
+        /// Build a PolyPrompt tool-chat request from a Wilson tool-capable request.
+        /// </summary>
+        private static PpToolChatRequest BuildPolyPromptToolRequest(ToolCapableInferenceRequest request)
+        {
+            PpToolChatRequest ppRequest = new PpToolChatRequest
+            {
+                Model = String.IsNullOrWhiteSpace(request.Model) ? null : request.Model,
+                Temperature = request.Temperature,
+                TopP = request.TopP,
+                MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null,
+                ToolChoice = MapToolChoice(request.ToolChoice)
+            };
+
+            foreach (ModelChatMessage message in request.Messages)
+            {
+                PpChatMessage? mapped = MapMessageToPolyPrompt(message);
+                if (mapped != null) ppRequest.Messages.Add(mapped);
+            }
+
+            foreach (ModelToolDefinition tool in request.Tools)
+            {
+                if (tool?.Function == null || String.IsNullOrWhiteSpace(tool.Function.Name)) continue;
+                ppRequest.Tools.Add(PpToolDefinition.Function(tool.Function.Name, tool.Function.Description ?? String.Empty, ToParameterDictionary(tool.Function.Parameters)));
+            }
+
+            return ppRequest;
+        }
+
+        private static string MapToolChoice(string? choice)
+        {
+            if (String.Equals(choice, ToolChoiceModes.None, StringComparison.OrdinalIgnoreCase)) return "none";
+            if (String.Equals(choice, ToolChoiceModes.Required, StringComparison.OrdinalIgnoreCase)) return "required";
+            return "auto";
+        }
+
+        private static PpChatMessage? MapMessageToPolyPrompt(ModelChatMessage message)
+        {
+            if (message == null || String.IsNullOrWhiteSpace(message.Role)) return null;
+            switch (message.Role.ToLowerInvariant())
+            {
+                case "system":
+                    return PpChatMessage.System(message.Content ?? String.Empty);
+                case "tool":
+                    return PpChatMessage.ToolResult(message.ToolCallId ?? String.Empty, message.Name ?? String.Empty, message.Content ?? String.Empty);
+                case "assistant":
+                    if (message.ToolCalls != null && message.ToolCalls.Count > 0)
+                        return PpChatMessage.AssistantToolCalls(message.ToolCalls.Where(call => call?.Function != null).Select(MapToolCallToPolyPrompt));
+                    return PpChatMessage.Assistant(message.Content ?? String.Empty);
+                default:
+                    return PpChatMessage.User(message.Content ?? String.Empty);
+            }
+        }
+
+        private static PpToolCall MapToolCallToPolyPrompt(ModelToolCall call)
+        {
+            return new PpToolCall
+            {
+                Id = call.Id,
+                Name = call.Function?.Name ?? String.Empty,
+                ArgumentsJson = String.IsNullOrWhiteSpace(call.Function?.Arguments) ? "{}" : call.Function!.Arguments
+            };
+        }
+
+        private static List<ModelToolCall> MapPolyPromptToolCalls(List<PpToolCall>? calls)
+        {
+            List<ModelToolCall> output = new List<ModelToolCall>();
+            if (calls == null) return output;
+            foreach (PpToolCall call in calls)
+            {
+                if (call == null || String.IsNullOrWhiteSpace(call.Name)) continue;
+                output.Add(new ModelToolCall
+                {
+                    Id = call.Id,
+                    Type = "function",
+                    Function = new ModelToolFunctionCall
+                    {
+                        Name = call.Name,
+                        Arguments = String.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson
+                    }
+                });
+            }
+
+            return output;
+        }
+
+        private static Dictionary<string, object> ToParameterDictionary(object? parameters)
+        {
+            if (parameters == null) return new Dictionary<string, object>();
+            try
+            {
+                string json = parameters is string raw ? raw : JsonSerializer.Serialize(parameters);
+                Dictionary<string, object>? dictionary = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                return dictionary ?? new Dictionary<string, object>();
+            }
+            catch (Exception)
+            {
+                return new Dictionary<string, object>();
+            }
+        }
+
+        /// <summary>
         /// Execute a streaming chat request.
         /// </summary>
-        public async IAsyncEnumerable<string> ChatStreamingAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
+        public async IAsyncEnumerable<InferenceStreamChunk> ChatStreamingAsync(ModelRunnerSettings runner, string model, string prompt, CompletionRequestSettings? settings = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
         {
             using (CompletionClientBase client = CreateClient(runner, model))
             {
                 ChatStreamingResponse response = await client.ChatStreamingAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
                 if (!response.Success) throw new InvalidOperationException(response.Error ?? "Streaming inference request failed.");
                 if (response.Chunks == null) yield break;
+
+                ThinkParser think = new ThinkParser();
                 await foreach (ChatStreamingChunk chunk in response.Chunks.WithCancellation(token).ConfigureAwait(false))
                 {
-                    if (!String.IsNullOrEmpty(chunk.Text)) yield return chunk.Text;
+                    string reasoningDelta = chunk.ReasoningText ?? String.Empty;
+                    string visible = String.Empty;
+                    if (!String.IsNullOrEmpty(chunk.Text))
+                    {
+                        visible = think.Feed(chunk.Text, out string inlineThink);
+                        if (!String.IsNullOrEmpty(inlineThink)) reasoningDelta += inlineThink;
+                    }
+
+                    if (!String.IsNullOrEmpty(visible) || !String.IsNullOrEmpty(reasoningDelta))
+                        yield return new InferenceStreamChunk { Text = visible, Reasoning = reasoningDelta };
                 }
+
+                string tail = think.Finish();
+                if (!String.IsNullOrEmpty(tail)) yield return new InferenceStreamChunk { Text = tail };
             }
         }
 

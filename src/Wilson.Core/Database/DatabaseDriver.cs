@@ -70,6 +70,7 @@ namespace Wilson.Core.Database
                     }
                 }
 
+                EnsureColumn(connection, "messages", "thinking", "TEXT NOT NULL DEFAULT ''");
                 EnsureColumn(connection, "messages", "timetofirsttokenms", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "messages", "streamingtimems", "REAL NOT NULL DEFAULT 0");
                 EnsureColumn(connection, "messages", "totaltimems", "REAL NOT NULL DEFAULT 0");
@@ -482,7 +483,7 @@ namespace Wilson.Core.Database
         /// </summary>
         public async Task CreateMessageAsync(ChatMessage item, CancellationToken token = default)
         {
-            await ExecuteAsync("INSERT INTO messages (id,tenantid,conversationid,role,content,runnerid,model,tokenestimate,timetofirsttokenms,streamingtimems,totaltimems,tokensused,runid,toolcallsjson,toolcallid,metadatajson,createdutc) VALUES (@id,@tenantid,@conversationid,@role,@content,@runnerid,@model,@tokenestimate,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@runid,@toolcallsjson,@toolcallid,@metadatajson,@createdutc)", AddMessage, item, token).ConfigureAwait(false);
+            await ExecuteAsync("INSERT INTO messages (id,tenantid,conversationid,role,content,thinking,runnerid,model,tokenestimate,timetofirsttokenms,streamingtimems,totaltimems,tokensused,runid,toolcallsjson,toolcallid,metadatajson,createdutc) VALUES (@id,@tenantid,@conversationid,@role,@content,@thinking,@runnerid,@model,@tokenestimate,@timetofirsttokenms,@streamingtimems,@totaltimems,@tokensused,@runid,@toolcallsjson,@toolcallid,@metadatajson,@createdutc)", AddMessage, item, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -906,12 +907,12 @@ namespace Wilson.Core.Database
 
         private static void AddMessage(IDbCommand command, ChatMessage item)
         {
-            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@conversationid", item.ConversationId); Add(command, "@role", item.Role); Add(command, "@content", item.Content); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@tokenestimate", item.TokenEstimate); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@runid", item.RunId); Add(command, "@toolcallsjson", item.ToolCallsJson); Add(command, "@toolcallid", item.ToolCallId); Add(command, "@metadatajson", item.MetadataJson); Add(command, "@createdutc", Iso(item.CreatedUtc));
+            Add(command, "@id", item.Id); Add(command, "@tenantid", item.TenantId); Add(command, "@conversationid", item.ConversationId); Add(command, "@role", item.Role); Add(command, "@content", item.Content); Add(command, "@thinking", item.Thinking); Add(command, "@runnerid", item.RunnerId); Add(command, "@model", item.Model); Add(command, "@tokenestimate", item.TokenEstimate); Add(command, "@timetofirsttokenms", item.TimeToFirstTokenMs); Add(command, "@streamingtimems", item.StreamingTimeMs); Add(command, "@totaltimems", item.TotalTimeMs); Add(command, "@tokensused", item.TokensUsed); Add(command, "@runid", item.RunId); Add(command, "@toolcallsjson", item.ToolCallsJson); Add(command, "@toolcallid", item.ToolCallId); Add(command, "@metadatajson", item.MetadataJson); Add(command, "@createdutc", Iso(item.CreatedUtc));
         }
 
         private static ChatMessage ReadMessage(IDataRecord record)
         {
-            return new ChatMessage { Id = S(record, "id"), TenantId = S(record, "tenantid"), ConversationId = S(record, "conversationid"), Role = S(record, "role"), Content = S(record, "content"), RunnerId = S(record, "runnerid"), Model = S(record, "model"), TokenEstimate = Convert.ToInt32(R(record, "tokenestimate")), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), RunId = S(record, "runid"), ToolCallsJson = S(record, "toolcallsjson"), ToolCallId = S(record, "toolcallid"), MetadataJson = S(record, "metadatajson"), CreatedUtc = D(record, "createdutc") };
+            return new ChatMessage { Id = S(record, "id"), TenantId = S(record, "tenantid"), ConversationId = S(record, "conversationid"), Role = S(record, "role"), Content = S(record, "content"), Thinking = S(record, "thinking"), RunnerId = S(record, "runnerid"), Model = S(record, "model"), TokenEstimate = Convert.ToInt32(R(record, "tokenestimate")), TimeToFirstTokenMs = R(record, "timetofirsttokenms"), StreamingTimeMs = R(record, "streamingtimems"), TotalTimeMs = R(record, "totaltimems"), TokensUsed = Convert.ToInt32(R(record, "tokensused")), RunId = S(record, "runid"), ToolCallsJson = S(record, "toolcallsjson"), ToolCallId = S(record, "toolcallid"), MetadataJson = S(record, "metadatajson"), CreatedUtc = D(record, "createdutc") };
         }
 
         private static void AddFeedback(IDbCommand command, Feedback item)

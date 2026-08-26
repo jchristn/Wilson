@@ -26,6 +26,17 @@ namespace Wilson.Core.Services
         public delegate Task<ToolCapableInferenceResponse> ToolInferenceHandler(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token);
 
         /// <summary>
+        /// Receives streamed visible-text and reasoning deltas as tool-capable inference runs.
+        /// </summary>
+        public delegate Task ToolTokenHandler(string? textDelta, string? reasoningDelta, CancellationToken token);
+
+        /// <summary>
+        /// Streaming tool-capable inference delegate. Forwards deltas via <paramref name="onToken"/> and returns
+        /// the accumulated response.
+        /// </summary>
+        public delegate Task<ToolCapableInferenceResponse> ToolStreamingInferenceHandler(ModelRunnerSettings runner, ToolCapableInferenceRequest request, ToolTokenHandler? onToken, CancellationToken token);
+
+        /// <summary>
         /// Receives safe tool progress events.
         /// </summary>
         public delegate Task ToolProgressHandler(ToolProgressEvent progress, CancellationToken token);
@@ -37,6 +48,7 @@ namespace Wilson.Core.Services
 
         private readonly ToolService _ToolService;
         private readonly ToolInferenceHandler _Inference;
+        private readonly ToolStreamingInferenceHandler? _StreamingInference;
         private readonly ToolApprovalHandler? _Approval;
 
         /// <summary>
@@ -45,7 +57,7 @@ namespace Wilson.Core.Services
         /// <param name="toolService">Tool service.</param>
         /// <param name="inferenceService">Inference service.</param>
         public ToolAgentService(ToolService toolService, InferenceService inferenceService)
-            : this(toolService, inferenceService.ChatWithToolsAsync)
+            : this(toolService, (inferenceService ?? throw new ArgumentNullException(nameof(inferenceService))).ChatWithToolsAsync, null, inferenceService.ChatWithToolsStreamingAsync)
         {
         }
 
@@ -55,7 +67,7 @@ namespace Wilson.Core.Services
         /// <param name="toolService">Tool service.</param>
         /// <param name="inference">Inference delegate.</param>
         public ToolAgentService(ToolService toolService, ToolInferenceHandler inference)
-            : this(toolService, inference, null)
+            : this(toolService, inference, null, null)
         {
         }
 
@@ -66,10 +78,24 @@ namespace Wilson.Core.Services
         /// <param name="inference">Inference delegate.</param>
         /// <param name="approval">Interactive approval delegate.</param>
         public ToolAgentService(ToolService toolService, ToolInferenceHandler inference, ToolApprovalHandler? approval)
+            : this(toolService, inference, approval, null)
+        {
+        }
+
+        /// <summary>
+        /// Instantiate with caller-supplied inference, approval, and streaming inference delegates.
+        /// </summary>
+        /// <param name="toolService">Tool service.</param>
+        /// <param name="inference">Non-streaming inference delegate (fallback).</param>
+        /// <param name="approval">Interactive approval delegate.</param>
+        /// <param name="streamingInference">Streaming inference delegate; when present and the runner supports
+        /// streaming tool calls, reasoning and text stream live.</param>
+        public ToolAgentService(ToolService toolService, ToolInferenceHandler inference, ToolApprovalHandler? approval, ToolStreamingInferenceHandler? streamingInference)
         {
             _ToolService = toolService ?? throw new ArgumentNullException(nameof(toolService));
             _Inference = inference ?? throw new ArgumentNullException(nameof(inference));
             _Approval = approval;
+            _StreamingInference = streamingInference;
         }
 
         /// <summary>
@@ -90,7 +116,8 @@ namespace Wilson.Core.Services
             CompletionRequestSettings? completionSettings,
             ToolExecutionContext executionContext,
             CancellationToken token = default,
-            ToolProgressHandler? progressHandler = null)
+            ToolProgressHandler? progressHandler = null,
+            ToolTokenHandler? tokenHandler = null)
         {
             ArgumentNullException.ThrowIfNull(runner);
             ArgumentNullException.ThrowIfNull(messages);
@@ -100,6 +127,7 @@ namespace Wilson.Core.Services
             List<ModelChatMessage> conversation = BuildInitialConversation(messages, completionSettings);
             List<ToolTrace> traces = new List<ToolTrace>();
             List<ToolAuditTrace> auditTraces = new List<ToolAuditTrace>();
+            StringBuilder thinking = new StringBuilder();
             List<ToolDescriptor> toolDescriptors = _ToolService.ListTools(false);
             List<ModelToolDefinition> tools = _ToolService.GetModelToolDefinitions();
             EnsureToolSystemInstruction(conversation, tools, toolDescriptors, completionSettings.ToolSystemPrompt);
@@ -136,13 +164,15 @@ namespace Wilson.Core.Services
                     ToolChoice = tools.Count > 0 ? executionContext.Settings.Tools.ToolChoiceMode : ToolChoiceModes.None
                 };
 
-                ToolCapableInferenceResponse response = await _Inference(runner, request, token).ConfigureAwait(false);
+                ToolCapableInferenceResponse response = await InvokeInferenceAsync(runner, request, tokenHandler, token).ConfigureAwait(false);
+                AppendThinking(thinking, response.Thinking);
                 if (!response.Success)
                 {
                     return new ToolAgentResponse
                     {
                         Success = false,
                         Content = String.Empty,
+                        Thinking = thinking.ToString(),
                         ErrorMessage = response.ErrorMessage,
                         FinishReason = response.FinishReason,
                         IterationCount = iteration,
@@ -166,6 +196,7 @@ namespace Wilson.Core.Services
                     {
                         Success = true,
                         Content = response.Content ?? String.Empty,
+                        Thinking = thinking.ToString(),
                         FinishReason = response.FinishReason,
                         IterationCount = iteration,
                         ToolCallCount = sequence,
@@ -251,6 +282,8 @@ namespace Wilson.Core.Services
                         errors,
                         traces,
                         auditTraces,
+                        thinking,
+                        tokenHandler,
                         token).ConfigureAwait(false);
                 }
             }
@@ -259,6 +292,7 @@ namespace Wilson.Core.Services
             {
                 Success = false,
                 Content = String.Empty,
+                Thinking = thinking.ToString(),
                 ErrorMessage = "Tool iteration limit reached before a final assistant response.",
                 FinishReason = "tool_iteration_limit",
                 IterationCount = maxIterations,
@@ -268,6 +302,34 @@ namespace Wilson.Core.Services
                 AuditToolCalls = auditTraces,
                 Messages = conversation
             };
+        }
+
+        /// <summary>
+        /// Select the streaming inference path when a live token sink is present and the runner supports streaming
+        /// tool calls; otherwise fall back to the non-streaming inference delegate.
+        /// </summary>
+        private async Task<ToolCapableInferenceResponse> InvokeInferenceAsync(
+            ModelRunnerSettings runner,
+            ToolCapableInferenceRequest request,
+            ToolTokenHandler? tokenHandler,
+            CancellationToken token)
+        {
+            if (_StreamingInference != null && tokenHandler != null && runner.SupportsStreamingToolCalls)
+            {
+                return await _StreamingInference(runner, request, tokenHandler, token).ConfigureAwait(false);
+            }
+
+            return await _Inference(runner, request, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Append a non-empty reasoning fragment to the accumulated thinking buffer, separated by a blank line.
+        /// </summary>
+        private static void AppendThinking(StringBuilder thinking, string? fragment)
+        {
+            if (String.IsNullOrWhiteSpace(fragment)) return;
+            if (thinking.Length > 0) thinking.Append("\n\n");
+            thinking.Append(fragment.Trim());
         }
 
         private async Task<ToolAgentResponse> RequestFinalAnswerAfterToolStopAsync(
@@ -281,6 +343,8 @@ namespace Wilson.Core.Services
             int errors,
             List<ToolTrace> traces,
             List<ToolAuditTrace> auditTraces,
+            StringBuilder thinking,
+            ToolTokenHandler? tokenHandler,
             CancellationToken token)
         {
             conversation.Add(new ModelChatMessage
@@ -289,7 +353,7 @@ namespace Wilson.Core.Services
                 Content = "Wilson stopped repeated tool calls. Provide the best final answer possible from the evidence already available."
             });
 
-            ToolCapableInferenceResponse finalResponse = await _Inference(runner, new ToolCapableInferenceRequest
+            ToolCapableInferenceResponse finalResponse = await InvokeInferenceAsync(runner, new ToolCapableInferenceRequest
             {
                 Messages = conversation,
                 Model = model,
@@ -301,8 +365,9 @@ namespace Wilson.Core.Services
                 ApiKey = runner.ApiKey,
                 Tools = new List<ModelToolDefinition>(),
                 ToolChoice = ToolChoiceModes.None
-            }, token).ConfigureAwait(false);
+            }, tokenHandler, token).ConfigureAwait(false);
 
+            AppendThinking(thinking, finalResponse.Thinking);
             string content = finalResponse.Success && !String.IsNullOrWhiteSpace(finalResponse.Content)
                 ? finalResponse.Content!
                 : "Wilson stopped repeated tool calls before a final model answer could be generated.";
@@ -311,6 +376,7 @@ namespace Wilson.Core.Services
             {
                 Success = true,
                 Content = content,
+                Thinking = thinking.ToString(),
                 FinishReason = finalResponse.Success ? finalResponse.FinishReason : "tool_loop_guard_stopped",
                 IterationCount = iteration,
                 ToolCallCount = sequence,

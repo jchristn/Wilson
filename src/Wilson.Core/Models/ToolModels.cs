@@ -440,6 +440,8 @@ namespace Wilson.Core.Models
         public bool Success { get; set; } = false;
         /// <summary>Assistant content.</summary>
         public string? Content { get; set; } = null;
+        /// <summary>Model reasoning / "thinking" text, separated from the visible content.</summary>
+        public string? Thinking { get; set; } = null;
         /// <summary>Model-requested tool calls.</summary>
         public List<ModelToolCall> ToolCalls { get; set; } = new List<ModelToolCall>();
         /// <summary>Provider finish reason.</summary>
@@ -459,6 +461,8 @@ namespace Wilson.Core.Models
         public bool Success { get; set; } = false;
         /// <summary>Final assistant content.</summary>
         public string Content { get; set; } = String.Empty;
+        /// <summary>Accumulated model reasoning / "thinking" text across the loop.</summary>
+        public string Thinking { get; set; } = String.Empty;
         /// <summary>Error message if the loop failed.</summary>
         public string? ErrorMessage { get; set; } = null;
         /// <summary>Final provider finish reason.</summary>

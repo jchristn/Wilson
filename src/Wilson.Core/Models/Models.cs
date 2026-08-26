@@ -232,6 +232,8 @@ namespace Wilson.Core.Models
         public string Role { get; set; } = String.Empty;
         /// <summary>Content.</summary>
         public string Content { get; set; } = String.Empty;
+        /// <summary>Model reasoning / "thinking" text associated with this message, separated from the visible content.</summary>
+        public string Thinking { get; set; } = String.Empty;
         /// <summary>Runner identifier.</summary>
         public string RunnerId { get; set; } = String.Empty;
         /// <summary>Model.</summary>
@@ -256,6 +258,28 @@ namespace Wilson.Core.Models
         public string MetadataJson { get; set; } = String.Empty;
         /// <summary>Created UTC.</summary>
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// A single streamed inference delta carrying visible text and/or model reasoning ("thinking").
+    /// </summary>
+    public class InferenceStreamChunk
+    {
+        /// <summary>Visible answer text for this delta (may be empty).</summary>
+        public string? Text { get; set; } = null;
+        /// <summary>Model reasoning / thinking text for this delta (may be empty).</summary>
+        public string? Reasoning { get; set; } = null;
+    }
+
+    /// <summary>
+    /// A non-streaming inference completion with the visible answer and separated model reasoning.
+    /// </summary>
+    public class InferenceCompletion
+    {
+        /// <summary>Visible answer text, with any inline think blocks removed.</summary>
+        public string Text { get; set; } = String.Empty;
+        /// <summary>Model reasoning / thinking text (empty when the model produced none).</summary>
+        public string Thinking { get; set; } = String.Empty;
     }
 
     /// <summary>

@@ -902,11 +902,12 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 }
 
                 Stopwatch inference = Stopwatch.StartNew();
-                string answer = await Inference.ChatAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false);
+                InferenceCompletion completion = await Inference.ChatWithReasoningAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false);
                 inference.Stop();
+                string answer = completion.Text;
                 int outputTokens = InferenceService.EstimateTokens(answer);
                 int inputTokens = InferenceService.EstimateTokens(prompt);
-                ChatMessage assistantMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = answer, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = outputTokens, TimeToFirstTokenMs = inference.Elapsed.TotalMilliseconds, StreamingTimeMs = 0, TotalTimeMs = inference.Elapsed.TotalMilliseconds, TokensUsed = inputTokens + outputTokens };
+                ChatMessage assistantMessage = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = answer, Thinking = completion.Thinking, RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = outputTokens, TimeToFirstTokenMs = inference.Elapsed.TotalMilliseconds, StreamingTimeMs = 0, TotalTimeMs = inference.Elapsed.TotalMilliseconds, TokensUsed = inputTokens + outputTokens };
                 await Database.CreateMessageAsync(assistantMessage, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, assistantMessage, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(assistantMessage, answer, promptSelection: promptSelection);
@@ -925,6 +926,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             }
 
             StringBuilder full = new StringBuilder();
+            StringBuilder thinking = new StringBuilder();
             Stopwatch total = Stopwatch.StartNew();
             double firstTokenMs = 0;
             Stopwatch streamingTimer = new Stopwatch();
@@ -932,21 +934,30 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             await SendSseAsync(ctx, "truncation", truncation, false).ConfigureAwait(false);
             try
             {
-                await foreach (string chunk in Inference.ChatStreamingAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false))
+                await foreach (InferenceStreamChunk chunk in Inference.ChatStreamingAsync(runner, body.Model, prompt, body.Settings, ctx.Token).ConfigureAwait(false))
                 {
-                    if (firstTokenMs <= 0)
+                    if (!String.IsNullOrEmpty(chunk.Reasoning))
                     {
-                        firstTokenMs = total.Elapsed.TotalMilliseconds;
-                        streamingTimer.Start();
+                        thinking.Append(chunk.Reasoning);
+                        await SendSseAsync(ctx, "thinking", new { text = chunk.Reasoning }, false).ConfigureAwait(false);
                     }
-                    full.Append(chunk);
-                    await SendSseAsync(ctx, "chunk", new { text = chunk }, false).ConfigureAwait(false);
+
+                    if (!String.IsNullOrEmpty(chunk.Text))
+                    {
+                        if (firstTokenMs <= 0)
+                        {
+                            firstTokenMs = total.Elapsed.TotalMilliseconds;
+                            streamingTimer.Start();
+                        }
+                        full.Append(chunk.Text);
+                        await SendSseAsync(ctx, "chunk", new { text = chunk.Text }, false).ConfigureAwait(false);
+                    }
                 }
                 if (streamingTimer.IsRunning) streamingTimer.Stop();
                 total.Stop();
                 int storedTokens = InferenceService.EstimateTokens(full.ToString());
                 int totalTokens = InferenceService.EstimateTokens(prompt) + storedTokens;
-                ChatMessage stored = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = full.ToString(), RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = storedTokens, TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = totalTokens };
+                ChatMessage stored = new ChatMessage { TenantId = requestContext.TenantId!, ConversationId = conversation.Id, Role = "assistant", Content = full.ToString(), Thinking = thinking.ToString().Trim(), RunnerId = body.RunnerId, Model = body.Model, TokenEstimate = storedTokens, TimeToFirstTokenMs = firstTokenMs, StreamingTimeMs = streamingTimer.Elapsed.TotalMilliseconds, TotalTimeMs = total.Elapsed.TotalMilliseconds, TokensUsed = totalTokens };
                 await Database.CreateMessageAsync(stored, ctx.Token).ConfigureAwait(false);
                 conversation = await MaybeGenerateConversationTitleAsync(conversation, runner, body.Model, messages, userMessage, stored, ctx.Token).ConfigureAwait(false);
                 SetRequestCapture(stored, full.ToString(), promptSelection: promptSelection);
@@ -1013,6 +1024,18 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                         {
                             await SendSseAsync(ctx, SseEventName(progress.EventType), progress, false).ConfigureAwait(false);
                         }
+                    },
+                    async (textDelta, reasoningDelta, token) =>
+                    {
+                        if (!String.IsNullOrEmpty(reasoningDelta))
+                        {
+                            await SendSseAsync(ctx, "thinking", new { text = reasoningDelta }, false).ConfigureAwait(false);
+                        }
+
+                        if (!String.IsNullOrEmpty(textDelta))
+                        {
+                            await SendSseAsync(ctx, "chunk", new { text = textDelta }, false).ConfigureAwait(false);
+                        }
                     }).ConfigureAwait(false);
 
                 await SendSseAsync(ctx, "conversation", response.Conversation!, false).ConfigureAwait(false);
@@ -1024,6 +1047,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     response.AssistantMessage.ConversationId,
                     response.AssistantMessage.Role,
                     response.AssistantMessage.Content,
+                    response.AssistantMessage.Thinking,
                     response.AssistantMessage.RunnerId,
                     response.AssistantMessage.Model,
                     response.AssistantMessage.TokenEstimate,
@@ -1058,7 +1082,8 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             ChatTruncationNotice truncation,
             ChatToolPlan toolPlan,
             PromptSelection promptSelection,
-            ToolAgentService.ToolProgressHandler? progressHandler)
+            ToolAgentService.ToolProgressHandler? progressHandler,
+            ToolAgentService.ToolTokenHandler? tokenHandler = null)
         {
             Stopwatch total = Stopwatch.StartNew();
             ToolExecutionContext executionContext = new ToolExecutionContext
@@ -1094,13 +1119,14 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     : async (call, approvalContext, iteration, sequenceNumber, startedUtc, token) =>
                     {
                         return await WaitForToolApprovalAsync(call, approvalContext, toolRun, iteration, sequenceNumber, startedUtc, token).ConfigureAwait(false);
-                    });
+                    },
+                Inference.ChatWithToolsStreamingAsync);
             List<ModelChatMessage> modelMessages = previousMessages
                 .Select(message => new ModelChatMessage { Role = message.Role, Content = message.Content })
                 .ToList();
             modelMessages.Add(new ModelChatMessage { Role = "user", Content = body.Prompt });
 
-            ToolAgentResponse agentResponse = await agent.RunAsync(runner, body.Model, modelMessages, body.Settings, executionContext, ctx.Token, progressHandler).ConfigureAwait(false);
+            ToolAgentResponse agentResponse = await agent.RunAsync(runner, body.Model, modelMessages, body.Settings, executionContext, ctx.Token, progressHandler, tokenHandler).ConfigureAwait(false);
             total.Stop();
 
             if (!agentResponse.Success)
@@ -1131,6 +1157,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ConversationId = conversation.Id,
                 Role = "assistant",
                 Content = answer,
+                Thinking = agentResponse.Thinking ?? String.Empty,
                 RunnerId = body.RunnerId,
                 Model = body.Model,
                 TokenEstimate = outputTokens,
