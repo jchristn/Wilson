@@ -528,11 +528,19 @@ namespace Wilson.Core.Models
         public List<HealthCheckRecord> History { get; set; } = new List<HealthCheckRecord>();
 
         /// <summary>
+        /// Maximum number of recent check-history records included in an API snapshot.
+        /// The dashboard only renders the most recent samples (at most ~96), so the full
+        /// 24h rolling window (thousands of records at a few-second interval) is never sent.
+        /// </summary>
+        public const int DefaultHistoryLimit = 100;
+
+        /// <summary>
         /// Create an API health status snapshot from runtime state.
         /// </summary>
         /// <param name="state">Runtime state.</param>
+        /// <param name="historyLimit">Maximum number of most-recent history records to include.</param>
         /// <returns>Health status snapshot.</returns>
-        public static EndpointHealthStatus FromState(EndpointHealthState state)
+        public static EndpointHealthStatus FromState(EndpointHealthState state, int historyLimit = DefaultHistoryLimit)
         {
             if (state == null) throw new ArgumentNullException(nameof(state));
 
@@ -572,7 +580,12 @@ namespace Wilson.Core.Models
 
             lock (state.HistoryLock)
             {
-                status.History = new List<HealthCheckRecord>(state.CheckHistory);
+                // Only include the most recent records; the full rolling window can hold
+                // thousands of entries and bloats every model-runner / health response.
+                int total = state.CheckHistory.Count;
+                int skip = historyLimit > 0 && total > historyLimit ? total - historyLimit : 0;
+                status.History = new List<HealthCheckRecord>(total - skip);
+                for (int i = skip; i < total; i++) status.History.Add(state.CheckHistory[i]);
             }
 
             return status;

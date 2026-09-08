@@ -88,116 +88,118 @@ namespace Wilson.Core.Services
         /// </summary>
         public async Task<List<ModelRunnerStatus>> GetRunnerStatusesAsync(bool includeLiveStatus = true, CancellationToken token = default)
         {
-            List<ModelRunnerStatus> statuses = new List<ModelRunnerStatus>();
+            // Snapshot the configured runners so the parallel probes below read a stable list.
+            List<ModelRunnerSettings> runners = _Settings.ModelRunners.ToList();
 
-            foreach (ModelRunnerSettings runner in _Settings.ModelRunners)
+            if (!includeLiveStatus)
             {
-                token.ThrowIfCancellationRequested();
-                ModelRunnerSettings runnerDefaults = CopyRunner(runner);
-                ModelRunnerSettings.ApplyHealthCheckDefaults(runnerDefaults);
-                ModelRunnerStatus status = new ModelRunnerStatus
+                List<ModelRunnerStatus> configured = new List<ModelRunnerStatus>(runners.Count);
+                foreach (ModelRunnerSettings runner in runners)
                 {
-                    Id = runner.Id,
-                    Name = runner.Name,
-                    ApiType = runner.ApiType,
-                    Endpoint = runner.Endpoint,
-                    ConfiguredModels = new List<string>(runner.Models),
-                    ContextWindowTokens = runner.ContextWindowTokens,
-                    ToolsEnabled = runnerDefaults.ToolsEnabled,
-                    SupportsTools = runnerDefaults.SupportsTools,
-                    ToolCallingApiFormat = runnerDefaults.ToolCallingApiFormat,
-                    SupportsParallelToolCalls = runnerDefaults.SupportsParallelToolCalls,
-                    SupportsStreamingToolCalls = runnerDefaults.SupportsStreamingToolCalls,
-                    ChatCompletionsPath = runnerDefaults.ChatCompletionsPath,
-                    HealthCheckEnabled = runnerDefaults.HealthCheckEnabled,
-                    HealthCheckUrl = runnerDefaults.HealthCheckUrl,
-                    HealthCheckMethod = runnerDefaults.HealthCheckMethod.ToString(),
-                    HealthCheckIntervalMs = runnerDefaults.HealthCheckIntervalMs,
-                    HealthCheckTimeoutMs = runnerDefaults.HealthCheckTimeoutMs,
-                    HealthCheckExpectedStatusCode = runnerDefaults.HealthCheckExpectedStatusCode,
-                    HealthyThreshold = runnerDefaults.HealthyThreshold,
-                    UnhealthyThreshold = runnerDefaults.UnhealthyThreshold,
-                    HealthCheckUseAuth = runnerDefaults.HealthCheckUseAuth
-                };
-
-                if (!includeLiveStatus)
-                {
-                    status.AvailableModels = new List<string>(runner.Models);
-                    ModelCapabilityClassification nameClassification = ClassifyModelsFromNames(status.AvailableModels);
-                    status.ChatModels = nameClassification.ChatModels;
-                    status.EmbeddingModels = nameClassification.EmbeddingModels;
-                    status.ToolModels = nameClassification.ToolModels;
-                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
-                    status.Models = new List<string>(status.ChatModels);
-                    status.Online = true;
-                    status.StatusMessage = "Live model status not queried.";
-                    statuses.Add(status);
-                    continue;
+                    token.ThrowIfCancellationRequested();
+                    configured.Add(BuildConfiguredStatus(runner));
                 }
 
-                using CancellationTokenSource statusTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                int statusTimeoutMs = Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs);
-                if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools)
-                    statusTimeoutMs = Math.Max(statusTimeoutMs, 15000);
-                statusTimeout.CancelAfter(statusTimeoutMs);
-                CancellationToken statusToken = statusTimeout.Token;
-
-                try
-                {
-                    if (runner.Models.Count > 0)
-                    {
-                        status.AvailableModels = new List<string>(runner.Models);
-                    }
-                    else if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
-                    {
-                        status.AvailableModels = await ListModelsAsync(runner, statusToken).ConfigureAwait(false);
-                    }
-
-                    if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
-                    {
-                        status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, statusToken).ConfigureAwait(false);
-                    }
-
-                    ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, statusToken).ConfigureAwait(false);
-                    status.ChatModels = classification.ChatModels;
-                    status.EmbeddingModels = classification.EmbeddingModels;
-                    status.ToolModels = classification.ToolModels;
-                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
-                    status.Models = new List<string>(status.ChatModels);
-                    status.Online = true;
-                    status.StatusMessage = "Connected";
-                }
-                catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                {
-                    ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
-                    status.ChatModels = classification.ChatModels;
-                    status.EmbeddingModels = classification.EmbeddingModels;
-                    status.ToolModels = classification.ToolModels;
-                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
-                    status.Models = new List<string>(status.ChatModels);
-                    status.Online = !runnerDefaults.HealthCheckEnabled;
-                    status.StatusMessage = runnerDefaults.HealthCheckEnabled
-                        ? "Live model status timed out after " + runnerDefaults.HealthCheckTimeoutMs + "ms."
-                        : "Health checks are disabled; configured model server is treated as available.";
-                }
-                catch (Exception ex)
-                {
-                    ModelCapabilityClassification classification = ClassifyModelsFromNames(status.AvailableModels);
-                    status.ChatModels = classification.ChatModels;
-                    status.EmbeddingModels = classification.EmbeddingModels;
-                    status.ToolModels = classification.ToolModels;
-                    if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
-                    status.Models = new List<string>(status.ChatModels);
-                    status.Online = !runnerDefaults.HealthCheckEnabled;
-                    status.StatusMessage = runnerDefaults.HealthCheckEnabled
-                        ? ex.Message
-                        : "Health checks are disabled; configured model server is treated as available.";
-                }
-
-                statuses.Add(status);
+                return configured;
             }
 
-            return statuses;
+            // Probe every runner concurrently. This loop used to be serial, so one slow or
+            // unreachable model server delayed the status of every server behind it.
+            ModelRunnerStatus[] statuses = await Task.WhenAll(
+                runners.Select(runner => BuildLiveStatusAsync(runner, token))).ConfigureAwait(false);
+            return statuses.ToList();
+        }
+
+        private ModelRunnerStatus CreateBaseStatus(ModelRunnerSettings runner, out ModelRunnerSettings runnerDefaults)
+        {
+            runnerDefaults = CopyRunner(runner);
+            ModelRunnerSettings.ApplyHealthCheckDefaults(runnerDefaults);
+            return new ModelRunnerStatus
+            {
+                Id = runner.Id,
+                Name = runner.Name,
+                ApiType = runner.ApiType,
+                Endpoint = runner.Endpoint,
+                ConfiguredModels = new List<string>(runner.Models),
+                ContextWindowTokens = runner.ContextWindowTokens,
+                ToolsEnabled = runnerDefaults.ToolsEnabled,
+                SupportsTools = runnerDefaults.SupportsTools,
+                ToolCallingApiFormat = runnerDefaults.ToolCallingApiFormat,
+                SupportsParallelToolCalls = runnerDefaults.SupportsParallelToolCalls,
+                SupportsStreamingToolCalls = runnerDefaults.SupportsStreamingToolCalls,
+                ChatCompletionsPath = runnerDefaults.ChatCompletionsPath,
+                HealthCheckEnabled = runnerDefaults.HealthCheckEnabled,
+                HealthCheckUrl = runnerDefaults.HealthCheckUrl,
+                HealthCheckMethod = runnerDefaults.HealthCheckMethod.ToString(),
+                HealthCheckIntervalMs = runnerDefaults.HealthCheckIntervalMs,
+                HealthCheckTimeoutMs = runnerDefaults.HealthCheckTimeoutMs,
+                HealthCheckExpectedStatusCode = runnerDefaults.HealthCheckExpectedStatusCode,
+                HealthyThreshold = runnerDefaults.HealthyThreshold,
+                UnhealthyThreshold = runnerDefaults.UnhealthyThreshold,
+                HealthCheckUseAuth = runnerDefaults.HealthCheckUseAuth
+            };
+        }
+
+        private ModelRunnerStatus BuildConfiguredStatus(ModelRunnerSettings runner)
+        {
+            ModelRunnerStatus status = CreateBaseStatus(runner, out ModelRunnerSettings runnerDefaults);
+            status.AvailableModels = new List<string>(runner.Models);
+            ApplyClassification(status, runner, runnerDefaults, ClassifyModelsFromNames(status.AvailableModels));
+            status.Online = true;
+            status.StatusMessage = "Live model status not queried.";
+            return status;
+        }
+
+        private async Task<ModelRunnerStatus> BuildLiveStatusAsync(ModelRunnerSettings runner, CancellationToken token)
+        {
+            ModelRunnerStatus status = CreateBaseStatus(runner, out ModelRunnerSettings runnerDefaults);
+            bool isOllama = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase);
+
+            using CancellationTokenSource statusTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            int statusTimeoutMs = Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs);
+            if (isOllama && runnerDefaults.SupportsTools) statusTimeoutMs = Math.Max(statusTimeoutMs, 15000);
+            statusTimeout.CancelAfter(statusTimeoutMs);
+            CancellationToken statusToken = statusTimeout.Token;
+
+            try
+            {
+                if (runner.Models.Count > 0) status.AvailableModels = new List<string>(runner.Models);
+                else if (isOllama) status.AvailableModels = await ListModelsAsync(runner, statusToken).ConfigureAwait(false);
+
+                if (isOllama) status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, statusToken).ConfigureAwait(false);
+
+                ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, status.AvailableModels, statusToken).ConfigureAwait(false);
+                ApplyClassification(status, runner, runnerDefaults, classification);
+                status.Online = true;
+                status.StatusMessage = "Connected";
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                ApplyClassification(status, runner, runnerDefaults, ClassifyModelsFromNames(status.AvailableModels));
+                status.Online = !runnerDefaults.HealthCheckEnabled;
+                status.StatusMessage = runnerDefaults.HealthCheckEnabled
+                    ? "Live model status timed out after " + runnerDefaults.HealthCheckTimeoutMs + "ms."
+                    : "Health checks are disabled; configured model server is treated as available.";
+            }
+            catch (Exception ex)
+            {
+                ApplyClassification(status, runner, runnerDefaults, ClassifyModelsFromNames(status.AvailableModels));
+                status.Online = !runnerDefaults.HealthCheckEnabled;
+                status.StatusMessage = runnerDefaults.HealthCheckEnabled
+                    ? ex.Message
+                    : "Health checks are disabled; configured model server is treated as available.";
+            }
+
+            return status;
+        }
+
+        private static void ApplyClassification(ModelRunnerStatus status, ModelRunnerSettings runner, ModelRunnerSettings runnerDefaults, ModelCapabilityClassification classification)
+        {
+            status.ChatModels = classification.ChatModels;
+            status.EmbeddingModels = classification.EmbeddingModels;
+            status.ToolModels = classification.ToolModels;
+            if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
+            status.Models = new List<string>(status.ChatModels);
         }
 
         /// <summary>
@@ -1040,19 +1042,42 @@ namespace Wilson.Core.Services
 
         private static async Task<ModelCapabilityClassification> ClassifyModelsAsync(ModelRunnerSettings runner, List<string> models, CancellationToken token)
         {
-            ModelCapabilityClassification classification = new ModelCapabilityClassification();
-            foreach (string model in models.Where(item => !String.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                token.ThrowIfCancellationRequested();
-                ModelCapability capability = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
-                    ? await GetOllamaModelCapabilityAsync(runner, model, token).ConfigureAwait(false)
-                    : GetModelCapabilityFromName(model);
+            List<string> distinct = models.Where(item => !String.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            ModelCapability[] capabilities;
 
-                if (capability == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
+            if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
+            {
+                // Ollama has no bulk capability endpoint, so each model needs its own /api/show
+                // probe. Run them concurrently (bounded) instead of one blocking round-trip at a
+                // time, which was the dominant cost of loading the Model Servers page.
+                using SemaphoreSlim gate = new SemaphoreSlim(Math.Min(8, Math.Max(1, distinct.Count)));
+                capabilities = await Task.WhenAll(distinct.Select(async model =>
+                {
+                    await gate.WaitAsync(token).ConfigureAwait(false);
+                    try
+                    {
+                        return await GetOllamaModelCapabilityAsync(runner, model, token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                })).ConfigureAwait(false);
+            }
+            else
+            {
+                capabilities = distinct.Select(GetModelCapabilityFromName).ToArray();
+            }
+
+            ModelCapabilityClassification classification = new ModelCapabilityClassification();
+            for (int i = 0; i < distinct.Count; i++)
+            {
+                string model = distinct[i];
+                if (capabilities[i] == ModelCapability.Embedding) classification.EmbeddingModels.Add(model);
                 else
                 {
                     classification.ChatModels.Add(model);
-                    if (capability == ModelCapability.ToolChat) classification.ToolModels.Add(model);
+                    if (capabilities[i] == ModelCapability.ToolChat) classification.ToolModels.Add(model);
                 }
             }
 
