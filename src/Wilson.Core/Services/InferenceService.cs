@@ -34,6 +34,30 @@ namespace Wilson.Core.Services
             WriteIndented = false
         };
 
+        // Shared, pooled HTTP client for outbound model-server calls. Creating a new HttpClient
+        // per request leaks sockets: each disposed client leaves its TCP connections in TIME_WAIT
+        // for minutes, so the parallel per-model status probes exhaust the box's ephemeral ports
+        // (slow connection accepts, ERR_NO_BUFFER_SPACE on clients). A single pooled client with
+        // bounded per-server connections reuses sockets instead. Per-request timeouts are enforced
+        // by the CancellationToken the callers already pass, so the client timeout is left infinite.
+        private static readonly HttpClient _Http = new HttpClient(new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+            MaxConnectionsPerServer = 32
+        })
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+
+        private static HttpRequestMessage CreateModelServerRequest(HttpMethod method, ModelRunnerSettings runner, string path, HttpContent? content = null)
+        {
+            HttpRequestMessage request = new HttpRequestMessage(method, EndpointUrl(runner.Endpoint, path));
+            if (content != null) request.Content = content;
+            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runner.ApiKey);
+            return request;
+        }
+
         /// <summary>
         /// Instantiate the inference service.
         /// </summary>
@@ -239,14 +263,15 @@ namespace Wilson.Core.Services
                 throw new InvalidOperationException("Model pulls are only supported for Ollama model servers.");
             }
 
-            using HttpClient client = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) client.DefaultRequestHeaders.Add("Authorization", "Bearer " + runner.ApiKey);
+            using CancellationTokenSource pullTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            pullTimeout.CancelAfter(TimeSpan.FromMinutes(30));
 
             string requestedModel = model.Trim();
             string body = JsonSerializer.Serialize(new { model = requestedModel, stream = false });
             using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
-            using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/pull"), content, token).ConfigureAwait(false);
-            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            using HttpRequestMessage request = CreateModelServerRequest(HttpMethod.Post, runner, "/api/pull", content);
+            using HttpResponseMessage response = await _Http.SendAsync(request, pullTimeout.Token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(pullTimeout.Token).ConfigureAwait(false);
             ThrowIfOllamaRequestFailed(response, responseBody, "pull");
 
             return new ModelPullResult
@@ -270,14 +295,15 @@ namespace Wilson.Core.Services
                 throw new InvalidOperationException("Model loading is only supported for Ollama model servers.");
             }
 
-            using HttpClient client = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) client.DefaultRequestHeaders.Add("Authorization", "Bearer " + runner.ApiKey);
+            using CancellationTokenSource loadTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            loadTimeout.CancelAfter(TimeSpan.FromMinutes(30));
 
             string requestedModel = model.Trim();
             string body = JsonSerializer.Serialize(new { model = requestedModel, prompt = String.Empty, stream = false });
             using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
-            using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/generate"), content, token).ConfigureAwait(false);
-            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            using HttpRequestMessage request = CreateModelServerRequest(HttpMethod.Post, runner, "/api/generate", content);
+            using HttpResponseMessage response = await _Http.SendAsync(request, loadTimeout.Token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(loadTimeout.Token).ConfigureAwait(false);
             ThrowIfOllamaRequestFailed(response, responseBody, "load");
 
             return new ModelPullResult
@@ -745,12 +771,11 @@ namespace Wilson.Core.Services
         private static async Task<ToolCapableInferenceResponse> SendToolChatRequestAsync(string url, string? apiKey, Dictionary<string, object> body, string format, CancellationToken token)
         {
             string json = JsonSerializer.Serialize(body, _ToolJson);
-            using HttpClient client = new HttpClient();
             using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
             if (!String.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
 
-            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            using HttpResponseMessage response = await _Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
@@ -1016,9 +1041,8 @@ namespace Wilson.Core.Services
 
         private static async Task<List<string>> ListLoadedOllamaModelsAsync(ModelRunnerSettings runner, CancellationToken token)
         {
-            using HttpClient client = new HttpClient();
-            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) client.DefaultRequestHeaders.Add("Authorization", "Bearer " + runner.ApiKey);
-            using HttpResponseMessage response = await client.GetAsync(EndpointUrl(runner.Endpoint, "/api/ps"), token).ConfigureAwait(false);
+            using HttpRequestMessage request = CreateModelServerRequest(HttpMethod.Get, runner, "/api/ps");
+            using HttpResponseMessage response = await _Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
             using JsonDocument document = JsonDocument.Parse(json);
@@ -1106,11 +1130,10 @@ namespace Wilson.Core.Services
         {
             try
             {
-                using HttpClient client = new HttpClient();
-                if (!String.IsNullOrWhiteSpace(runner.ApiKey)) client.DefaultRequestHeaders.Add("Authorization", "Bearer " + runner.ApiKey);
                 string body = JsonSerializer.Serialize(new { model });
                 using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
-                using HttpResponseMessage response = await client.PostAsync(EndpointUrl(runner.Endpoint, "/api/show"), content, token).ConfigureAwait(false);
+                using HttpRequestMessage request = CreateModelServerRequest(HttpMethod.Post, runner, "/api/show", content);
+                using HttpResponseMessage response = await _Http.SendAsync(request, token).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
                 string json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
                 using JsonDocument document = JsonDocument.Parse(json);
