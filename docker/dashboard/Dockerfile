@@ -6,6 +6,7 @@ COPY dashboard .
 RUN npm run build
 
 FROM nginx:alpine
+RUN apk add --no-cache curl
 COPY --from=build /src/dashboard/dist /usr/share/nginx/html
 COPY docker/dashboard/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
