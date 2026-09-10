@@ -683,14 +683,18 @@ namespace Wilson.Core.Models
         public string RunnerName { get; set; } = String.Empty;
         /// <summary>Model server endpoint that was probed.</summary>
         public string Endpoint { get; set; } = String.Empty;
+        /// <summary>Validation kind: "completion" or "embedding".</summary>
+        public string Kind { get; set; } = "completion";
         /// <summary>Model used for the validation round-trip.</summary>
         public string Model { get; set; } = String.Empty;
         /// <summary>Whether the model responded successfully.</summary>
         public bool Success { get; set; }
-        /// <summary>Prompt sent to the model.</summary>
-        public string Prompt { get; set; } = String.Empty;
-        /// <summary>Trimmed model response text (empty when the request failed).</summary>
+        /// <summary>Input text sent to the model.</summary>
+        public string Input { get; set; } = String.Empty;
+        /// <summary>Trimmed completion response text (empty for embedding validations or when the request failed).</summary>
         public string ResponseText { get; set; } = String.Empty;
+        /// <summary>Dimension count of the returned embedding vector (embedding validations only).</summary>
+        public int EmbeddingDimensions { get; set; }
         /// <summary>Round-trip latency in milliseconds.</summary>
         public long LatencyMs { get; set; }
         /// <summary>Failure detail when <see cref="Success"/> is false.</summary>

@@ -1563,74 +1563,80 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       {server.statusMessage && server.online === false && <div className="model-server-error" title="Model server status error">{server.statusMessage}</div>}
       {pullOpen && <ModelPullModal server={server} api={api} suggestions={[...available, ...configured]} onClose={() => setPullOpen(false)} onPulled={onPulled} />}
       {healthOpen && <ModelServerHealthModal server={server} api={api} onClose={() => setHealthOpen(false)} />}
-      {validateOpen && <ModelServerValidateModal server={server} api={api} suggestions={[...chatModels, ...available, ...configured]} onClose={() => setValidateOpen(false)} />}
+      {validateOpen && <ModelServerValidateModal server={server} api={api} onClose={() => setValidateOpen(false)} />}
     </section>
   );
 }
 
-function ModelServerValidateModal({ server, api, suggestions, onClose }) {
-  const uniqueSuggestions = useMemo(() => [...new Set((suggestions || []).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [suggestions]);
+function ModelServerValidateModal({ server, api, onClose }) {
+  const completionModels = useMemo(() => sortedUnique(server.chatModels || server.models || []), [server.chatModels, server.models]);
+  const embeddingModels = useMemo(() => sortedUnique(server.embeddingModels || []), [server.embeddingModels]);
+  const otherModels = useMemo(() => {
+    const known = new Set([...completionModels, ...embeddingModels]);
+    return sortedUnique([...(server.availableModels || server.models || []), ...(server.configuredModels || [])]).filter(item => !known.has(item));
+  }, [server.availableModels, server.models, server.configuredModels, completionModels, embeddingModels]);
+
   const [model, setModel] = useState('');
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
-  async function validate() {
-    setRunning(true);
+  const selectedKind = !model
+    ? 'auto'
+    : (embeddingModels.includes(model) ? 'embedding' : (completionModels.includes(model) ? 'completion' : 'unknown'));
+
+  async function validate(kind) {
+    setRunning(kind);
     setError('');
     setResult(null);
     try {
-      const response = await api.validateRunner(server.id, model.trim());
-      setResult(response);
+      setResult(await api.validateRunner(server.id, model.trim(), kind));
     } catch (err) {
       setError(String(err.message || err));
     } finally {
-      setRunning(false);
+      setRunning('');
     }
   }
 
   const succeeded = result && healthField(result, 'success') === true;
+  const resultKind = result ? healthField(result, 'kind') : '';
   const responseText = result ? healthField(result, 'responseText') : '';
+  const dimensions = result ? healthField(result, 'embeddingDimensions') : null;
   const usedModel = result ? healthField(result, 'model') : '';
   const latency = result ? healthField(result, 'latencyMs') : null;
   const resultError = result ? healthField(result, 'error') : '';
 
   return (
-    <Modal title={`Validate: ${server.name || server.id}`} onClose={onClose} wide>
+    <Modal title={`Validate: ${server.name || server.id}`} onClose={onClose}>
       <div className="validate-modal">
-        <p title="Wilson sends a small live inference request to confirm the model server responds correctly">
-          Send a live inference request to confirm this model server is reachable and serving models. Leave the model blank to let Wilson pick a chat-capable model automatically.
+        <p title="Wilson sends a small live request to confirm the model server responds correctly">
+          Send a live request to confirm this model server is reachable and serving models. Leave the model on <strong>Auto-select</strong> to let Wilson choose an appropriate model for the chosen validation type.
         </p>
-        <FormInput label="Model (optional)" tooltip="Specific model to validate. Leave blank to auto-select a chat-capable model for this server." value={model} onChange={setModel} />
-        {uniqueSuggestions.length > 0 && (
-          <div className="model-suggestions" title="Known model names from this server and Wilson configuration">
-            <label>Known models</label>
-            <div className="model-chip-list">
-              {uniqueSuggestions.map(item => <button key={item} className="model-chip model-chip-button" title={`Validate using ${item}`} onClick={() => setModel(item)}>{item}</button>)}
-            </div>
-          </div>
-        )}
+        <label className="validate-model-select" title="Model to validate. Leave on Auto-select to let Wilson pick a model of the chosen type.">
+          Model
+          <select value={model} onChange={e => setModel(e.target.value)} disabled={!!running}>
+            <option value="">Auto-select</option>
+            {completionModels.length > 0 && <optgroup label="Completion models">{completionModels.map(item => <option key={`c-${item}`} value={item}>{item}</option>)}</optgroup>}
+            {embeddingModels.length > 0 && <optgroup label="Embedding models">{embeddingModels.map(item => <option key={`e-${item}`} value={item}>{item}</option>)}</optgroup>}
+            {otherModels.length > 0 && <optgroup label="Other models">{otherModels.map(item => <option key={`o-${item}`} value={item}>{item}</option>)}</optgroup>}
+          </select>
+        </label>
         {running && <div className="progress-bar active" title="Validation in progress"><span /></div>}
         {result && (
-          <div className="validate-result">
-            <div className="health-stats-row">
-              <div className="health-stat-card" title="Whether the model responded successfully">
-                <div className="health-stat-label">Result</div>
-                <div className="health-stat-value"><span className={`status-pill ${succeeded ? 'success' : 'danger'}`}>{succeeded ? 'Reachable' : 'Failed'}</span></div>
-              </div>
-              <div className="health-stat-card" title="Model used for the validation round-trip">
-                <div className="health-stat-label">Model</div>
-                <div className="health-stat-value">{usedModel || '-'}</div>
-              </div>
-              <div className="health-stat-card" title="Round-trip latency for the inference request">
-                <div className="health-stat-label">Latency</div>
-                <div className="health-stat-value">{latency != null ? `${latency} ms` : '-'}</div>
-              </div>
+          <div className={`validate-result ${succeeded ? 'ok' : 'fail'}`}>
+            <div className="validate-result-header">
+              <span className={`status-pill ${succeeded ? 'success' : 'danger'}`}>{succeeded ? 'Success' : 'Failed'}</span>
+              <span className="validate-result-kind">{resultKind === 'embedding' ? 'Embedding' : 'Completion'}</span>
             </div>
-            {succeeded && responseText && (
-              <div className="health-histogram-section" title="Text returned by the model">
-                <div className="health-section-label">Model response</div>
-                <pre className="validate-response">{responseText}</pre>
+            <dl className="validate-facts">
+              <div><dt>Model</dt><dd title={usedModel}>{usedModel || '-'}</dd></div>
+              <div><dt>Latency</dt><dd>{latency != null ? `${latency} ms` : '-'}</dd></div>
+              {succeeded && resultKind === 'embedding' && <div><dt>Dimensions</dt><dd>{dimensions != null ? dimensions : '-'}</dd></div>}
+            </dl>
+            {succeeded && resultKind !== 'embedding' && responseText && (
+              <div className="validate-response-block" title="Text returned by the model">
+                <span className="validate-response-label">Response</span>
+                <div className="validate-response">{responseText}</div>
               </div>
             )}
             {!succeeded && resultError && (
@@ -1645,10 +1651,15 @@ function ModelServerValidateModal({ server, api, suggestions, onClose }) {
       </div>
       <div className="modal-actions">
         <button className="secondary" title="Close the validation dialog" onClick={onClose}>Close</button>
-        <button className="primary" title={`Send a live inference request to ${server.name || server.id}`} onClick={validate} disabled={running}><Check size={16} />{running ? 'Validating' : 'Run Validation'}</button>
+        <button className="primary" title={selectedKind === 'embedding' ? 'Selected model is an embedding model; use Validate Embedding' : `Send a live completion request to ${server.name || server.id}`} onClick={() => validate('completion')} disabled={!!running || selectedKind === 'embedding'}><Check size={16} />{running === 'completion' ? 'Validating' : 'Validate Completion'}</button>
+        <button className="primary" title={selectedKind === 'completion' ? 'Selected model is a completion model; use Validate Completion' : `Send a live embedding request to ${server.name || server.id}`} onClick={() => validate('embedding')} disabled={!!running || selectedKind === 'completion'}><Check size={16} />{running === 'embedding' ? 'Validating' : 'Validate Embedding'}</button>
       </div>
     </Modal>
   );
+}
+
+function sortedUnique(items) {
+  return [...new Set((items || []).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
 function HealthHistogram({ history, width = 120, height = 24, fill = false }) {

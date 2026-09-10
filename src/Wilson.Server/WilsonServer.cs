@@ -529,7 +529,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (path.StartsWith("/v1.0/api/model-runners/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/validate", StringComparison.OrdinalIgnoreCase) && method == "POST")
             {
                 ModelValidateRequest body = Body<ModelValidateRequest>(ctx);
-                await SendJsonAsync(ctx, await Inference.ValidateRunnerAsync(Segment(path, 3), body.Model, token: ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                await SendJsonAsync(ctx, await Inference.ValidateRunnerAsync(Segment(path, 3), body.Model, body.Kind, token: ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
                 return;
             }
 
@@ -2789,7 +2789,9 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
     /// </summary>
     public sealed class ModelValidateRequest
     {
-        /// <summary>Optional model to validate. When empty, Wilson resolves a chat-capable model for the server.</summary>
+        /// <summary>Optional model to validate. When empty, Wilson resolves a model of the requested kind for the server.</summary>
         public string? Model { get; set; }
+        /// <summary>Validation kind: "completion" (chat) or "embedding". Defaults to completion.</summary>
+        public string? Kind { get; set; }
     }
 }

@@ -485,9 +485,19 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .health-timestamp-value { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
 .health-config-table .key-value-table { margin-top: 2px; }
 .validate-modal { display: grid; gap: 14px; }
-.validate-modal > p { margin: 0; color: var(--muted); }
-.validate-result { display: grid; gap: 14px; }
-.validate-response { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+.validate-modal > p { margin: 0; color: var(--muted); font-size: 13px; }
+.validate-model-select { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.validate-model-select select { width: 100%; }
+.validate-result { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; }
+.validate-result-header { display: flex; align-items: center; gap: 10px; }
+.validate-result-kind { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.validate-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 0; }
+.validate-facts > div { display: grid; gap: 3px; min-width: 0; }
+.validate-facts dt { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.validate-facts dd { margin: 0; color: var(--text); font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.validate-response-block { display: grid; gap: 6px; }
+.validate-response-label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.validate-response { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; }
 .health-editor-block, .tool-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .health-editor-block .runner-editor-header, .tool-editor-block .runner-editor-header { grid-column: 1 / -1; }
 .model-pull-form { display: grid; gap: 14px; }

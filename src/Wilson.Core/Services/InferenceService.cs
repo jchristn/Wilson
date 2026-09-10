@@ -315,23 +315,26 @@ namespace Wilson.Core.Services
         }
 
         /// <summary>
-        /// Validate that a model server is reachable and able to serve inference by sending a real chat request.
+        /// Validate that a model server is reachable and able to serve inference by sending a real request.
         /// </summary>
         /// <param name="runnerId">Model runner identifier.</param>
-        /// <param name="model">Optional model to validate. When omitted, Wilson resolves a chat-capable model for the runner.</param>
+        /// <param name="model">Optional model to validate. When omitted, Wilson resolves a model of the requested kind for the runner.</param>
+        /// <param name="kind">Validation kind: "completion" (chat) or "embedding".</param>
         /// <param name="timeoutMs">Overall validation timeout in milliseconds. Allows time for a cold model to load.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>Validation result describing the round-trip outcome.</returns>
-        public async Task<RunnerValidationResult> ValidateRunnerAsync(string runnerId, string? model = null, int timeoutMs = 60000, CancellationToken token = default)
+        public async Task<RunnerValidationResult> ValidateRunnerAsync(string runnerId, string? model = null, string? kind = null, int timeoutMs = 60000, CancellationToken token = default)
         {
             ModelRunnerSettings runner = GetRunner(runnerId);
-            const string prompt = "Reply with the single word: OK";
+            bool isEmbedding = String.Equals(kind, "embedding", StringComparison.OrdinalIgnoreCase);
+            string input = isEmbedding ? "Wilson embedding validation." : "Reply with the single word: OK";
             RunnerValidationResult result = new RunnerValidationResult
             {
                 RunnerId = runner.Id,
                 RunnerName = String.IsNullOrWhiteSpace(runner.Name) ? runner.Id : runner.Name,
                 Endpoint = runner.Endpoint ?? String.Empty,
-                Prompt = prompt,
+                Kind = isEmbedding ? "embedding" : "completion",
+                Input = input,
                 CheckedUtc = DateTime.UtcNow
             };
 
@@ -341,26 +344,37 @@ namespace Wilson.Core.Services
 
             try
             {
-                string chosenModel = await ResolveValidationModelAsync(runner, model, timeout.Token).ConfigureAwait(false);
+                string chosenModel = await ResolveValidationModelAsync(runner, model, isEmbedding, timeout.Token).ConfigureAwait(false);
                 if (String.IsNullOrWhiteSpace(chosenModel))
                 {
                     result.Success = false;
-                    result.Error = "No model is available to validate. Configure a model for this server or specify one explicitly.";
+                    result.Error = "No " + (isEmbedding ? "embedding" : "completion") + " model is available to validate. Configure a model for this server or specify one explicitly.";
                     result.LatencyMs = stopwatch.ElapsedMilliseconds;
                     return result;
                 }
 
                 result.Model = chosenModel;
-                CompletionRequestSettings settings = new CompletionRequestSettings
-                {
-                    Temperature = 0.0,
-                    MaxTokens = 16
-                };
 
-                string response = await ChatAsync(runner, chosenModel, prompt, settings, timeout.Token).ConfigureAwait(false);
-                stopwatch.Stop();
-                result.Success = true;
-                result.ResponseText = TrimResponse(response);
+                if (isEmbedding)
+                {
+                    int dimensions = await RequestEmbeddingAsync(runner, chosenModel, input, timeout.Token).ConfigureAwait(false);
+                    stopwatch.Stop();
+                    result.Success = true;
+                    result.EmbeddingDimensions = dimensions;
+                }
+                else
+                {
+                    CompletionRequestSettings settings = new CompletionRequestSettings
+                    {
+                        Temperature = 0.0,
+                        MaxTokens = 16
+                    };
+                    string response = await ChatAsync(runner, chosenModel, input, settings, timeout.Token).ConfigureAwait(false);
+                    stopwatch.Stop();
+                    result.Success = true;
+                    result.ResponseText = TrimResponse(response);
+                }
+
                 result.LatencyMs = stopwatch.ElapsedMilliseconds;
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
@@ -381,7 +395,7 @@ namespace Wilson.Core.Services
             return result;
         }
 
-        private async Task<string> ResolveValidationModelAsync(ModelRunnerSettings runner, string? requestedModel, CancellationToken token)
+        private async Task<string> ResolveValidationModelAsync(ModelRunnerSettings runner, string? requestedModel, bool isEmbedding, CancellationToken token)
         {
             if (!String.IsNullOrWhiteSpace(requestedModel)) return requestedModel.Trim();
 
@@ -394,14 +408,107 @@ namespace Wilson.Core.Services
             if (candidates.Count < 1) return String.Empty;
 
             ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, candidates, token).ConfigureAwait(false);
-            if (classification.ChatModels.Count > 0) return classification.ChatModels[0];
+            List<string> preferred = isEmbedding ? classification.EmbeddingModels : classification.ChatModels;
+            if (preferred.Count > 0) return preferred[0];
+
+            // No model of the requested kind was detected. Fall back to any candidate so the caller
+            // still gets a real round-trip (and a meaningful error if the model is the wrong kind).
             return candidates[0];
+        }
+
+        private async Task<int> RequestEmbeddingAsync(ModelRunnerSettings runner, string model, string input, CancellationToken token)
+        {
+            bool isOpenAi = String.Equals(runner.ApiType, "OpenAI", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(runner.ApiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
+
+            string url;
+            string body;
+            if (isOpenAi)
+            {
+                url = EmbeddingsUrl(runner);
+                body = JsonSerializer.Serialize(new { model, input });
+            }
+            else
+            {
+                url = EndpointUrl(runner.Endpoint ?? String.Empty, "/api/embeddings");
+                body = JsonSerializer.Serialize(new { model, prompt = input });
+            }
+
+            using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runner.ApiKey);
+
+            using HttpResponseMessage response = await _Http.SendAsync(request, token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                string error = ExtractOllamaError(responseBody);
+                throw new InvalidOperationException(String.IsNullOrWhiteSpace(error)
+                    ? "Embedding request failed with HTTP " + (int)response.StatusCode + "."
+                    : error);
+            }
+
+            int dimensions = ExtractEmbeddingDimensions(responseBody);
+            if (dimensions <= 0) throw new InvalidOperationException("Embedding response did not contain a vector. The model may not support embeddings.");
+            return dimensions;
+        }
+
+        private static int ExtractEmbeddingDimensions(string responseBody)
+        {
+            if (String.IsNullOrWhiteSpace(responseBody)) return 0;
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(responseBody);
+                JsonElement root = document.RootElement;
+
+                // Ollama legacy /api/embeddings: { "embedding": [...] }
+                if (root.TryGetProperty("embedding", out JsonElement embedding) && embedding.ValueKind == JsonValueKind.Array)
+                {
+                    return embedding.GetArrayLength();
+                }
+
+                // Ollama /api/embed and batched responses: { "embeddings": [[...]] }
+                if (root.TryGetProperty("embeddings", out JsonElement embeddings) && embeddings.ValueKind == JsonValueKind.Array && embeddings.GetArrayLength() > 0)
+                {
+                    JsonElement first = embeddings[0];
+                    if (first.ValueKind == JsonValueKind.Array) return first.GetArrayLength();
+                }
+
+                // OpenAI-compatible: { "data": [ { "embedding": [...] } ] }
+                if (root.TryGetProperty("data", out JsonElement data) && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+                {
+                    JsonElement item = data[0];
+                    if (item.TryGetProperty("embedding", out JsonElement itemEmbedding) && itemEmbedding.ValueKind == JsonValueKind.Array)
+                    {
+                        return itemEmbedding.GetArrayLength();
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return 0;
+        }
+
+        private static string EmbeddingsUrl(ModelRunnerSettings runner)
+        {
+            string endpoint = (runner.Endpoint ?? String.Empty).TrimEnd('/');
+            if (endpoint.EndsWith("/embeddings", StringComparison.OrdinalIgnoreCase)) return endpoint;
+
+            string chatPath = String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) ? "/v1/chat/completions" : runner.ChatCompletionsPath.Trim();
+            string path = chatPath.Contains("chat/completions", StringComparison.OrdinalIgnoreCase)
+                ? chatPath.Replace("chat/completions", "embeddings", StringComparison.OrdinalIgnoreCase)
+                : "/v1/embeddings";
+            if (!path.StartsWith("/", StringComparison.Ordinal)) path = "/" + path;
+            return endpoint + path;
         }
 
         private static string TrimResponse(string? response)
         {
             string text = (response ?? String.Empty).Trim();
-            const int maxLength = 500;
+            const int maxLength = 280;
             return text.Length > maxLength ? text.Substring(0, maxLength) + "..." : text;
         }
 
