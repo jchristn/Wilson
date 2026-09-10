@@ -108,6 +108,7 @@ namespace Wilson.Core.Services
         /// <param name="executionContext">Tool execution context.</param>
         /// <param name="token">Cancellation token.</param>
         /// <param name="progressHandler">Optional safe progress event handler.</param>
+        /// <param name="tokenHandler">Optional handler for streaming visible-text and reasoning token deltas.</param>
         /// <returns>Agent result.</returns>
         public async Task<ToolAgentResponse> RunAsync(
             ModelRunnerSettings runner,
