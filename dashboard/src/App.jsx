@@ -273,6 +273,7 @@ function Topbar({ session, theme, onToggleTheme, onLogout }) {
       </div>
       <div className="topbar-actions">
         <a className="icon-button" href="https://github.com/jchristn/Wilson" target="_blank" rel="noreferrer" title="Open Wilson on GitHub" aria-label="Open Wilson on GitHub"><GitHubMark /></a>
+        <a className="icon-button" href="https://discord.gg/tRAN8HgvK5" target="_blank" rel="noreferrer" title="Join the Wilson Discord" aria-label="Join the Wilson Discord"><DiscordMark /></a>
         <button className="icon-button" onClick={onToggleTheme} title={`Switch dashboard to ${theme === 'light' ? 'dark' : 'light'} mode`} aria-label="Toggle dashboard theme">{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button>
         <button className="icon-button" onClick={onLogout} title="Log out of the dashboard" aria-label={text.logout}><LogOut size={18} /></button>
       </div>
@@ -316,6 +317,14 @@ function GitHubMark() {
   return (
     <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor">
       <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.63 2.29 6.7 5.47 7.79.4.08.55-.18.55-.4 0-.2-.01-.84-.01-1.52-2.01.38-2.53-.5-2.69-.96-.09-.24-.48-.96-.82-1.16-.28-.16-.68-.56-.01-.57.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.09-1.78-.21-3.64-.91-3.64-4.04 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.43 7.43 0 0 1 8 3.98c.68 0 1.36.09 2 .28 1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.14-1.87 3.83-3.65 4.04.29.25.54.75.54 1.52 0 1.09-.01 1.97-.01 2.24 0 .22.15.48.55.4A8.13 8.13 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
+    </svg>
+  );
+}
+
+function DiscordMark() {
+  return (
+    <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor">
+      <path d="M13.545 2.907a13.23 13.23 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.19 12.19 0 0 0-3.658 0 8.26 8.26 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032c.001.014.01.028.021.037a13.28 13.28 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019c.308-.42.582-.863.818-1.329a.05.05 0 0 0-.028-.069 8.75 8.75 0 0 1-1.248-.595.05.05 0 0 1-.005-.084c.084-.063.168-.129.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.006c.08.066.164.133.248.196a.05.05 0 0 1-.004.084c-.399.233-.813.43-1.249.594a.05.05 0 0 0-.027.07c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.24 13.24 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.107a.04.04 0 0 0-.02-.018ZM5.347 10.215c-.789 0-1.438-.724-1.438-1.612 0-.889.637-1.613 1.438-1.613.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612Zm5.316 0c-.788 0-1.438-.724-1.438-1.612 0-.889.637-1.613 1.438-1.613.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612Z" />
     </svg>
   );
 }

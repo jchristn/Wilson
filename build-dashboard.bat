@@ -23,6 +23,18 @@ docker buildx build ^
     .
 set EXIT_CODE=%ERRORLEVEL%
 
+if not "%EXIT_CODE%"=="0" (
+    echo Build failed with exit code %EXIT_CODE%.
+    popd
+    endlocal
+    exit /b %EXIT_CODE%
+)
+
+echo Updating local images for %IMAGE%:latest and %IMAGE%:%TAG%...
+docker pull %IMAGE%:latest
+docker pull %IMAGE%:%TAG%
+set EXIT_CODE=%ERRORLEVEL%
+
 echo Done.
 popd
 endlocal
