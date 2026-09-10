@@ -1517,6 +1517,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
   const compactHistoryCount = Math.min(history.length, compactHealthHistorySampleLimit);
   const [pullOpen, setPullOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
+  const [validateOpen, setValidateOpen] = useState(false);
   return (
     <section className="model-server-card" title={`${server.name || server.id} model server`}>
       <header>
@@ -1528,6 +1529,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       </header>
       {server.apiType === 'Ollama' && (
         <div className="model-server-actions">
+          <button className="secondary" title={`Send a live inference request to confirm ${server.name || server.id} is reachable and serving models`} onClick={() => setValidateOpen(true)}><Check size={16} />Validate</button>
           <button className="secondary" title={`Request that ${server.name || server.id} pull an Ollama model by name`} onClick={() => setPullOpen(true)}><Download size={16} />Pull model</button>
           <button className="secondary" title={`Update model server ${server.name || server.id}`} onClick={onEdit}><Pencil size={16} />Update</button>
           <button className="danger-button" title={`Delete model server ${server.name || server.id}`} onClick={onDelete}><Trash2 size={16} />Delete</button>
@@ -1535,6 +1537,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       )}
       {server.apiType !== 'Ollama' && (
         <div className="model-server-actions">
+          <button className="secondary" title={`Send a live inference request to confirm ${server.name || server.id} is reachable and serving models`} onClick={() => setValidateOpen(true)}><Check size={16} />Validate</button>
           <button className="secondary" title={`Update model server ${server.name || server.id}`} onClick={onEdit}><Pencil size={16} />Update</button>
           <button className="danger-button" title={`Delete model server ${server.name || server.id}`} onClick={onDelete}><Trash2 size={16} />Delete</button>
         </div>
@@ -1560,7 +1563,91 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       {server.statusMessage && server.online === false && <div className="model-server-error" title="Model server status error">{server.statusMessage}</div>}
       {pullOpen && <ModelPullModal server={server} api={api} suggestions={[...available, ...configured]} onClose={() => setPullOpen(false)} onPulled={onPulled} />}
       {healthOpen && <ModelServerHealthModal server={server} api={api} onClose={() => setHealthOpen(false)} />}
+      {validateOpen && <ModelServerValidateModal server={server} api={api} suggestions={[...chatModels, ...available, ...configured]} onClose={() => setValidateOpen(false)} />}
     </section>
+  );
+}
+
+function ModelServerValidateModal({ server, api, suggestions, onClose }) {
+  const uniqueSuggestions = useMemo(() => [...new Set((suggestions || []).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [suggestions]);
+  const [model, setModel] = useState('');
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  async function validate() {
+    setRunning(true);
+    setError('');
+    setResult(null);
+    try {
+      const response = await api.validateRunner(server.id, model.trim());
+      setResult(response);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const succeeded = result && healthField(result, 'success') === true;
+  const responseText = result ? healthField(result, 'responseText') : '';
+  const usedModel = result ? healthField(result, 'model') : '';
+  const latency = result ? healthField(result, 'latencyMs') : null;
+  const resultError = result ? healthField(result, 'error') : '';
+
+  return (
+    <Modal title={`Validate: ${server.name || server.id}`} onClose={onClose} wide>
+      <div className="validate-modal">
+        <p title="Wilson sends a small live inference request to confirm the model server responds correctly">
+          Send a live inference request to confirm this model server is reachable and serving models. Leave the model blank to let Wilson pick a chat-capable model automatically.
+        </p>
+        <FormInput label="Model (optional)" tooltip="Specific model to validate. Leave blank to auto-select a chat-capable model for this server." value={model} onChange={setModel} />
+        {uniqueSuggestions.length > 0 && (
+          <div className="model-suggestions" title="Known model names from this server and Wilson configuration">
+            <label>Known models</label>
+            <div className="model-chip-list">
+              {uniqueSuggestions.map(item => <button key={item} className="model-chip model-chip-button" title={`Validate using ${item}`} onClick={() => setModel(item)}>{item}</button>)}
+            </div>
+          </div>
+        )}
+        {running && <div className="progress-bar active" title="Validation in progress"><span /></div>}
+        {result && (
+          <div className="validate-result">
+            <div className="health-stats-row">
+              <div className="health-stat-card" title="Whether the model responded successfully">
+                <div className="health-stat-label">Result</div>
+                <div className="health-stat-value"><span className={`status-pill ${succeeded ? 'success' : 'danger'}`}>{succeeded ? 'Reachable' : 'Failed'}</span></div>
+              </div>
+              <div className="health-stat-card" title="Model used for the validation round-trip">
+                <div className="health-stat-label">Model</div>
+                <div className="health-stat-value">{usedModel || '-'}</div>
+              </div>
+              <div className="health-stat-card" title="Round-trip latency for the inference request">
+                <div className="health-stat-label">Latency</div>
+                <div className="health-stat-value">{latency != null ? `${latency} ms` : '-'}</div>
+              </div>
+            </div>
+            {succeeded && responseText && (
+              <div className="health-histogram-section" title="Text returned by the model">
+                <div className="health-section-label">Model response</div>
+                <pre className="validate-response">{responseText}</pre>
+              </div>
+            )}
+            {!succeeded && resultError && (
+              <div className="health-error-box" title="Why the validation failed">
+                <div className="health-error-label">Error</div>
+                <div className="health-error-message">{resultError}</div>
+              </div>
+            )}
+          </div>
+        )}
+        {error && <PermissionPanel message={error} />}
+      </div>
+      <div className="modal-actions">
+        <button className="secondary" title="Close the validation dialog" onClick={onClose}>Close</button>
+        <button className="primary" title={`Send a live inference request to ${server.name || server.id}`} onClick={validate} disabled={running}><Check size={16} />{running ? 'Validating' : 'Run Validation'}</button>
+      </div>
+    </Modal>
   );
 }
 

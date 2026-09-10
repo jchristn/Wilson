@@ -315,6 +315,97 @@ namespace Wilson.Core.Services
         }
 
         /// <summary>
+        /// Validate that a model server is reachable and able to serve inference by sending a real chat request.
+        /// </summary>
+        /// <param name="runnerId">Model runner identifier.</param>
+        /// <param name="model">Optional model to validate. When omitted, Wilson resolves a chat-capable model for the runner.</param>
+        /// <param name="timeoutMs">Overall validation timeout in milliseconds. Allows time for a cold model to load.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>Validation result describing the round-trip outcome.</returns>
+        public async Task<RunnerValidationResult> ValidateRunnerAsync(string runnerId, string? model = null, int timeoutMs = 60000, CancellationToken token = default)
+        {
+            ModelRunnerSettings runner = GetRunner(runnerId);
+            const string prompt = "Reply with the single word: OK";
+            RunnerValidationResult result = new RunnerValidationResult
+            {
+                RunnerId = runner.Id,
+                RunnerName = String.IsNullOrWhiteSpace(runner.Name) ? runner.Id : runner.Name,
+                Endpoint = runner.Endpoint ?? String.Empty,
+                Prompt = prompt,
+                CheckedUtc = DateTime.UtcNow
+            };
+
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(Math.Max(1000, timeoutMs));
+            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            try
+            {
+                string chosenModel = await ResolveValidationModelAsync(runner, model, timeout.Token).ConfigureAwait(false);
+                if (String.IsNullOrWhiteSpace(chosenModel))
+                {
+                    result.Success = false;
+                    result.Error = "No model is available to validate. Configure a model for this server or specify one explicitly.";
+                    result.LatencyMs = stopwatch.ElapsedMilliseconds;
+                    return result;
+                }
+
+                result.Model = chosenModel;
+                CompletionRequestSettings settings = new CompletionRequestSettings
+                {
+                    Temperature = 0.0,
+                    MaxTokens = 16
+                };
+
+                string response = await ChatAsync(runner, chosenModel, prompt, settings, timeout.Token).ConfigureAwait(false);
+                stopwatch.Stop();
+                result.Success = true;
+                result.ResponseText = TrimResponse(response);
+                result.LatencyMs = stopwatch.ElapsedMilliseconds;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                stopwatch.Stop();
+                result.Success = false;
+                result.Error = "Validation timed out after " + Math.Max(1000, timeoutMs) + "ms.";
+                result.LatencyMs = stopwatch.ElapsedMilliseconds;
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                result.Success = false;
+                result.Error = ex.Message;
+                result.LatencyMs = stopwatch.ElapsedMilliseconds;
+            }
+
+            return result;
+        }
+
+        private async Task<string> ResolveValidationModelAsync(ModelRunnerSettings runner, string? requestedModel, CancellationToken token)
+        {
+            if (!String.IsNullOrWhiteSpace(requestedModel)) return requestedModel.Trim();
+
+            List<string> candidates = new List<string>(runner.Models ?? new List<string>());
+            if (candidates.Count < 1 && String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
+            {
+                candidates = await ListModelsAsync(runner, token).ConfigureAwait(false);
+            }
+
+            if (candidates.Count < 1) return String.Empty;
+
+            ModelCapabilityClassification classification = await ClassifyModelsAsync(runner, candidates, token).ConfigureAwait(false);
+            if (classification.ChatModels.Count > 0) return classification.ChatModels[0];
+            return candidates[0];
+        }
+
+        private static string TrimResponse(string? response)
+        {
+            string text = (response ?? String.Empty).Trim();
+            const int maxLength = 500;
+            return text.Length > maxLength ? text.Substring(0, maxLength) + "..." : text;
+        }
+
+        /// <summary>
         /// Build a context prompt with truncation.
         /// </summary>
         public string BuildPrompt(List<ChatMessage> messages, string prompt, int contextWindowTokens)

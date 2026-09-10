@@ -526,6 +526,13 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 return;
             }
 
+            if (path.StartsWith("/v1.0/api/model-runners/", StringComparison.OrdinalIgnoreCase) && path.EndsWith("/validate", StringComparison.OrdinalIgnoreCase) && method == "POST")
+            {
+                ModelValidateRequest body = Body<ModelValidateRequest>(ctx);
+                await SendJsonAsync(ctx, await Inference.ValidateRunnerAsync(Segment(path, 3), body.Model, token: ctx.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                return;
+            }
+
             if (path == "/v1.0/api/settings" && method == "GET")
             {
                 RequireAdmin(requestContext);
@@ -2775,5 +2782,14 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
     {
         /// <summary>Model name to pull.</summary>
         public string Model { get; set; } = String.Empty;
+    }
+
+    /// <summary>
+    /// Request payload for validating that a model server is reachable and serving inference.
+    /// </summary>
+    public sealed class ModelValidateRequest
+    {
+        /// <summary>Optional model to validate. When empty, Wilson resolves a chat-capable model for the server.</summary>
+        public string? Model { get; set; }
     }
 }

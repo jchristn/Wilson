@@ -673,6 +673,33 @@ namespace Wilson.Core.Models
     }
 
     /// <summary>
+    /// Result of an on-demand model server validation, produced by sending a real inference request.
+    /// </summary>
+    public class RunnerValidationResult
+    {
+        /// <summary>Runner identifier.</summary>
+        public string RunnerId { get; set; } = String.Empty;
+        /// <summary>Runner display name.</summary>
+        public string RunnerName { get; set; } = String.Empty;
+        /// <summary>Model server endpoint that was probed.</summary>
+        public string Endpoint { get; set; } = String.Empty;
+        /// <summary>Model used for the validation round-trip.</summary>
+        public string Model { get; set; } = String.Empty;
+        /// <summary>Whether the model responded successfully.</summary>
+        public bool Success { get; set; }
+        /// <summary>Prompt sent to the model.</summary>
+        public string Prompt { get; set; } = String.Empty;
+        /// <summary>Trimmed model response text (empty when the request failed).</summary>
+        public string ResponseText { get; set; } = String.Empty;
+        /// <summary>Round-trip latency in milliseconds.</summary>
+        public long LatencyMs { get; set; }
+        /// <summary>Failure detail when <see cref="Success"/> is false.</summary>
+        public string? Error { get; set; }
+        /// <summary>UTC timestamp when the validation ran.</summary>
+        public DateTime CheckedUtc { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Chat completion request settings.
     /// </summary>
     public class CompletionRequestSettings

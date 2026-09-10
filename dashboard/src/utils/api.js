@@ -47,6 +47,7 @@ class ApiClient {
   runnerHealthById(runnerId) { return this.request('GET', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/health`); }
   pullModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/pull`, { model }); }
   loadModel(runnerId, model) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/load`, { model }); }
+  validateRunner(runnerId, model = '', options = {}) { return this.request('POST', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/validate`, { model }, null, options); }
   conversations(params = {}) { return this.request('GET', '/v1.0/api/conversations', null, params); }
   updateConversation(id, payload) { return this.request('PUT', `/v1.0/api/conversations/${id}`, payload); }
   deleteConversation(id) { return this.request('DELETE', `/v1.0/api/conversations/${id}`); }

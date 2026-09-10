@@ -484,6 +484,10 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
 .health-timestamp-label { color: var(--muted); font-size: 12px; }
 .health-timestamp-value { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
 .health-config-table .key-value-table { margin-top: 2px; }
+.validate-modal { display: grid; gap: 14px; }
+.validate-modal > p { margin: 0; color: var(--muted); }
+.validate-result { display: grid; gap: 14px; }
+.validate-response { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
 .health-editor-block, .tool-editor-block { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .health-editor-block .runner-editor-header, .tool-editor-block .runner-editor-header { grid-column: 1 / -1; }
 .model-pull-form { display: grid; gap: 14px; }
