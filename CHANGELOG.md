@@ -10,6 +10,8 @@
 - Added admin tool policy validation and readiness diagnostics endpoints, dashboard settings controls, OpenAPI coverage, automated route tests, SDK methods, and Postman requests.
 - Added C#, JavaScript, and Python SDK methods plus Postman requests for implemented tool metadata/history and diagnostics APIs.
 - Added `REST_API.md` coverage for tool enablement, safe chat traces, request-history metrics, tool-call reads, and diagnostics.
+- Updated Voltaic from 0.6.1 to 2.0.0 (MCP client and test fixture). MCP servers built on Voltaic 2.x publish only application tools (no `ping`/`echo`/`getTime`/`getSessions` demo tools), answer `ping` with `{}`, and enforce `additionalProperties`/`patternProperties` in tool input schemas; undeclared arguments now surface as `mcp_call_failed` tool errors. Also updated Watson 7.2.0, PolyPrompt 2.6.0, Microsoft.Data.Sqlite.Core 10.0.12, and Microsoft.NET.Test.Sdk 18.10.1.
+- Expanded MCP tool tests: exact discovered-tool set, no legacy demo tools, lenient schemas accept extra arguments, strict schemas reject undeclared and missing required arguments.
 
 ## 0.3.0
 

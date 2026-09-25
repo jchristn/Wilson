@@ -2887,6 +2887,17 @@ namespace Test.Shared
             if (status.Servers.Any(server => server.Error != null && server.Error.Contains("secret", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("MCP status should not expose secret-like error data.");
 
+            // Voltaic 2.x publishes only application-registered tools; the 0.x/1.x demo tools must not leak into Wilson.
+            List<string> expectedTools = TestMcpHttpServer.ToolNames.Select(name => "test-mcp__" + name).OrderBy(name => name, StringComparer.Ordinal).ToList();
+            List<string> discoveredTools = status.Servers.Single().Tools.OrderBy(name => name, StringComparer.Ordinal).ToList();
+            if (status.ToolCount != expectedTools.Count || !discoveredTools.SequenceEqual(expectedTools, StringComparer.Ordinal))
+                throw new InvalidOperationException("Expected MCP discovery to return exactly the fixture tools, got: " + String.Join(", ", discoveredTools));
+            foreach (string legacyTool in new[] { "ping", "getTime", "getSessions", "getClients" })
+            {
+                if (manager.HasTool("test-mcp__" + legacyTool))
+                    throw new InvalidOperationException("Legacy Voltaic demo tool '" + legacyTool + "' should not be discovered.");
+            }
+
             ToolService service = new ToolService(settings, manager);
             ToolDescriptor? descriptor = service.GetTool("test-mcp__echo");
             if (descriptor == null || !descriptor.Available || !String.Equals(descriptor.Category, ToolCategories.Mcp, StringComparison.Ordinal))
@@ -2897,6 +2908,28 @@ namespace Test.Shared
             ToolResult result = await ExecuteToolAsync(service, "test-mcp__echo", """{"text":"hello mcp"}""").ConfigureAwait(false);
             if (!result.Success || !result.Content.Contains("hello mcp", StringComparison.Ordinal))
                 throw new InvalidOperationException("Expected MCP echo execution to succeed.");
+
+            // Positive: a schema without additionalProperties still accepts undeclared arguments.
+            ToolResult shoutResult = await ExecuteToolAsync(service, "test-mcp__shout", """{"text":"hello mcp","extra":true}""").ConfigureAwait(false);
+            if (!shoutResult.Success || !shoutResult.Content.Contains("HELLO MCP", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP shout execution to accept undeclared arguments: " + shoutResult.Content);
+
+            // Negative: additionalProperties=false is enforced by the MCP server and surfaces as a tool error.
+            ToolResult extraResult = await ExecuteToolAsync(service, "test-mcp__echo", """{"text":"hello mcp","extra":true}""").ConfigureAwait(false);
+            if (extraResult.Success || !String.Equals(extraResult.ErrorCode, "mcp_call_failed", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP echo to reject undeclared arguments: " + extraResult.Content);
+            if (extraResult.ErrorMessage == null || !extraResult.ErrorMessage.Contains("extra", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP schema error to name the undeclared property: " + extraResult.ErrorMessage);
+
+            // Negative: missing required argument is rejected.
+            ToolResult missingResult = await ExecuteToolAsync(service, "test-mcp__echo", """{}""").ConfigureAwait(false);
+            if (missingResult.Success || !String.Equals(missingResult.ErrorCode, "mcp_call_failed", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected MCP echo to reject missing required arguments: " + missingResult.Content);
+
+            // Negative: a legacy demo tool name is not routable.
+            ToolResult legacyResult = await manager.ExecuteAsync("call-legacy", "test-mcp__getTime", default, new ToolExecutionContext(), CancellationToken.None).ConfigureAwait(false);
+            if (legacyResult.Success || !String.Equals(legacyResult.ErrorCode, "unknown_mcp_tool", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected legacy demo tool execution to report unknown_mcp_tool.");
 
             Settings disabledMcp = new Settings
             {

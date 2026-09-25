@@ -1,6 +1,7 @@
 namespace Test.Shared
 {
     using System;
+    using System.Collections.Generic;
     using System.Net;
     using System.Net.Http;
     using System.Net.Sockets;
@@ -63,7 +64,36 @@ namespace Test.Shared
                         }
                     };
                 });
+            _Server.RegisterTool(
+                "shout",
+                "Returns the input text in upper case. Its schema permits additional properties.",
+                new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        text = new { type = "string" }
+                    },
+                    required = new[] { "text" }
+                },
+                args =>
+                {
+                    string text = args?.GetString("text") ?? String.Empty;
+
+                    return (object)new
+                    {
+                        content = new object[]
+                        {
+                            new { type = "text", text = text.ToUpperInvariant() }
+                        }
+                    };
+                });
         }
+
+        /// <summary>
+        /// Names of the tools this fixture registers. Voltaic 2.x publishes only these; no diagnostic tools.
+        /// </summary>
+        public static IReadOnlyList<string> ToolNames { get; } = new[] { "echo", "shout" };
 
         /// <summary>
         /// Start the server.
