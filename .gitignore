@@ -14,3 +14,7 @@ dist/
 .env
 /wilson.json
 TestResults/
+
+# Python bytecode
+__pycache__/
+*.pyc
