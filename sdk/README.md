@@ -6,6 +6,8 @@ Wilson includes small first-party SDK surfaces for common API automation:
 - `javascript/` - browser/Node client
 - `python/` - standard-library Python client
 
+All SDKs are versioned `0.1.0`, matching Wilson `v0.1.0` (C# `<Version>`, JavaScript `package.json`, Python `wilson_client.__version__`).
+
 Each SDK exposes authentication, model-server enumeration, model-server health, prompt templates, and read APIs for Wilson tool metadata:
 
 - `POST /v1.0/api/chat`

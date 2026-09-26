@@ -2518,8 +2518,11 @@ namespace Test.Shared
 
         private static async Task WaitForPostgresAsync(DatabaseDriver database)
         {
+            // Deadline-based rather than attempt-based: a cold Docker Desktop VM can take well over 30 seconds
+            // to forward the port, and each failed attempt's duration varies with the failure mode.
             Exception? last = null;
-            for (int i = 0; i < 60; i++)
+            Stopwatch elapsed = Stopwatch.StartNew();
+            while (elapsed.Elapsed < TimeSpan.FromSeconds(120))
             {
                 try
                 {
@@ -2533,7 +2536,7 @@ namespace Test.Shared
                 }
             }
 
-            throw new InvalidOperationException("PostgreSQL test container did not become ready.", last);
+            throw new InvalidOperationException("PostgreSQL test container did not become ready: " + (last?.GetType().Name ?? "unknown") + ": " + (last?.Message ?? String.Empty), last);
         }
 
         private static async Task<ProcessResult> RunProcessAsync(string fileName, List<string> arguments, int timeoutMs)

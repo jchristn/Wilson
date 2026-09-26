@@ -2127,7 +2127,7 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 info = new
                 {
                     title = "Wilson API",
-                    version = "1.0.0",
+                    version = "0.1.0",
                     description = "Local-first chat, model runner, tenant, request history, feedback, and settings API."
                 },
                 servers = new[] { new { url = "/" } },
