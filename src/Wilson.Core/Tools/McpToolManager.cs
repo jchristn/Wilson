@@ -163,6 +163,8 @@ namespace Wilson.Core.Tools
                 int timeoutMs = Math.Clamp(context.SafetyLimits.ToolTimeoutMs, 1000, 300000);
                 object callParams = new { name = mapping.OriginalToolName, arguments };
                 JsonElement result = await client.CallAsync<JsonElement>("tools/call", callParams, timeoutMs, token).ConfigureAwait(false);
+                if (IsToolErrorResult(result))
+                    return ToolResultFactory.Error(toolCallId, "mcp_call_failed", GetToolErrorMessage(result));
                 return ToolResultFactory.SuccessJson(toolCallId, result, context);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -177,6 +179,43 @@ namespace Wilson.Core.Tools
             {
                 return ToolResultFactory.Error(toolCallId, "mcp_call_failed", ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Determine whether a tools/call result reports a tool execution error (isError: true).
+        /// </summary>
+        /// <param name="result">tools/call result.</param>
+        /// <returns>True if the result is a tool error.</returns>
+        private static bool IsToolErrorResult(JsonElement result)
+        {
+            return result.ValueKind == JsonValueKind.Object
+                && result.TryGetProperty("isError", out JsonElement isError)
+                && isError.ValueKind == JsonValueKind.True;
+        }
+
+        /// <summary>
+        /// Build an error message from the text content blocks of a tool error result.
+        /// </summary>
+        /// <param name="result">tools/call result.</param>
+        /// <returns>Error message.</returns>
+        private static string GetToolErrorMessage(JsonElement result)
+        {
+            List<string> parts = new List<string>();
+            if (result.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement block in content.EnumerateArray())
+                {
+                    if (block.ValueKind == JsonValueKind.Object
+                        && block.TryGetProperty("text", out JsonElement text)
+                        && text.ValueKind == JsonValueKind.String
+                        && !String.IsNullOrWhiteSpace(text.GetString()))
+                    {
+                        parts.Add(text.GetString()!);
+                    }
+                }
+            }
+
+            return parts.Count > 0 ? String.Join(Environment.NewLine, parts) : "MCP tool reported an error.";
         }
 
         /// <summary>

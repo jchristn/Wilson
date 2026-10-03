@@ -74,6 +74,7 @@ namespace Test.Shared
                         CreateAsyncCase("web-search-tool", "Web search tool", WebSearchToolAsync),
                         CreateAsyncCase("mcp-tools", "MCP tools", McpToolsAsync),
                         CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
+                        CreateSyncCase("polyprompt-option-mapping", "PolyPrompt option mapping", PolyPromptOptionMapping),
                         CreateSyncCase("think-parser", "Think parser", ThinkParserSplitting),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
@@ -2994,6 +2995,51 @@ namespace Test.Shared
             string plainVisible = plain.Feed("Just an answer.", out string plainReasoning) + plain.Finish();
             if (!String.Equals(plainVisible, "Just an answer.", StringComparison.Ordinal)) throw new InvalidOperationException("Expected plain text to pass through unchanged.");
             if (plainReasoning.Length != 0 || plain.Thinking.Length != 0) throw new InvalidOperationException("Expected no reasoning to be captured for plain text.");
+        }
+
+        private static void PolyPromptOptionMapping()
+        {
+            // PolyPrompt 3.x moved tool-chat sampling settings from ToolChatRequest onto ToolChatRequest.Options.
+            MethodInfo buildToolRequest = typeof(InferenceService).GetMethod("BuildPolyPromptToolRequest", BindingFlags.NonPublic | BindingFlags.Static)!;
+            ToolCapableInferenceRequest request = new ToolCapableInferenceRequest
+            {
+                Model = "tool-model",
+                Temperature = 0.25,
+                TopP = 0.5,
+                MaxTokens = 321,
+                ToolChoice = ToolChoiceModes.Required
+            };
+            request.Messages.Add(new ModelChatMessage { Role = "user", Content = "hello" });
+            PolyPrompt.Models.ToolChatRequest toolRequest = (PolyPrompt.Models.ToolChatRequest)buildToolRequest.Invoke(null, new object[] { request })!;
+            if (toolRequest.Options == null
+                || !String.Equals(toolRequest.Options.Model, "tool-model", StringComparison.Ordinal)
+                || toolRequest.Options.Temperature != 0.25
+                || toolRequest.Options.TopP != 0.5
+                || toolRequest.Options.MaxTokens != 321)
+                throw new InvalidOperationException("Expected tool-chat sampling settings to map onto ToolChatRequest.Options.");
+            if (!String.Equals(toolRequest.ToolChoice, "required", StringComparison.Ordinal) || toolRequest.Messages.Count != 1)
+                throw new InvalidOperationException("Expected tool choice and messages to map onto the PolyPrompt tool request.");
+
+            request.Model = String.Empty;
+            request.MaxTokens = 0;
+            toolRequest = (PolyPrompt.Models.ToolChatRequest)buildToolRequest.Invoke(null, new object[] { request })!;
+            if (toolRequest.Options == null || toolRequest.Options.Model != null || toolRequest.Options.MaxTokens != null)
+                throw new InvalidOperationException("Expected empty model and non-positive max tokens to defer to client defaults.");
+
+            MethodInfo createChatOptions = typeof(InferenceService).GetMethod("CreateChatOptions", BindingFlags.NonPublic | BindingFlags.Static)!;
+            CompletionRequestSettings settings = new CompletionRequestSettings { Temperature = 0.3, TopP = 0.8, MaxTokens = 512, TopK = 12, Seed = 7, SystemPrompt = String.Empty };
+
+            object ollamaOptions = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = "Ollama", ContextWindowTokens = 8192 }, settings })!;
+            if (ollamaOptions is not PolyPrompt.Options.OllamaCompletionOptions ollama)
+                throw new InvalidOperationException("Expected Ollama runners to use OllamaCompletionOptions.");
+            if (ollama.ContextLength != 8192 || ollama.TopK != 12 || ollama.Seed != 7 || ollama.Temperature != 0.3 || ollama.TopP != 0.8 || ollama.MaxTokens != 512)
+                throw new InvalidOperationException("Expected Ollama completion options to carry runner and request settings.");
+            if (!String.Equals(ollama.SystemPrompt, CompletionRequestSettings.DefaultSystemPrompt, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an empty system prompt to fall back to the default system prompt.");
+
+            object openAiOptions = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = "OpenAI" }, settings })!;
+            if (openAiOptions.GetType() != typeof(PolyPrompt.Models.CompletionOptions))
+                throw new InvalidOperationException("Expected OpenAI runners to use base CompletionOptions, got " + openAiOptions.GetType().Name + ".");
         }
 
         private static void ToolCapableInferenceParsing()

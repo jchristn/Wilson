@@ -177,7 +177,7 @@ Implemented built-in tools:
 - Modify files/directories: `write_file`, `edit_file`, `multi_edit`, `delete_file`, `manage_directory`
 - Process execution: `run_process`
 - Web retrieval/search: `web_retrieve` for absolute `http` and `https` URLs, and `web_search` through the default DuckDuckGo HTML provider or configured Tavily/You.com-compatible providers
-- MCP: external tools discovered from enabled stdio or streamable HTTP MCP servers. Wilson exposes them with OpenAI-safe server-prefixed names such as `docs__search`.
+- MCP: external tools discovered from enabled stdio or streamable HTTP MCP servers. Wilson exposes them with OpenAI-safe server-prefixed names such as `docs__search`. An MCP call that fails, including a `tools/call` result that sets `isError: true` (for example, a schema violation), is returned to the model as an `mcp_call_failed` tool error.
 
 Destructive and process tools are marked dangerous and approval-required. Keep allowed roots narrow, especially when using automatic approval for trusted admin-only workflows.
 

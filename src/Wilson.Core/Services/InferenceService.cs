@@ -726,10 +726,13 @@ namespace Wilson.Core.Services
         {
             PpToolChatRequest ppRequest = new PpToolChatRequest
             {
-                Model = String.IsNullOrWhiteSpace(request.Model) ? null : request.Model,
-                Temperature = request.Temperature,
-                TopP = request.TopP,
-                MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null,
+                Options = new CompletionOptions
+                {
+                    Model = String.IsNullOrWhiteSpace(request.Model) ? null : request.Model,
+                    Temperature = request.Temperature,
+                    TopP = request.TopP,
+                    MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null
+                },
                 ToolChoice = MapToolChoice(request.ToolChoice)
             };
 
@@ -1223,7 +1226,7 @@ namespace Wilson.Core.Services
         private async Task<List<string>> ListModelsAsync(ModelRunnerSettings runner, CancellationToken token)
         {
             List<string> models = new List<string>();
-            using (CompletionClientBase client = CreateClient(runner, String.Empty))
+            using (ModelClientBase client = CreateModelClient(runner))
             {
                 await foreach (ModelInformation model in client.ListModelsAsync(token).ConfigureAwait(false))
                 {
@@ -1456,11 +1459,11 @@ namespace Wilson.Core.Services
             return trimmed;
         }
 
-        private static ChatCompletionOptions CreateChatOptions(ModelRunnerSettings runner, CompletionRequestSettings? settings)
+        private static CompletionOptions CreateChatOptions(ModelRunnerSettings runner, CompletionRequestSettings? settings)
         {
             settings ??= new CompletionRequestSettings();
-            ChatCompletionOptions options = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
-                ? new OllamaChatCompletionOptions
+            CompletionOptions options = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
+                ? new OllamaCompletionOptions
                 {
                     ContextLength = runner.ContextWindowTokens,
                     TopK = settings.TopK,
@@ -1469,7 +1472,7 @@ namespace Wilson.Core.Services
                     RepeatLastN = settings.RepeatLastN,
                     Seed = settings.Seed
                 }
-                : new ChatCompletionOptions();
+                : new CompletionOptions();
 
             options.SystemPrompt = String.IsNullOrWhiteSpace(settings.SystemPrompt) ? CompletionRequestSettings.DefaultSystemPrompt : settings.SystemPrompt;
             options.Temperature = settings.Temperature;
@@ -1510,16 +1513,27 @@ namespace Wilson.Core.Services
         private CompletionClientBase CreateClient(ModelRunnerSettings runner, string model)
         {
             CompletionClientBase client;
-            if (String.Equals(runner.ApiType, "OpenAI", StringComparison.OrdinalIgnoreCase) || String.Equals(runner.ApiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase))
+            if (IsOpenAiApiType(runner))
             {
-                client = new OpenAiClient(runner.Endpoint, runner.ApiKey);
+                client = new OpenAiCompletionClient(runner.Endpoint, runner.ApiKey);
             }
             else
             {
-                client = new OllamaClient(runner.Endpoint, runner.ApiKey);
+                client = new OllamaCompletionClient(runner.Endpoint, runner.ApiKey);
             }
             if (!String.IsNullOrWhiteSpace(model)) client.Model = model;
             return client;
+        }
+
+        private static ModelClientBase CreateModelClient(ModelRunnerSettings runner)
+        {
+            if (IsOpenAiApiType(runner)) return new OpenAiModelClient(runner.Endpoint, runner.ApiKey);
+            return new OllamaModelClient(runner.Endpoint, runner.ApiKey);
+        }
+
+        private static bool IsOpenAiApiType(ModelRunnerSettings runner)
+        {
+            return String.Equals(runner.ApiType, "OpenAI", StringComparison.OrdinalIgnoreCase) || String.Equals(runner.ApiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
         }
     }
 

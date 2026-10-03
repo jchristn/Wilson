@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.1.1
+
+Dependency update release. The Docker images were rebuilt in place under the existing `v0.1.0` tag and `latest`.
+
+### Dependencies
+
+- Updated PolyPrompt from 2.6.0 to 3.1.0. Inference now uses the 3.x per-capability clients: `OllamaCompletionClient`/`OpenAiCompletionClient` for chat and tool chat, and `OllamaModelClient`/`OpenAiModelClient` for model listing. Chat options moved to `CompletionOptions`/`OllamaCompletionOptions`. Tool-chat model, temperature, top-p, and max tokens now go in `ToolChatRequest.Options`.
+- Updated Voltaic from 2.0.0 to 2.2.1, Watson from 7.2.0 to 7.2.2, Touchstone (Core, Cli, XunitAdapter, NunitAdapter) from 0.1.12 to 0.2.0, and NUnit from 4.6.1 to 5.0.0.
+- Bumped the server, dashboard, SDK, and OpenAPI document versions to `0.1.1`.
+
+### Fixes
+
+- MCP `tools/call` results with `isError: true` are now reported as failed `mcp_call_failed` tool results instead of successes. Voltaic 2.2 returns input-schema violations, such as undeclared arguments, this way instead of as a JSON-RPC error.
+
+### Build
+
+- Added `build-all.sh`, `build-server.sh`, and `build-dashboard.sh`. They match the existing `.bat` scripts: multi-platform buildx push for `latest` plus a version tag, then a local pull.
+
+### Tests
+
+- Added a `PolyPrompt option mapping` test that covers tool-chat `Options` mapping, defaulting to client settings, and Ollama versus OpenAI completion option types.
+
 ## v0.1.0
 
 Initial published release (`jchristn77/wilson-server:v0.1.0` and `jchristn77/wilson-dashboard:v0.1.0`). Consolidates all development up to the first published images.

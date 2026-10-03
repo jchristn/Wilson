@@ -6,7 +6,7 @@ from urllib.parse import urlencode, quote
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 class WilsonClient:
