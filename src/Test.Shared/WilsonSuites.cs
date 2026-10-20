@@ -78,6 +78,7 @@ namespace Test.Shared
                         CreateSyncCase("provider-catalog", "Provider API type catalog", ProviderCatalog),
                         CreateSyncCase("provider-defaults", "Provider runner defaults", ProviderDefaults),
                         CreateSyncCase("provider-client-selection", "Provider client selection", ProviderClientSelection),
+                        CreateAsyncCase("azure-tool-request-shape", "Azure OpenAI tool request shape", AzureOpenAIToolRequestShapeAsync),
                         CreateSyncCase("think-parser", "Think parser", ThinkParserSplitting),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
@@ -3126,6 +3127,8 @@ namespace Test.Shared
                 throw new InvalidOperationException("Expected xAI and Bedrock to advertise native tool support.");
             if (ApiTypes.Describe("XAI").DefaultToolCallingApiFormat != ToolCallingApiFormats.Native)
                 throw new InvalidOperationException("Expected xAI to default to the native PolyPrompt tool format.");
+            if (ApiTypes.Describe("AzureOpenAI").DefaultToolCallingApiFormat != ToolCallingApiFormats.Native)
+                throw new InvalidOperationException("Expected Azure OpenAI to default to the native PolyPrompt tool format so tools use deployment routing and api-key authentication.");
 
             // Required credential fields drive dashboard validation and must match the client constructors.
             if (!ApiTypes.Describe("AzureOpenAI").RequiresDeployment || !ApiTypes.Describe("AzureOpenAI").RequiresApiVersion)
@@ -3306,6 +3309,121 @@ namespace Test.Shared
                 Region = descriptor.RequiresRegion ? descriptor.DefaultRegion : null,
                 ProjectId = descriptor.RequiresProjectId ? "test-project" : null
             };
+        }
+
+        private static async Task AzureOpenAIToolRequestShapeAsync()
+        {
+            // Azure OpenAI tool calls must go through its deployment-scoped PolyPrompt client: the URL is
+            // /openai/deployments/{deployment}/chat/completions?api-version=..., and authentication is the
+            // api-key header. The generic OpenAI-compatible sender would post /v1/chat/completions with a
+            // bearer token, which Azure rejects.
+            if (!String.Equals(ApiTypes.Describe("AzureOpenAI").DefaultToolCallingApiFormat, ToolCallingApiFormats.Native, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI to default to the provider-native tool format.");
+            if (!String.Equals(ApiTypes.Describe("AzureOpenAI").DefaultChatCompletionsPath, String.Empty, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI to expose no generic chat-completions path.");
+
+            // A configuration that pinned the generic OpenAI format is realigned to the native format,
+            // because Azure cannot serve that request shape.
+            ModelRunnerSettings pinned = new ModelRunnerSettings
+            {
+                ApiType = "AzureOpenAI",
+                Endpoint = "https://example.openai.azure.com",
+                ApiKey = "key",
+                Deployment = "chat",
+                ApiVersion = "2024-10-21",
+                ToolsEnabled = true,
+                SupportsTools = true,
+                ToolCallingApiFormat = "OpenAIChatCompletions"
+            };
+            ModelRunnerSettings.ApplyToolDefaults(pinned);
+            if (!String.Equals(pinned.ToolCallingApiFormat, ToolCallingApiFormats.Native, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI tool defaults to be realigned to the native format.");
+
+            // OpenAI and OpenAI-compatible runners keep the generic chat-completions sender.
+            ModelRunnerSettings openAi = new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "https://api.openai.com", ApiKey = "key" };
+            ModelRunnerSettings.ApplyToolDefaults(openAi);
+            if (!String.Equals(openAi.ToolCallingApiFormat, ToolCallingApiFormats.OpenAIChatCompletions, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected OpenAI runners to keep the chat-completions tool format.");
+
+            // Drive a real request through InferenceService and assert the wire shape.
+            int port = GetFreePort();
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            string endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Task server = RunFakeAzureOpenAiToolServerAsync(port, cts.Token);
+
+            ModelRunnerSettings azure = new ModelRunnerSettings
+            {
+                Id = "azure",
+                Name = "Azure OpenAI",
+                ApiType = "AzureOpenAI",
+                Endpoint = endpoint,
+                ApiKey = "azure-key",
+                Deployment = "chat",
+                ApiVersion = "2024-10-21",
+                Models = new List<string> { "chat" },
+                ToolsEnabled = true,
+                SupportsTools = true,
+                ToolCallingApiFormat = ToolCallingApiFormats.Native
+            };
+
+            Settings settings = new Settings();
+            settings.ModelRunners.Add(azure);
+            InferenceService inference = new InferenceService(settings);
+
+            ToolCapableInferenceRequest request = new ToolCapableInferenceRequest
+            {
+                Model = String.Empty,
+                Temperature = 0,
+                TopP = 1,
+                Messages = new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "hello" } },
+                Tools = new List<ModelToolDefinition>
+                {
+                    new ModelToolDefinition
+                    {
+                        Function = new ModelToolFunctionDefinition { Name = "read_file", Description = "Read a file.", Parameters = new { type = "object" } }
+                    }
+                }
+            };
+
+            ToolCapableInferenceResponse response = await inference.ChatWithToolsAsync(azure, request, cts.Token).ConfigureAwait(false);
+            await server.ConfigureAwait(false);
+            if (!response.Success)
+                throw new InvalidOperationException("Expected the Azure OpenAI tool request to succeed, got: " + (response.ErrorMessage ?? "unknown error"));
+            if (!String.Equals(response.Content, "azure answer", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the Azure OpenAI tool response text to be parsed.");
+        }
+
+        private static async Task RunFakeAzureOpenAiToolServerAsync(int port, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                using NetworkStream stream = client.GetStream();
+                string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+
+                string requestLine = request.Substring(0, request.IndexOf("\r\n", StringComparison.Ordinal));
+                if (!requestLine.StartsWith("POST /openai/deployments/chat/chat/completions?", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected Azure OpenAI deployments to be routed through /openai/deployments/{deployment}/chat/completions, got: " + requestLine);
+                if (requestLine.IndexOf("api-version=2024-10-21", StringComparison.Ordinal) < 0)
+                    throw new InvalidOperationException("Expected the Azure OpenAI request to carry the api-version query parameter, got: " + requestLine);
+                if (request.IndexOf("/v1/chat/completions", StringComparison.Ordinal) >= 0)
+                    throw new InvalidOperationException("Expected Azure OpenAI not to use the generic /v1/chat/completions path.");
+                if (!request.Contains("api-key: azure-key", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected Azure OpenAI to authenticate with the api-key header.");
+                if (request.Contains("Authorization: Bearer", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected Azure OpenAI not to send a bearer token.");
+                if (!request.Contains("\"tools\"", StringComparison.Ordinal) || !request.Contains("read_file", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected the Azure OpenAI request to carry the tool definitions.");
+
+                string body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"azure answer\"},\"finish_reason\":\"stop\"}]}";
+                await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                listener.Stop();
+            }
         }
 
         private static void ToolCapableInferenceParsing()

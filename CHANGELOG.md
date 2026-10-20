@@ -16,7 +16,7 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 - Added `ApiTypes`, `ToolCallingApiFormats`, and `ApiTypeDescriptor`. Descriptors carry default endpoints, default health paths and timings, per-provider default regions, capability flags for chat, embeddings, model listing, streaming, and tools, the default tool-calling format, and required credential fields.
 - `InferenceService` now creates a per-provider PolyPrompt client for chat, embeddings, and model listing instead of switching between just Ollama and OpenAI. Credentials are provider-specific: static bearer token for Vertex AI, static AWS credentials or the AWS environment chain for Bedrock, required keys for hosted providers.
 - Provider-specific completion options are built per API type: `OllamaCompletionOptions` for Ollama and Ollama Cloud, `OpenAiCompletionOptions` for OpenAI/OpenAI-compatible/Azure OpenAI, `XAiCompletionOptions`, `AnthropicCompletionOptions`, `GeminiCompletionOptions` for Gemini and Vertex AI, and `CohereCompletionOptions`.
-- Added a `PolyPromptNative` tool-calling format that dispatches through the provider-native PolyPrompt tool-chat clients, which unlocks tool calls on xAI, Anthropic, Gemini, Cohere, and Bedrock.
+- Added a `PolyPromptNative` tool-calling format that dispatches through the provider-native PolyPrompt tool-chat clients, which unlocks tool calls on xAI, Anthropic, Gemini, Cohere, Bedrock, and Azure OpenAI.
 - `ValidateRunnerAsync` embedding checks now use the PolyPrompt embedding clients instead of hand-built provider HTTP calls, so embeddings work across every provider that supports them.
 
 ### Configuration
@@ -35,6 +35,7 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 - Added `dashboard/src/utils/apiTypes.js`, a provider catalog mirroring the server's, with `describeApiType`, `normalizeApiType`, `isSupportedApiType`, `defaultHealthSettings`, `defaultToolSettings`, and `validateRunnerDraft`.
 - Both model runner editors list all thirteen API types and render provider-specific fields (deployment, API version, project ID, region) only when the selected provider needs them. Save is blocked with a specific message when a required credential field is missing.
 - The model server card shows the provider display name, provider fields, and capability summary, and warns when `apiTypeSupported` is false.
+- Runner draft validation no longer requires an endpoint for providers that derive one. Blank endpoints are valid for AWS Bedrock (regional endpoint from the AWS SDK) and Google Vertex AI (regional resource URL built from the project and region). A supplied endpoint must still be an absolute http or https URL.
 
 ### SDKs, documentation, Postman
 
@@ -44,6 +45,7 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 
 ### Fixes
 
+- Azure OpenAI tool calls now route through the provider-native PolyPrompt client, which builds `/openai/deployments/{deployment}/...` with an `api-version` query and authenticates with the `api-key` header. Previously Azure defaulted to the generic `OpenAIChatCompletions` sender, which posted `/v1/chat/completions` with a bearer token that Azure rejects. Saving an Azure runner that pins the generic format realigns it to `PolyPromptNative`.
 - MCP `tools/call` results with `isError: true` are now reported as failed `mcp_call_failed` tool results instead of successes. Voltaic 2.2 returns input-schema violations, such as undeclared arguments, this way instead of as a JSON-RPC error.
 
 ### Build
@@ -54,7 +56,8 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 
 - Added a `PolyPrompt option mapping` test that covers tool-chat `Options` mapping, defaulting to client settings, and Ollama versus OpenAI completion option types.
 - Added provider catalog tests covering canonicalization, case and whitespace tolerance, unrecognized-API-type fallback, per-provider health and tool defaults, provider-specific completion option types, credential validation for each hosted provider, and explicit capability failures.
-- Added dashboard tests for the provider catalog: coverage of all thirteen API types, case-insensitive resolution, Ollama fallback, per-provider health and tool defaults, and positive/negative runner draft validation.
+- Added an `Azure OpenAI tool request shape` test that drives a real `InferenceService.ChatWithToolsAsync` call against a local fake Azure endpoint and asserts the deployment-scoped URL, the `api-version` query value, the `api-key` header, the absence of a bearer token, and that Azure's pinned generic tool format is realigned to `PolyPromptNative`.
+- Added dashboard tests for the provider catalog: coverage of all thirteen API types, case-insensitive resolution, Ollama fallback, per-provider health and tool defaults, positive/negative runner draft validation, blank-endpoint acceptance for Bedrock and Vertex AI, and Azure's native tool format.
 
 ## v0.1.0
 

@@ -112,8 +112,10 @@ export const API_TYPES = [
     supportsEmbeddings: true,
     supportsModelListing: true,
     supportsToolCalls: true,
-    toolCallingApiFormat: TOOL_CALLING_API_FORMATS.openAIChatCompletions,
-    chatCompletionsPath: '/v1/chat/completions',
+    // Azure is deployment-scoped and authenticates with the api-key header, so tool calls go
+    // through the provider-native PolyPrompt client rather than the generic chat-completions sender.
+    toolCallingApiFormat: TOOL_CALLING_API_FORMATS.native,
+    chatCompletionsPath: '',
     requiresApiKey: true,
     requiresDeployment: true,
     requiresApiVersion: true,
@@ -387,8 +389,10 @@ export function validateRunnerDraft(runner, existingIds = []) {
 
   const descriptor = describeApiType(apiType);
   const endpoint = String(runner.endpoint || '').trim();
-  const needsEndpoint = !descriptor.defaultEndpoint;
-  if (needsEndpoint && !endpoint) errors.push(`${descriptor.displayName} requires an endpoint URL.`);
+  // Every cataloged provider either has a default endpoint or derives its routing from other
+  // fields (AWS Bedrock uses the AWS SDK, Vertex AI builds a regional resource URL from the
+  // project and region), so a blank endpoint is never an error. A supplied endpoint must still
+  // be an absolute http or https URL.
   if (endpoint && !/^https?:\/\//i.test(endpoint)) errors.push('Endpoint must be an absolute http or https URL.');
 
   if (descriptor.requiresApiKey && !String(runner.apiKey || '').trim()) {

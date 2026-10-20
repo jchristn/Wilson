@@ -125,6 +125,47 @@ describe('apiTypes catalog', () => {
     expect(bedrock).not.toContain('AWS Bedrock requires an API key.');
   });
 
+  it('accepts cloud runners whose endpoint is derived instead of supplied', () => {
+    // Bedrock reaches AWS through the SDK and Vertex AI builds its regional URL from the project
+    // and region, so a blank endpoint is valid for both as long as everything else is present.
+    expect(validateRunnerDraft({
+      id: 'bedrock',
+      apiType: 'Bedrock',
+      endpoint: '',
+      region: 'us-east-1',
+      apiKey: 'access-key',
+      apiSecretKey: 'secret-key',
+      supportsTools: true,
+      toolCallingApiFormat: 'PolyPromptNative'
+    })).toEqual([]);
+
+    expect(validateRunnerDraft({
+      id: 'vertex',
+      apiType: 'VertexAI',
+      endpoint: '',
+      apiKey: 'bearer-token',
+      projectId: 'my-project',
+      region: 'us-central1'
+    })).toEqual([]);
+  });
+
+  it('routes Azure OpenAI tool calls through the provider-native format', () => {
+    expect(defaultToolSettings('AzureOpenAI')).toMatchObject({
+      supportsTools: true,
+      toolCallingApiFormat: 'PolyPromptNative'
+    });
+    expect(validateRunnerDraft({
+      id: 'azure',
+      apiType: 'AzureOpenAI',
+      endpoint: 'https://example.openai.azure.com',
+      apiKey: 'key',
+      deployment: 'chat',
+      apiVersion: '2024-10-21',
+      supportsTools: true,
+      toolCallingApiFormat: 'PolyPromptNative'
+    })).toEqual([]);
+  });
+
   it('rejects unsupported API types and malformed endpoints', () => {
     expect(validateRunnerDraft({ id: 'x', apiType: 'MadeUp' })[0]).toContain('is not supported');
     expect(validateRunnerDraft({ id: 'x', apiType: 'Ollama', endpoint: 'localhost:11434' }))

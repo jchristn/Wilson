@@ -158,7 +158,11 @@ namespace Wilson.Core.Settings
                         SupportsModelListing = true,
                         SupportsToolCalls = true,
                         SupportsStreaming = true,
-                        DefaultToolCallingApiFormat = ToolCallingApiFormats.OpenAIChatCompletions,
+                        // Azure routes tools through its own PolyPrompt client, which builds the
+                        // /openai/deployments/{deployment}/... URL with an api-version query and
+                        // authenticates with the api-key header. The generic OpenAI-compatible
+                        // sender would post to /v1/chat/completions with a bearer token instead.
+                        DefaultToolCallingApiFormat = ToolCallingApiFormats.Native,
                         RequiresApiKey = true,
                         RequiresDeployment = true,
                         RequiresApiVersion = true,

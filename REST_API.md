@@ -247,7 +247,11 @@ Each runner status reports `apiType`, `apiTypeDisplayName`, `apiTypeSupported`, 
 
 ### Tool-Calling Formats
 
-`toolCallingApiFormat` accepts `OllamaChat` (Ollama `/api/chat`), `OpenAIChatCompletions` (OpenAI, OpenAI-compatible, and Azure OpenAI), and `PolyPromptNative` (provider-native tool chat for xAI, Anthropic, Gemini, Cohere, and Bedrock). Providers with a native tool client default to `PolyPromptNative`; Ollama Cloud, Vertex AI, VoyageAI, and Text Embeddings Inference advertise no tool support and get no format.
+`toolCallingApiFormat` accepts `OllamaChat` (Ollama `/api/chat`), `OpenAIChatCompletions` (OpenAI and OpenAI-compatible), and `PolyPromptNative` (provider-native tool chat for Azure OpenAI, xAI, Anthropic, Gemini, Cohere, and Bedrock). Providers with a native tool client default to `PolyPromptNative`; Ollama Cloud, Vertex AI, VoyageAI, and Text Embeddings Inference advertise no tool support and get no format.
+
+Azure OpenAI must use `PolyPromptNative`: its operations are deployment-scoped (`/openai/deployments/{deployment}/chat/completions?api-version=...`) and authenticate with the `api-key` header, not a bearer token. Saving an Azure OpenAI runner that pins `OpenAIChatCompletions` realigns it to `PolyPromptNative`.
+
+`endpoint` may be blank for `Bedrock` and `VertexAI`. Bedrock derives its regional endpoint from the AWS SDK, and Vertex AI builds a regional resource URL from `projectId` and `region`. Blank endpoints for every other cataloged provider fall back to that provider's catalog default.
 
 ## Request History
 

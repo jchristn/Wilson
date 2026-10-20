@@ -498,6 +498,14 @@ namespace Wilson.Core.Settings
             {
                 runner.ToolCallingApiFormat = descriptor.DefaultToolCallingApiFormat;
             }
+            else if (descriptor.RequiresDeployment
+                && String.Equals(runner.ToolCallingApiFormat, ToolCallingApiFormats.OpenAIChatCompletions, StringComparison.OrdinalIgnoreCase))
+            {
+                // Azure OpenAI is deployment-scoped and authenticates with an api-key header, so the
+                // generic chat-completions sender cannot build a valid request for it. Route it through
+                // the provider-native PolyPrompt client even when an older draft pinned the generic format.
+                runner.ToolCallingApiFormat = ToolCallingApiFormats.Native;
+            }
 
             if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && !String.IsNullOrWhiteSpace(descriptor.DefaultChatCompletionsPath))
             {
