@@ -153,13 +153,13 @@ Important sections:
 
 Each `modelRunners` entry supports endpoint health checks:
 
-- `healthCheckEnabled`: enables background probing
-- `healthCheckUrl`: absolute URL or endpoint path; defaults to the provider catalog health path (`/api/tags` for Ollama and Ollama Cloud, `/v1/models` for OpenAI, Anthropic, xAI, and Cohere, `/v1beta/models` for Gemini, `/openai/models` for Azure OpenAI, `/info` for Text Embeddings Inference)
+- `healthCheckEnabled`: enables background probing. Defaults to off for providers that expose no health or model-list route Wilson can call (Google Vertex AI, AWS Bedrock, VoyageAI) and for any runner whose endpoint is not an absolute HTTP(S) URL, because Wilson never sends a probe to an empty or relative URL. Supplying an absolute `healthCheckUrl` re-enables probing for those providers.
+- `healthCheckUrl`: absolute URL or endpoint path; defaults to the provider catalog health path (`/api/tags` for Ollama and Ollama Cloud, `/v1/models` for OpenAI, Anthropic, xAI, and Cohere, `/v1beta/models` for Gemini, `/openai/models` for Azure OpenAI, `/info` for Text Embeddings Inference). An explicitly configured absolute HTTP(S) URL is always preserved. A value with a non-HTTP scheme is rejected and checks stay off.
 - `healthCheckMethod`: `GET` or `HEAD`
 - `healthCheckIntervalMs`, `healthCheckTimeoutMs`
 - `healthCheckExpectedStatusCode`
 - `healthyThreshold`, `unhealthyThreshold`
-- `healthCheckUseAuth`: sends the runner API key as a bearer token during probes
+- `healthCheckUseAuth`: sends this runner's API key with health probes, using the provider's own authentication contract rather than a blanket bearer token: `Authorization: Bearer` for Ollama, Ollama Cloud, OpenAI, OpenAI-compatible, xAI, Cohere, VoyageAI, and Text Embeddings Inference; `x-api-key` plus `anthropic-version: 2023-06-01` for Anthropic; `x-goog-api-key` for Gemini; `api-key` for Azure OpenAI. Azure OpenAI probes also carry the `api-version` query parameter, which its models route requires. When a probe URL cannot be resolved to an absolute HTTP(S) URL, Wilson records an actionable error and sends no request at all.
 
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
@@ -182,7 +182,9 @@ Wilson 3.4.0 of PolyPrompt adds endpoint types and providers beyond the original
 | `VoyageAI` | VoyageAI embedding models | no | yes | no | no |
 | `Tei` | Hugging Face Text Embeddings Inference | no | yes | yes | no |
 
-`GET /v1.0/api/model-runners/api-types` returns the same catalog at runtime, including default endpoints, default health paths, default health timings, capability flags, default tool-calling format, and required credential fields. The dashboard builds its API type picker from that catalog.
+`GET /v1.0/api/model-runners/api-types` returns the same catalog at runtime, including default endpoints, default health paths, default health timings, capability flags, default tool-calling format, required credential fields, whether the provider supports a health probe at all, and the health-probe authentication scheme and protocol version the provider expects. The dashboard builds its API type picker from that catalog.
+
+Changing `apiType` in either dashboard model server editor re-derives the new provider's endpoint, health URL and timings, tool format, and capability flags, so selecting a provider from a fresh Ollama draft always yields a usable configuration. Values that still equal the previous provider's defaults are replaced; a custom endpoint, a custom health URL or timing, and any control the operator disabled are preserved.
 
 Provider-specific fields beyond `apiType`, `endpoint`, and `apiKey`:
 

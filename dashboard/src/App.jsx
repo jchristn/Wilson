@@ -9,7 +9,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ApiClient from './utils/api';
-import { API_TYPE_NAMES, describeApiType, defaultHealthSettings, defaultToolSettings, normalizeApiType, validateRunnerDraft } from './utils/apiTypes';
+import { API_TYPE_NAMES, applyApiTypeDefaults, buildHealthCheckRequestUrl, describeApiType, defaultHealthSettings, defaultToolSettings, normalizeApiType, resolveHealthCheckUrl, validateRunnerDraft } from './utils/apiTypes';
 import { mergeToolProgress, parseSseFrame } from './utils/sseTools';
 import './index.css';
 
@@ -1190,6 +1190,13 @@ function defaultHealthCheckSettings(apiType = 'Ollama', endpoint = 'http://local
   return defaultHealthSettings(apiType, endpoint, apiKey);
 }
 
+// Shared API type change handler for both model server editors. Selecting a provider re-derives
+// that provider's endpoint, health URL, tool format, and capability defaults while preserving
+// anything the user typed or disabled by hand.
+function changeRunnerApiType(runner, nextApiType) {
+  return applyApiTypeDefaults(runner, nextApiType);
+}
+
 function defaultRunnerToolSettings(apiType = 'Ollama') {
   return defaultToolSettings(apiType);
 }
@@ -1265,12 +1272,16 @@ function newModelRunner() {
 }
 
 function normalizeRunnerForSave(runner) {
-  const defaults = defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey);
+  const endpoint = String(runner.endpoint || describeApiType(runner.apiType).defaultEndpoint || '').trim().replace(/\/+$/, '');
+  const defaults = defaultHealthCheckSettings(runner.apiType, endpoint, runner.apiKey);
   const toolDefaults = defaultRunnerToolSettings(runner.apiType);
+  // The server refuses to probe an empty or relative URL, so a draft that cannot resolve an
+  // absolute health URL is saved with checks disabled instead of a broken setting.
+  const healthCheckUrl = resolveHealthCheckUrl(runner.apiType, endpoint, runner.healthCheckUrl) || defaults.healthCheckUrl;
   return {
     ...runner,
     apiType: normalizeApiType(runner.apiType),
-    endpoint: String(runner.endpoint || describeApiType(runner.apiType).defaultEndpoint || '').trim().replace(/\/+$/, ''),
+    endpoint,
     models: runner.models || [],
     contextWindowTokens: Number(runner.contextWindowTokens || 8192),
     apiKey: runner.apiKey || null,
@@ -1284,8 +1295,8 @@ function normalizeRunnerForSave(runner) {
     supportsParallelToolCalls: runner.supportsParallelToolCalls !== false,
     supportsStreamingToolCalls: runner.supportsStreamingToolCalls !== false,
     chatCompletionsPath: runner.chatCompletionsPath ?? toolDefaults.chatCompletionsPath,
-    healthCheckEnabled: runner.healthCheckEnabled !== false,
-    healthCheckUrl: runner.healthCheckUrl || defaults.healthCheckUrl,
+    healthCheckEnabled: runner.healthCheckEnabled !== false && Boolean(healthCheckUrl),
+    healthCheckUrl: healthCheckUrl || null,
     healthCheckMethod: runner.healthCheckMethod || defaults.healthCheckMethod,
     healthCheckIntervalMs: Number(runner.healthCheckIntervalMs || defaults.healthCheckIntervalMs),
     healthCheckTimeoutMs: Number(runner.healthCheckTimeoutMs || defaults.healthCheckTimeoutMs),
@@ -1863,7 +1874,7 @@ function ModelServerEditModal({ server, onClose, onSave }) {
       <div className="form-grid model-server-editor">
         <FormInput label="Server ID" tooltip="Unique model server identifier used by chat requests and settings" value={draft.id} onChange={v => set('id', v)} />
         <FormInput label="Display name" tooltip="Human-readable model server name shown in the dashboard" value={draft.name} onChange={v => set('name', v)} />
-        <FormSelect label="API type" tooltip="Model server API compatibility. Every provider PolyPrompt supports is listed here." value={draft.apiType || 'Ollama'} options={API_TYPE_NAMES} onChange={v => set('apiType', v)} />
+        <FormSelect label="API type" tooltip="Model server API compatibility. Every provider PolyPrompt supports is listed here." value={draft.apiType || 'Ollama'} options={API_TYPE_NAMES} onChange={v => setDraft(prev => changeRunnerApiType(prev, v))} />
         <FormInput label="Endpoint" tooltip="Base URL for this model server" value={draft.endpoint} onChange={v => set('endpoint', v)} />
         <FormInput label="API key" tooltip="API key or bearer token sent to this model server" value={draft.apiKey || ''} onChange={v => set('apiKey', v)} />
         <ProviderFields runner={draft} set={set} />
@@ -1880,7 +1891,7 @@ function ModelServerEditModal({ server, onClose, onSave }) {
         <div className="health-editor-block">
           <div className="runner-editor-header"><strong>Health Checks</strong></div>
           <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server" checked={draft.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
-          <FormInput label="Health URL" tooltip="Absolute URL or path to probe. Ollama defaults to /api/tags; OpenAI-compatible defaults to /v1/models." value={draft.healthCheckUrl || ''} onChange={v => set('healthCheckUrl', v)} />
+          <FormInput label="Health URL" tooltip={`Absolute URL or path to probe. The request Wilson sends is ${buildHealthCheckRequestUrl(draft.apiType, draft.endpoint, draft.healthCheckUrl, draft.apiVersion) || 'not resolvable, so health checks cannot run'}.`} value={draft.healthCheckUrl || ''} onChange={v => set('healthCheckUrl', v)} />
           <FormSelect label="Method" tooltip="HTTP method used for health probes" value={draft.healthCheckMethod || 'GET'} options={['GET', 'HEAD']} onChange={v => set('healthCheckMethod', v)} />
           <FormInput label="Expected status" tooltip="HTTP status code that marks the probe as successful" type="number" value={draft.healthCheckExpectedStatusCode ?? 200} onChange={v => set('healthCheckExpectedStatusCode', v)} />
           <FormInput label="Interval (ms)" tooltip="Milliseconds between health probes" type="number" value={draft.healthCheckIntervalMs ?? 5000} onChange={v => set('healthCheckIntervalMs', v)} />
@@ -3044,7 +3055,7 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
       <div className="runner-editor-header"><strong>Server {index + 1}</strong><button className="icon-button" title="Remove this model server" onClick={onDelete}><Trash2 size={16} /></button></div>
       <FormInput label="Server ID" tooltip="Unique model server identifier." value={runner.id || ''} onChange={v => set('id', v)} />
       <FormInput label="Name" tooltip="Display name for this model server." value={runner.name || ''} onChange={v => set('name', v)} />
-      <FormSelect label="API type" tooltip="Model server API compatibility. Every provider PolyPrompt supports is listed here." value={runner.apiType || 'Ollama'} options={API_TYPE_NAMES} onChange={v => set('apiType', v)} />
+      <FormSelect label="API type" tooltip="Model server API compatibility. Every provider PolyPrompt supports is listed here." value={runner.apiType || 'Ollama'} options={API_TYPE_NAMES} onChange={v => onChange(changeRunnerApiType(runner, v))} />
       <FormInput label="Endpoint" tooltip="Base URL for the model server." value={runner.endpoint || ''} onChange={v => set('endpoint', v)} />
       <FormInput label="API key" tooltip="API key or bearer token for the model server." value={runner.apiKey || ''} onChange={v => set('apiKey', v || null)} />
       <ProviderFields runner={runner} set={set} />
@@ -3062,7 +3073,7 @@ function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
       <div className="health-editor-block">
         <div className="runner-editor-header"><strong>Health Checks</strong></div>
         <FormCheck label="Enabled" tooltip="Run periodic background health probes for this model server." checked={runner.healthCheckEnabled !== false} onChange={v => set('healthCheckEnabled', v)} />
-        <FormInput label="Health URL" tooltip="Absolute URL or path to probe for health." value={runner.healthCheckUrl || defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey).healthCheckUrl} onChange={v => set('healthCheckUrl', v)} />
+        <FormInput label="Health URL" tooltip={`Absolute URL or path to probe. The request Wilson sends is ${buildHealthCheckRequestUrl(runner.apiType, runner.endpoint, runner.healthCheckUrl, runner.apiVersion) || 'not resolvable, so health checks cannot run'}.`} value={runner.healthCheckUrl || defaultHealthCheckSettings(runner.apiType, runner.endpoint, runner.apiKey).healthCheckUrl} onChange={v => set('healthCheckUrl', v)} />
         <FormSelect label="Method" tooltip="HTTP method used for health probes." value={runner.healthCheckMethod || 'GET'} options={['GET', 'HEAD']} onChange={v => set('healthCheckMethod', v)} />
         <FormInput label="Expected status" tooltip="HTTP status code required for a healthy response." type="number" value={runner.healthCheckExpectedStatusCode ?? 200} onChange={v => set('healthCheckExpectedStatusCode', Number(v))} />
         <FormInput label="Interval (ms)" tooltip="Milliseconds between health probes." type="number" value={runner.healthCheckIntervalMs ?? defaultHealthCheckSettings(runner.apiType).healthCheckIntervalMs} onChange={v => set('healthCheckIntervalMs', Number(v))} />

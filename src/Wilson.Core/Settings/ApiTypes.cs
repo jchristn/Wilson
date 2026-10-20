@@ -166,7 +166,11 @@ namespace Wilson.Core.Settings
                         RequiresApiKey = true,
                         RequiresDeployment = true,
                         RequiresApiVersion = true,
-                        DefaultApiVersion = "2024-10-21"
+                        DefaultApiVersion = "2024-10-21",
+                        // Azure authenticates with the api-key header (never a bearer token) and its
+                        // model route only answers when the api-version query parameter is present.
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.AzureApiKey,
+                        HealthCheckRequiresApiVersion = true
                     };
                 case XAI:
                     return new ApiTypeDescriptor
@@ -202,7 +206,10 @@ namespace Wilson.Core.Settings
                         SupportsToolCalls = true,
                         SupportsStreaming = true,
                         DefaultToolCallingApiFormat = ToolCallingApiFormats.Native,
-                        RequiresApiKey = true
+                        RequiresApiKey = true,
+                        // Anthropic sends the key in x-api-key and requires an anthropic-version header.
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.AnthropicApiKey,
+                        DefaultHealthCheckVersion = "2023-06-01"
                     };
                 case Gemini:
                     return new ApiTypeDescriptor
@@ -220,7 +227,9 @@ namespace Wilson.Core.Settings
                         SupportsToolCalls = true,
                         SupportsStreaming = true,
                         DefaultToolCallingApiFormat = ToolCallingApiFormats.Native,
-                        RequiresApiKey = true
+                        RequiresApiKey = true,
+                        // Gemini API keys travel in x-goog-api-key, which keeps them out of URLs.
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.GoogleApiKey
                     };
                 case VertexAI:
                     return new ApiTypeDescriptor
@@ -241,7 +250,12 @@ namespace Wilson.Core.Settings
                         RequiresApiKey = true,
                         RequiresProjectId = true,
                         RequiresRegion = true,
-                        DefaultRegion = "us-central1"
+                        DefaultRegion = "us-central1",
+                        // Vertex AI has no model-listing route and derives its resource URL from the
+                        // project and region, so Wilson cannot probe it reliably by default. If an
+                        // operator supplies an absolute health URL, the token goes as a bearer token.
+                        SupportsHealthChecks = false,
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.Bearer
                     };
                 case Bedrock:
                     return new ApiTypeDescriptor
@@ -261,7 +275,11 @@ namespace Wilson.Core.Settings
                         DefaultToolCallingApiFormat = ToolCallingApiFormats.Native,
                         RequiresApiKey = false,
                         RequiresRegion = true,
-                        DefaultRegion = "us-east-1"
+                        DefaultRegion = "us-east-1",
+                        // Bedrock is reached through SigV4-signed AWS SDK calls, which a plain HTTP
+                        // health probe cannot reproduce, so checks stay off unless a URL is supplied.
+                        SupportsHealthChecks = false,
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.None
                     };
                 case Cohere:
                     return new ApiTypeDescriptor
@@ -297,7 +315,11 @@ namespace Wilson.Core.Settings
                         SupportsToolCalls = false,
                         SupportsStreaming = false,
                         DefaultToolCallingApiFormat = String.Empty,
-                        RequiresApiKey = true
+                        RequiresApiKey = true,
+                        // VoyageAI exposes rerank and embeddings only, with no models or health route.
+                        // An operator-supplied absolute URL still gets the bearer token.
+                        SupportsHealthChecks = false,
+                        DefaultHealthCheckAuthScheme = HealthCheckAuthSchemes.Bearer
                     };
                 case Tei:
                     return new ApiTypeDescriptor
@@ -417,6 +439,37 @@ namespace Wilson.Core.Settings
     }
 
     /// <summary>
+    /// Authentication schemes used when Wilson probes a model server health endpoint.
+    /// </summary>
+    public static class HealthCheckAuthSchemes
+    {
+        /// <summary>Send the credential as an Authorization: Bearer token, or nothing when auth is off.</summary>
+        public const string Bearer = "Bearer";
+
+        /// <summary>Anthropic Messages/model API key in x-api-key plus the anthropic-version header.</summary>
+        public const string AnthropicApiKey = "AnthropicApiKey";
+
+        /// <summary>Google AI Studio API key in x-goog-api-key.</summary>
+        public const string GoogleApiKey = "GoogleApiKey";
+
+        /// <summary>Azure OpenAI API key in api-key.</summary>
+        public const string AzureApiKey = "AzureApiKey";
+
+        /// <summary>No credential is ever sent for this provider.</summary>
+        public const string None = "None";
+
+        /// <summary>All supported health-check authentication schemes.</summary>
+        public static readonly IReadOnlyList<string> All = new List<string>
+        {
+            Bearer,
+            AnthropicApiKey,
+            GoogleApiKey,
+            AzureApiKey,
+            None
+        };
+    }
+
+    /// <summary>
     /// Capabilities and defaults for one API type.
     /// </summary>
     public class ApiTypeDescriptor
@@ -435,6 +488,27 @@ namespace Wilson.Core.Settings
 
         /// <summary>Default health probe path. Empty when no probe path is available.</summary>
         public string DefaultHealthPath { get; set; } = String.Empty;
+
+        /// <summary>
+        /// Whether Wilson can build a usable default health probe for this API type. False when the
+        /// provider has no model-list/health route Wilson can call, so checks stay off by default.
+        /// </summary>
+        public bool SupportsHealthChecks { get; set; } = true;
+
+        /// <summary>Authentication scheme used for health probes with this provider.</summary>
+        public string DefaultHealthCheckAuthScheme { get; set; } = HealthCheckAuthSchemes.Bearer;
+
+        /// <summary>
+        /// Provider protocol version header value a health probe must send, when the provider
+        /// requires one (Anthropic's anthropic-version header). Empty when none is required.
+        /// </summary>
+        public string DefaultHealthCheckVersion { get; set; } = String.Empty;
+
+        /// <summary>
+        /// Whether the probe URL must carry its API version as a query parameter (Azure OpenAI's
+        /// api-version). When true, a configured health URL that omits it gets it appended.
+        /// </summary>
+        public bool HealthCheckRequiresApiVersion { get; set; }
 
         /// <summary>Default health probe interval in milliseconds.</summary>
         public int DefaultHealthIntervalMs { get; set; } = 15000;

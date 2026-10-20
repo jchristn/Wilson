@@ -398,6 +398,134 @@ namespace Wilson.Core.Settings
         public bool HealthCheckUseAuth { get; set; } = false;
 
         /// <summary>
+        /// Whether a value is an absolute HTTP or HTTPS URL Wilson can probe.
+        /// </summary>
+        /// <param name="value">Candidate URL.</param>
+        /// <returns>True when the value is an absolute http or https URL.</returns>
+        public static bool IsAbsoluteHttpUrl(string? value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return false;
+            if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out Uri? uri)) return false;
+            return String.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Resolve the absolute health probe URL for a runner, deriving it from the provider catalog
+        /// defaults and endpoint when no absolute URL is configured. Returns an empty string when no
+        /// absolute HTTP(S) URL can be produced, which callers must treat as "do not probe".
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>Absolute HTTP(S) probe URL, or an empty string when none can be built.</returns>
+        public static string ResolveHealthCheckUrl(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
+            string configured = (runner.HealthCheckUrl ?? String.Empty).Trim();
+            string candidate;
+
+            if (IsAbsoluteHttpUrl(configured))
+            {
+                candidate = configured;
+            }
+            else
+            {
+                // A configured value that parses as an absolute URL but is not http(s) is a mistake the
+                // operator has to fix; concatenating it onto the endpoint would build a nonsense URL.
+                if (Uri.TryCreate(configured, UriKind.Absolute, out _)) return String.Empty;
+
+                // A provider with no usable health route (AWS Bedrock signs SDK calls, Vertex AI
+                // derives a regional resource URL, VoyageAI has no models route) must never get a
+                // derived probe, because Wilson would be inventing an endpoint that does not exist.
+                // Only an operator-supplied absolute URL is probed for those providers.
+                if (!descriptor.SupportsHealthChecks) return String.Empty;
+
+                string baseUrl = (runner.Endpoint ?? String.Empty).Trim().TrimEnd('/');
+                string path;
+                if (String.IsNullOrWhiteSpace(configured))
+                {
+                    path = descriptor.DefaultHealthPath;
+                }
+                else if (configured.StartsWith("/", StringComparison.Ordinal))
+                {
+                    path = configured;
+                }
+                else
+                {
+                    path = "/" + configured.TrimStart('/');
+                }
+
+                candidate = String.IsNullOrWhiteSpace(path) ? baseUrl : baseUrl + path;
+            }
+
+            if (!IsAbsoluteHttpUrl(candidate)) return String.Empty;
+            return candidate;
+        }
+
+        /// <summary>
+        /// Build the URL Wilson actually sends for a health probe: the resolved health URL plus any
+        /// query parameter the provider contract requires (Azure OpenAI's api-version).
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>Absolute HTTP(S) request URL, or an empty string when none can be built.</returns>
+        public static string BuildHealthCheckRequestUrl(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+            string url = ResolveHealthCheckUrl(runner);
+            if (String.IsNullOrWhiteSpace(url)) return String.Empty;
+            return AppendRequiredApiVersion(url, runner, ApiTypes.Describe(runner.ApiType));
+        }
+
+        /// <summary>
+        /// Describe why a runner cannot be probed, for use before an HTTP send.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>An actionable error message, or null when the runner has a usable probe URL.</returns>
+        public static string? DescribeHealthCheckUrlProblem(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+            if (!String.IsNullOrWhiteSpace(ResolveHealthCheckUrl(runner))) return null;
+
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
+            string configured = (runner.HealthCheckUrl ?? String.Empty).Trim();
+            string endpoint = (runner.Endpoint ?? String.Empty).Trim();
+
+            if (!String.IsNullOrWhiteSpace(configured) && !IsAbsoluteHttpUrl(configured) && Uri.TryCreate(configured, UriKind.Absolute, out _))
+            {
+                return "health check URL '" + configured + "' must use the http or https scheme; no probe was sent";
+            }
+
+            if (!String.IsNullOrWhiteSpace(endpoint) && !IsAbsoluteHttpUrl(endpoint))
+            {
+                return "endpoint '" + endpoint + "' is not an absolute http or https URL, so the health check URL cannot be derived; no probe was sent";
+            }
+
+            if (!descriptor.SupportsHealthChecks)
+            {
+                return descriptor.DisplayName + " has no health or model-listing route Wilson can probe, so set the health URL to an absolute http or https URL to enable checks";
+            }
+
+            if (String.IsNullOrWhiteSpace(endpoint))
+            {
+                return "endpoint is empty, so the health check URL cannot be derived; set an absolute http or https endpoint or health check URL";
+            }
+
+            return "health check URL cannot be resolved to an absolute http or https URL; no probe was sent";
+        }
+
+        private static string AppendRequiredApiVersion(string url, ModelRunnerSettings runner, ApiTypeDescriptor descriptor)
+        {
+            if (!descriptor.HealthCheckRequiresApiVersion) return url;
+            string apiVersion = String.IsNullOrWhiteSpace(runner.ApiVersion) ? descriptor.DefaultApiVersion : runner.ApiVersion!.Trim();
+            if (String.IsNullOrWhiteSpace(apiVersion)) return url;
+            if (url.IndexOf("api-version=", StringComparison.OrdinalIgnoreCase) >= 0) return url;
+
+            string separator = url.IndexOf('?') >= 0 ? "&" : "?";
+            return url + separator + "api-version=" + Uri.EscapeDataString(apiVersion);
+        }
+
+        /// <summary>
         /// Apply API-type-aware health check defaults.
         /// </summary>
         /// <param name="runner">Model runner settings.</param>
@@ -411,12 +539,23 @@ namespace Wilson.Core.Settings
             ApplyProviderDefaults(runner);
             descriptor = ApiTypes.Describe(runner.ApiType);
 
-            if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl))
+            // Resolve the probe URL once. A provider without a usable probe route (Bedrock signs AWS
+            // SDK calls, Vertex AI derives a regional resource URL, VoyageAI has no models route) or
+            // a runner whose endpoint is blank must not leave health checks enabled pointing at an
+            // empty or relative URL, so checks default to off until a real URL exists. A runner the
+            // operator explicitly disabled stays disabled.
+            string resolvedUrl = ResolveHealthCheckUrl(runner);
+            if (String.IsNullOrWhiteSpace(resolvedUrl))
             {
-                string baseUrl = (runner.Endpoint ?? String.Empty).TrimEnd('/');
-                runner.HealthCheckUrl = String.IsNullOrWhiteSpace(descriptor.DefaultHealthPath)
-                    ? baseUrl
-                    : baseUrl + descriptor.DefaultHealthPath;
+                // Keep whatever the operator typed so the failure stays actionable and visible, but
+                // never leave checks enabled against a URL Wilson cannot send.
+                string configuredUrl = (runner.HealthCheckUrl ?? String.Empty).Trim();
+                runner.HealthCheckUrl = String.IsNullOrWhiteSpace(configuredUrl) ? null : configuredUrl;
+                runner.HealthCheckEnabled = false;
+            }
+            else
+            {
+                runner.HealthCheckUrl = resolvedUrl;
             }
 
             if (runner.HealthCheckIntervalMs <= 0)

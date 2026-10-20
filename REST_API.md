@@ -222,7 +222,9 @@ GET /v1.0/api/model-runners/api-types
 Authorization: Bearer wilsonadmin
 ```
 
-Returns the provider catalog. Each entry carries `name`, `displayName`, `description`, `defaultEndpoint`, `defaultHealthPath`, `defaultHealthIntervalMs`, `defaultHealthTimeoutMs`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `supportsToolCalls`, `supportsStreaming`, `defaultToolCallingApiFormat`, `defaultChatCompletionsPath`, `requiresApiKey`, `requiresDeployment`, `requiresApiVersion`, `defaultApiVersion`, `requiresProjectId`, `requiresRegion`, and `defaultRegion`.
+Returns the provider catalog. Each entry carries `name`, `displayName`, `description`, `defaultEndpoint`, `defaultHealthPath`, `supportsHealthChecks`, `defaultHealthCheckAuthScheme`, `defaultHealthCheckVersion`, `healthCheckRequiresApiVersion`, `defaultHealthIntervalMs`, `defaultHealthTimeoutMs`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `supportsToolCalls`, `supportsStreaming`, `defaultToolCallingApiFormat`, `defaultChatCompletionsPath`, `requiresApiKey`, `requiresDeployment`, `requiresApiVersion`, `defaultApiVersion`, `requiresProjectId`, `requiresRegion`, and `defaultRegion`.
+
+`supportsHealthChecks` is `false` for providers that expose no route Wilson can probe (Google Vertex AI, AWS Bedrock, VoyageAI). Those runners default to `healthCheckEnabled: false` and only get a probe when an absolute HTTP(S) health URL is configured. `defaultHealthCheckAuthScheme` is one of `Bearer`, `AnthropicApiKey` (`x-api-key` plus `anthropic-version`), `GoogleApiKey` (`x-goog-api-key`), `AzureApiKey` (`api-key`), or `None`, and `healthCheckRequiresApiVersion` marks providers whose probe URL must carry `api-version` as a query parameter (Azure OpenAI).
 
 Names are case- and whitespace-insensitive on input and are canonicalized on save, so `xai`, `XA I` (trimmed) and `XAI` all resolve to `XAI`. An unrecognized value is preserved verbatim and falls back to the legacy Ollama-family clients.
 
