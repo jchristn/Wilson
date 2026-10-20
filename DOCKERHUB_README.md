@@ -1,6 +1,6 @@
 # Wilson — a chat server that does not phone home
 
-**Wilson** is a local-first chat server and dashboard for talking to Ollama, OpenAI, and OpenAI-compatible model runners. It gives you a browser dashboard, a REST API, tenant-aware users and credentials, conversation storage, request history, feedback capture, model-directed tools, and background model-runner health checks — all running on infrastructure you control.
+**Wilson** is a local-first chat server and dashboard for talking to Ollama, Ollama Cloud, OpenAI, Azure OpenAI, xAI Grok, Anthropic, Google Gemini, Google Vertex AI, AWS Bedrock, Cohere, VoyageAI, Text Embeddings Inference, and OpenAI-compatible model runners. It gives you a browser dashboard, a REST API, tenant-aware users and credentials, conversation storage, request history, feedback capture, model-directed tools, and background model-runner health checks — all running on infrastructure you control.
 
 No signal. No noise. No rescue ships. Just Wilson, your local model, and a chat window that does not need to reach the outside world.
 
@@ -18,7 +18,7 @@ Wilson fits three kinds of people, and the same server serves all of them.
 
 ## What it does
 
-Wilson chats with local Ollama models or OpenAI-compatible APIs and streams the responses as they arrive. It keeps conversation history, manages several configured model servers at once, and probes each one in the background with healthy/unhealthy thresholds and recent history. From the dashboard you can pull and load Ollama models, see which models are available and loaded, and switch runners mid-conversation.
+Wilson chats with local Ollama models, hosted providers, and OpenAI-compatible APIs and streams the responses as they arrive. It keeps conversation history, manages several configured model servers at once, and probes each one in the background with healthy/unhealthy thresholds and recent history. From the dashboard you can pull and load Ollama models, see which models are available and loaded, and switch runners mid-conversation.
 
 The parts that matter for operators sit close to the surface. Every request is captured with status, latency, time-to-first-token, and token estimates. Thumbs-up and thumbs-down feedback, with optional comments, is stored against the message that earned it. When you enable tools, the model can read and write files, run processes, retrieve and search the web, and call external MCP servers — each execution approval-gated where it matters, with raw arguments and output redacted before anything is persisted or returned. Prompt templates are tenant-scoped database records, seeded with a sensible default system prompt and tool prompt for every tenant.
 
@@ -28,7 +28,7 @@ The parts that matter for operators sit close to the surface. Every request is c
 Browser dashboard ─┐
 REST / SDK client ─┼─► Wilson backend (Watson 7.1, C# / .NET 10)
 MCP-aware client  ─┘        │
-                            ├─ Inference (PolyPrompt) ─► Ollama / OpenAI-compatible runners
+                            ├─ Inference (PolyPrompt) ─► 13 provider API types
                             ├─ Agentic tool loop ─► built-in tools + MCP servers
                             ├─ Storage ─► SQLite or PostgreSQL
                             └─ Telemetry (Radiant/OTLP) ─► Collector ─► Prometheus / Tempo / Loki ─► Grafana
@@ -51,7 +51,7 @@ Then open the dashboard at `http://127.0.0.1:9401` and the backend at `http://12
 
 On the login page, use server URL `http://127.0.0.1:9400` with access key `wilsonadmin` or admin token `wilson-admin-dev-token`. Both are seeded defaults — **change them before exposing Wilson to anything you do not trust.**
 
-Configuration lives in a mounted `wilson.json`: the listener, database, CORS, auth, request history, tools and MCP, model runners, telemetry, and first-run seed values. The dashboard Settings page edits the same file; most changes apply immediately, while listener and database changes need a restart. The Compose file mounts a named `/workspace` volume that Wilson's file and process tools are scoped to — keep `tools.workingDirectory` and `tools.allowedRoots` pointed at that container path, and do not mount a broad host directory into a runner you have exposed.
+Configuration lives in a mounted `wilson.json`: the listener, database, CORS, auth, request history, tools and MCP, model runners, telemetry, and first-run seed values. Each `modelRunners` entry sets `apiType` to one of the thirteen supported providers; Azure OpenAI additionally needs `deployment` and `apiVersion`, Vertex AI needs `projectId` and `region`, and AWS Bedrock needs `region` plus static credentials or the AWS environment chain. `GET /v1.0/api/model-runners/api-types` returns the full catalog at runtime. The dashboard Settings page edits the same file; most changes apply immediately, while listener and database changes need a restart. The Compose file mounts a named `/workspace` volume that Wilson's file and process tools are scoped to — keep `tools.workingDirectory` and `tools.allowedRoots` pointed at that container path, and do not mount a broad host directory into a runner you have exposed.
 
 ## Related images
 

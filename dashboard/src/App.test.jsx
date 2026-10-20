@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ApiClient from './utils/api.js';
+import {
+  API_TYPE_NAMES,
+  describeApiType,
+  defaultHealthSettings,
+  defaultToolSettings,
+  isSupportedApiType,
+  normalizeApiType,
+  validateRunnerDraft
+} from './utils/apiTypes.js';
 import { mergeToolProgress, parseSseFrame } from './utils/sseTools.js';
 
 afterEach(() => {
@@ -27,6 +36,114 @@ describe('parseSseFrame', () => {
 
     expect(parsed.event).toBe('message');
     expect(parsed.data).toBe('{"text":" spaced "}');
+  });
+});
+
+describe('apiTypes catalog', () => {
+  it('covers every provider Wilson supports', () => {
+    expect(API_TYPE_NAMES).toEqual([
+      'Ollama',
+      'OllamaCloud',
+      'OpenAI',
+      'OpenAICompatible',
+      'AzureOpenAI',
+      'XAI',
+      'Anthropic',
+      'Gemini',
+      'VertexAI',
+      'Bedrock',
+      'Cohere',
+      'VoyageAI',
+      'Tei'
+    ]);
+  });
+
+  it('resolves API types case-insensitively and canonicalizes them', () => {
+    expect(describeApiType('xai').name).toBe('XAI');
+    expect(describeApiType('  ollamacloud ').name).toBe('OllamaCloud');
+    expect(normalizeApiType('azureopenai')).toBe('AzureOpenAI');
+    expect(normalizeApiType('gpt-like-custom')).toBe('gpt-like-custom');
+  });
+
+  it('falls back to Ollama for unrecognized API types', () => {
+    expect(describeApiType('not-a-provider').name).toBe('Ollama');
+    expect(isSupportedApiType('not-a-provider')).toBe(false);
+    expect(isSupportedApiType('cohere')).toBe(true);
+  });
+
+  it('derives provider-specific health and tool defaults', () => {
+    expect(defaultHealthSettings('OllamaCloud', 'https://ollama.com', 'token')).toMatchObject({
+      healthCheckUrl: 'https://ollama.com/api/tags',
+      healthCheckIntervalMs: 15000,
+      healthCheckTimeoutMs: 5000,
+      healthCheckUseAuth: true
+    });
+    expect(defaultHealthSettings('OpenAI', 'https://api.openai.com', '')).toMatchObject({
+      healthCheckUrl: 'https://api.openai.com/v1/models',
+      healthCheckUseAuth: false
+    });
+    expect(defaultToolSettings('XAI')).toMatchObject({
+      supportsTools: true,
+      toolCallingApiFormat: 'PolyPromptNative'
+    });
+    expect(defaultToolSettings('VoyageAI')).toMatchObject({
+      supportsTools: false,
+      toolCallingApiFormat: ''
+    });
+  });
+
+  it('accepts a fully configured hosted runner', () => {
+    const errors = validateRunnerDraft({
+      id: 'grok',
+      apiType: 'XAI',
+      endpoint: 'https://api.x.ai',
+      apiKey: 'key',
+      supportsTools: true,
+      toolCallingApiFormat: 'PolyPromptNative'
+    }, ['grok']);
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects hosted runners missing credentials', () => {
+    const errors = validateRunnerDraft({ id: 'grok', apiType: 'XAI', endpoint: 'https://api.x.ai' });
+    expect(errors).toContain('xAI Grok requires an API key.');
+  });
+
+  it('rejects Azure OpenAI runners missing deployment and API version', () => {
+    const errors = validateRunnerDraft({ id: 'azure', apiType: 'AzureOpenAI', endpoint: 'https://example.openai.azure.com', apiKey: 'key' });
+    expect(errors).toContain('Azure OpenAI requires a deployment name.');
+    expect(errors).toContain('Azure OpenAI requires an API version.');
+  });
+
+  it('rejects Vertex AI and Bedrock runners missing region and project', () => {
+    const vertex = validateRunnerDraft({ id: 'vertex', apiType: 'VertexAI', apiKey: 'token' });
+    expect(vertex).toContain('Google Vertex AI requires a project identifier.');
+    expect(vertex).toContain('Google Vertex AI requires a region.');
+
+    const bedrock = validateRunnerDraft({ id: 'bedrock', apiType: 'Bedrock' });
+    expect(bedrock).toContain('AWS Bedrock requires a region.');
+    expect(bedrock).not.toContain('AWS Bedrock requires an API key.');
+  });
+
+  it('rejects unsupported API types and malformed endpoints', () => {
+    expect(validateRunnerDraft({ id: 'x', apiType: 'MadeUp' })[0]).toContain('is not supported');
+    expect(validateRunnerDraft({ id: 'x', apiType: 'Ollama', endpoint: 'localhost:11434' }))
+      .toContain('Endpoint must be an absolute http or https URL.');
+  });
+
+  it('rejects tool configuration on providers without tool support', () => {
+    const errors = validateRunnerDraft({
+      id: 'tei',
+      apiType: 'Tei',
+      endpoint: 'http://localhost:8080',
+      supportsTools: true
+    });
+    expect(errors).toContain('Text Embeddings Inference does not support tool calls.');
+  });
+
+  it('requires a server id', () => {
+    expect(validateRunnerDraft({ id: '  ', apiType: 'Ollama', endpoint: 'http://localhost:11434' }))
+      .toContain('Server ID is required.');
   });
 });
 

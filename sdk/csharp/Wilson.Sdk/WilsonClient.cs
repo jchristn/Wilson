@@ -51,8 +51,15 @@ namespace Wilson.Sdk
                 token);
         }
 
-        public Task<List<EndpointHealthStatus>> GetModelRunnerHealthAsync(CancellationToken token = default)
+        /// <summary>
+        /// List the supported provider API types with their capabilities and defaults.
+        /// </summary>
+        public Task<List<ApiTypeDescriptor>> GetModelRunnerApiTypesAsync(CancellationToken token = default)
         {
+            return SendAsync<List<ApiTypeDescriptor>>(HttpMethod.Get, "/v1.0/api/model-runners/api-types", null, token);
+        }
+
+        public Task<List<EndpointHealthStatus>> GetModelRunnerHealthAsync(CancellationToken token = default)        {
             return SendAsync<List<EndpointHealthStatus>>(HttpMethod.Get, "/v1.0/api/model-runners/health", null, token);
         }
 

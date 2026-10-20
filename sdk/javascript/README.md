@@ -9,6 +9,7 @@ const client = new WilsonClient('http://127.0.0.1:9400');
 await client.login('wilsonadmin');
 
 const runners = await client.modelRunners({ pageNumber: 1, pageSize: 100 });
+const apiTypes = await client.modelRunnerApiTypes();
 const health = await client.modelRunnerHealth();
 const local = await client.modelRunnerHealthById('local-ollama');
 const tools = await client.tools();

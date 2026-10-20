@@ -18,6 +18,7 @@ Each SDK exposes authentication, model-server enumeration, model-server health, 
 - `DELETE /v1.0/api/prompts/{id}`
 - `POST /v1.0/api/prompts/{id}/default`
 - `GET /v1.0/api/model-runners`
+- `GET /v1.0/api/model-runners/api-types`
 - `GET /v1.0/api/model-runners/health`
 - `GET /v1.0/api/model-runners/{id}/health`
 - `GET /v1.0/api/tools`

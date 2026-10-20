@@ -75,6 +75,9 @@ namespace Test.Shared
                         CreateAsyncCase("mcp-tools", "MCP tools", McpToolsAsync),
                         CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
                         CreateSyncCase("polyprompt-option-mapping", "PolyPrompt option mapping", PolyPromptOptionMapping),
+                        CreateSyncCase("provider-catalog", "Provider API type catalog", ProviderCatalog),
+                        CreateSyncCase("provider-defaults", "Provider runner defaults", ProviderDefaults),
+                        CreateSyncCase("provider-client-selection", "Provider client selection", ProviderClientSelection),
                         CreateSyncCase("think-parser", "Think parser", ThinkParserSplitting),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
@@ -3038,8 +3041,271 @@ namespace Test.Shared
                 throw new InvalidOperationException("Expected an empty system prompt to fall back to the default system prompt.");
 
             object openAiOptions = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = "OpenAI" }, settings })!;
-            if (openAiOptions.GetType() != typeof(PolyPrompt.Models.CompletionOptions))
-                throw new InvalidOperationException("Expected OpenAI runners to use base CompletionOptions, got " + openAiOptions.GetType().Name + ".");
+            if (openAiOptions is not PolyPrompt.Options.OpenAiCompletionOptions openAi)
+                throw new InvalidOperationException("Expected OpenAI runners to use OpenAiCompletionOptions, got " + openAiOptions.GetType().Name + ".");
+            if (openAi.Seed != 7 || openAi.Temperature != 0.3 || openAi.TopP != 0.8 || openAi.MaxTokens != 512)
+                throw new InvalidOperationException("Expected OpenAI completion options to carry runner and request settings.");
+
+            // An unrecognized API type keeps the base options so legacy configuration still chats.
+            object legacyOptions = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = "SomethingCustom" }, settings })!;
+            if (legacyOptions.GetType() != typeof(PolyPrompt.Models.CompletionOptions))
+                throw new InvalidOperationException("Expected unrecognized API types to use base CompletionOptions, got " + legacyOptions.GetType().Name + ".");
+        }
+
+        private static void ProviderCatalog()
+        {
+            // The catalog drives API type pickers, defaults, and capability gates, so every
+            // provider PolyPrompt 3.4.0 exposes must be present and describe itself consistently.
+            List<string> expected = new List<string>
+            {
+                "Ollama", "OllamaCloud", "OpenAI", "OpenAICompatible", "AzureOpenAI", "XAI",
+                "Anthropic", "Gemini", "VertexAI", "Bedrock", "Cohere", "VoyageAI", "Tei"
+            };
+            if (!expected.SequenceEqual(ApiTypes.All))
+                throw new InvalidOperationException("Expected the API type catalog to list every supported provider in order.");
+
+            List<ApiTypeDescriptor> descriptors = ApiTypes.Describe();
+            if (descriptors.Count != expected.Count)
+                throw new InvalidOperationException("Expected Describe() to return one descriptor per API type.");
+            foreach (ApiTypeDescriptor descriptor in descriptors)
+            {
+                if (String.IsNullOrWhiteSpace(descriptor.Name) || String.IsNullOrWhiteSpace(descriptor.DisplayName))
+                    throw new InvalidOperationException("Expected every API type descriptor to carry a name and display name.");
+                if (String.IsNullOrWhiteSpace(descriptor.Description))
+                    throw new InvalidOperationException("Expected every API type descriptor to carry a description.");
+                if (descriptor.DefaultHealthIntervalMs <= 0 || descriptor.DefaultHealthTimeoutMs <= 0)
+                    throw new InvalidOperationException("Expected every API type descriptor to carry positive health timings.");
+                if (descriptor.SupportsToolCalls != !String.IsNullOrWhiteSpace(descriptor.DefaultToolCallingApiFormat))
+                    throw new InvalidOperationException("Expected tool support and a default tool format to agree for '" + descriptor.Name + "'.");
+                if (String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint) && !descriptor.RequiresProjectId && !descriptor.RequiresRegion)
+                    throw new InvalidOperationException("Expected a default endpoint or derived routing fields for '" + descriptor.Name + "'.");
+            }
+
+            // Names resolve case- and whitespace-insensitively, and canonicalize on the way out.
+            foreach ((string input, string canonical) in new[]
+            {
+                ("xai", "XAI"),
+                ("  XAI  ", "XAI"),
+                ("ollamacloud", "OllamaCloud"),
+                ("AZUREOPENAI", "AzureOpenAI"),
+                ("cohere", "Cohere"),
+                ("tei", "Tei")
+            })
+            {
+                if (!ApiTypes.TryNormalize(input, out string normalized) || !String.Equals(normalized, canonical, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + input + "' to normalize to '" + canonical + "'.");
+                if (!String.Equals(ApiTypes.Normalize(input), canonical, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected Normalize('" + input + "') to return '" + canonical + "'.");
+                if (ApiTypes.Describe(input).Name != canonical)
+                    throw new InvalidOperationException("Expected Describe('" + input + "') to resolve to '" + canonical + "'.");
+            }
+
+            // Negative cases: unrecognized values are preserved but flagged as unsupported, and
+            // Describe falls back to the Ollama descriptor so legacy configuration keeps rendering.
+            foreach (string unsupported in new[] { "NotAProvider", "", "   ", "GPT4All" })
+            {
+                if (ApiTypes.IsSupported(unsupported))
+                    throw new InvalidOperationException("Expected '" + unsupported + "' to be reported as unsupported.");
+                if (ApiTypes.TryDescribe(unsupported) != null)
+                    throw new InvalidOperationException("Expected TryDescribe('" + unsupported + "') to return null.");
+                if (ApiTypes.Describe(unsupported).Name != "Ollama")
+                    throw new InvalidOperationException("Expected Describe('" + unsupported + "') to fall back to Ollama.");
+            }
+
+            if (!String.Equals(ApiTypes.Normalize("  Custom-Provider  "), "Custom-Provider", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected unrecognized API types to be preserved verbatim apart from trimming.");
+
+            // Capability flags that matter to Wilson's product scope (chat, embeddings, model listing, tools).
+            if (ApiTypes.Describe("Anthropic").SupportsEmbeddings)
+                throw new InvalidOperationException("Expected Anthropic to advertise no embeddings.");
+            if (ApiTypes.Describe("VoyageAI").SupportsChatCompletions || !ApiTypes.Describe("VoyageAI").SupportsEmbeddings)
+                throw new InvalidOperationException("Expected VoyageAI to be embeddings-only.");
+            if (ApiTypes.Describe("Tei").SupportsToolCalls || ApiTypes.Describe("OllamaCloud").SupportsToolCalls)
+                throw new InvalidOperationException("Expected Text Embeddings Inference and Ollama Cloud to advertise no tool support.");
+            if (!ApiTypes.Describe("XAI").SupportsToolCalls || !ApiTypes.Describe("Bedrock").SupportsToolCalls)
+                throw new InvalidOperationException("Expected xAI and Bedrock to advertise native tool support.");
+            if (ApiTypes.Describe("XAI").DefaultToolCallingApiFormat != ToolCallingApiFormats.Native)
+                throw new InvalidOperationException("Expected xAI to default to the native PolyPrompt tool format.");
+
+            // Required credential fields drive dashboard validation and must match the client constructors.
+            if (!ApiTypes.Describe("AzureOpenAI").RequiresDeployment || !ApiTypes.Describe("AzureOpenAI").RequiresApiVersion)
+                throw new InvalidOperationException("Expected Azure OpenAI to require a deployment and API version.");
+            if (!ApiTypes.Describe("VertexAI").RequiresProjectId || !ApiTypes.Describe("VertexAI").RequiresRegion)
+                throw new InvalidOperationException("Expected Vertex AI to require a project and region.");
+            if (!ApiTypes.Describe("Bedrock").RequiresRegion || ApiTypes.Describe("Bedrock").RequiresApiKey)
+                throw new InvalidOperationException("Expected Bedrock to require a region but not an API key.");
+            if (!ApiTypes.Describe("XAI").RequiresApiKey || !ApiTypes.Describe("Anthropic").RequiresApiKey)
+                throw new InvalidOperationException("Expected hosted providers to require an API key.");
+
+            if (!ToolCallingApiFormats.All.Contains(ToolCallingApiFormats.OllamaChat)
+                || !ToolCallingApiFormats.All.Contains(ToolCallingApiFormats.OpenAIChatCompletions)
+                || !ToolCallingApiFormats.All.Contains(ToolCallingApiFormats.Native))
+                throw new InvalidOperationException("Expected all three tool-calling API formats to be cataloged.");
+        }
+
+        private static void ProviderDefaults()
+        {
+            // Provider defaults fill the endpoint, API version, and region before the health URL is
+            // derived, so an entry with only an apiType still produces a usable runner.
+            ModelRunnerSettings azure = new ModelRunnerSettings { ApiType = "azureopenai" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(azure);
+            if (!String.Equals(azure.ApiType, "AzureOpenAI", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected provider defaults to canonicalize the API type.");
+            if (!String.Equals(azure.Endpoint, "https://example.openai.azure.com", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an empty Azure OpenAI endpoint to get the catalog default.");
+            if (!String.Equals(azure.HealthCheckUrl, "https://example.openai.azure.com/openai/models", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the Azure OpenAI health URL to use the catalog path.");
+            if (!String.Equals(azure.ApiVersion, "2024-10-21", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI to default its API version.");
+
+            ModelRunnerSettings vertex = new ModelRunnerSettings { ApiType = "VertexAI", ProjectId = "proj" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(vertex);
+            if (!String.Equals(vertex.Region, "us-central1", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Vertex AI to default its region.");
+
+            ModelRunnerSettings bedrock = new ModelRunnerSettings { ApiType = "Bedrock" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(bedrock);
+            if (!String.Equals(bedrock.Region, "us-east-1", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Bedrock to default its region.");
+
+            ModelRunnerSettings cloud = new ModelRunnerSettings { ApiType = "OllamaCloud", ApiKey = "token" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(cloud);
+            if (!String.Equals(cloud.Endpoint, "https://ollama.com", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Ollama Cloud to default its endpoint.");
+            if (!String.Equals(cloud.HealthCheckUrl, "https://ollama.com/api/tags", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Ollama Cloud health checks to use /api/tags.");
+            if (!cloud.HealthCheckUseAuth)
+                throw new InvalidOperationException("Expected Ollama Cloud health checks to use auth when a token is configured.");
+            if (cloud.SupportsTools || !String.IsNullOrWhiteSpace(cloud.ToolCallingApiFormat))
+                throw new InvalidOperationException("Expected Ollama Cloud to have no tool support.");
+
+            ModelRunnerSettings tei = new ModelRunnerSettings { ApiType = "Tei", Endpoint = "http://localhost:8080" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(tei);
+            if (!String.Equals(tei.HealthCheckUrl, "http://localhost:8080/info", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Text Embeddings Inference health checks to use /info.");
+            if (tei.HealthCheckIntervalMs != 5000 || tei.HealthCheckTimeoutMs != 2000)
+                throw new InvalidOperationException("Expected Text Embeddings Inference local-server health timings.");
+
+            ModelRunnerSettings xai = new ModelRunnerSettings { ApiType = "XAI", ApiKey = "key", Endpoint = "https://api.x.ai" };
+            ModelRunnerSettings.ApplyToolDefaults(xai);
+            if (!xai.SupportsTools || !String.Equals(xai.ToolCallingApiFormat, ToolCallingApiFormats.Native, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected xAI to default to native PolyPrompt tool calling.");
+
+            ModelRunnerSettings voyage = new ModelRunnerSettings { ApiType = "VoyageAI", ApiKey = "key", Endpoint = "https://api.voyageai.com" };
+            ModelRunnerSettings.ApplyToolDefaults(voyage);
+            if (voyage.SupportsTools || !String.IsNullOrWhiteSpace(voyage.ToolCallingApiFormat))
+                throw new InvalidOperationException("Expected VoyageAI runners to be forced out of tool mode.");
+
+            // An explicitly configured value always wins over a provider default.
+            ModelRunnerSettings explicitRegion = new ModelRunnerSettings { ApiType = "Bedrock", Region = "eu-west-1" };
+            ModelRunnerSettings.ApplyProviderDefaults(explicitRegion);
+            if (!String.Equals(explicitRegion.Region, "eu-west-1", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an explicit region to survive provider defaults.");
+        }
+
+        private static void ProviderClientSelection()
+        {
+            // Each API type must resolve to its own PolyPrompt client family. Creating a client is
+            // offline, so this proves the wiring without any network round-trip.
+            MethodInfo createCompletion = typeof(InferenceService).GetMethod("CreateCompletionClient", BindingFlags.NonPublic | BindingFlags.Static)!;
+            MethodInfo createEmbedding = typeof(InferenceService).GetMethod("CreateEmbeddingClient", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+            (string ApiType, string Runner, Type Client)[] cases = new (string, string, Type)[]
+            {
+                ("Ollama", "ollama", typeof(PolyPrompt.Clients.OllamaCompletionClient)),
+                ("OllamaCloud", "cloud", typeof(PolyPrompt.Clients.OllamaCloudCompletionClient)),
+                ("OpenAI", "openai", typeof(PolyPrompt.Clients.OpenAiCompletionClient)),
+                ("OpenAICompatible", "compat", typeof(PolyPrompt.Clients.OpenAiCompletionClient)),
+                ("AzureOpenAI", "azure", typeof(PolyPrompt.Clients.AzureOpenAiCompletionClient)),
+                ("XAI", "xai", typeof(PolyPrompt.Clients.XAiCompletionClient)),
+                ("Anthropic", "anthropic", typeof(PolyPrompt.Clients.AnthropicCompletionClient)),
+                ("Gemini", "gemini", typeof(PolyPrompt.Clients.GeminiCompletionClient)),
+                ("VertexAI", "vertex", typeof(PolyPrompt.Clients.VertexAiCompletionClient)),
+                ("Bedrock", "bedrock", typeof(PolyPrompt.Clients.BedrockCompletionClient)),
+                ("Cohere", "cohere", typeof(PolyPrompt.Clients.CohereCompletionClient))
+            };
+
+            foreach ((string apiType, string runnerId, Type clientType) in cases)
+            {
+                ModelRunnerSettings runner = CreateProviderRunner(apiType, runnerId);
+                object client = createCompletion.Invoke(null, new object[] { runner })!;
+                if (client.GetType() != clientType)
+                    throw new InvalidOperationException("Expected API type '" + apiType + "' to use " + clientType.Name + ", got " + client.GetType().Name + ".");
+                ((IDisposable)client).Dispose();
+            }
+
+            // An unrecognized API type keeps the legacy Ollama client so existing configuration still chats.
+            object legacy = createCompletion.Invoke(null, new object[] { new ModelRunnerSettings { ApiType = "Custom", Endpoint = "http://localhost:8080" } })!;
+            if (legacy.GetType() != typeof(PolyPrompt.Clients.OllamaCompletionClient))
+                throw new InvalidOperationException("Expected an unrecognized API type to fall back to the Ollama client.");
+            ((IDisposable)legacy).Dispose();
+
+            // Embedding factories cover every provider that advertises embeddings and reject nothing
+            // that advertises support.
+            (string ApiType, string Runner, Type Client)[] embeddingCases = new (string, string, Type)[]
+            {
+                ("Ollama", "ollama", typeof(PolyPrompt.Clients.OllamaEmbeddingClient)),
+                ("OllamaCloud", "cloud", typeof(PolyPrompt.Clients.OllamaCloudEmbeddingClient)),
+                ("OpenAI", "openai", typeof(PolyPrompt.Clients.OpenAiEmbeddingClient)),
+                ("AzureOpenAI", "azure", typeof(PolyPrompt.Clients.AzureOpenAiEmbeddingClient)),
+                ("XAI", "xai", typeof(PolyPrompt.Clients.XAiEmbeddingClient)),
+                ("Gemini", "gemini", typeof(PolyPrompt.Clients.GeminiEmbeddingClient)),
+                ("Bedrock", "bedrock", typeof(PolyPrompt.Clients.BedrockEmbeddingClient)),
+                ("Cohere", "cohere", typeof(PolyPrompt.Clients.CohereEmbeddingClient)),
+                ("VoyageAI", "voyage", typeof(PolyPrompt.Clients.VoyageAiEmbeddingClient)),
+                ("Tei", "tei", typeof(PolyPrompt.Clients.TeiEmbeddingClient))
+            };
+
+            foreach ((string apiType, string runnerId, Type clientType) in embeddingCases)
+            {
+                ModelRunnerSettings runner = CreateProviderRunner(apiType, runnerId);
+                object client = createEmbedding.Invoke(null, new object[] { runner })!;
+                if (client.GetType() != clientType)
+                    throw new InvalidOperationException("Expected API type '" + apiType + "' to use " + clientType.Name + " for embeddings, got " + client.GetType().Name + ".");
+                ((IDisposable)client).Dispose();
+            }
+
+            // Negative cases: a hosted provider without its required credential fails loudly instead
+            // of silently building a client that cannot authenticate.
+            AssertClientFailure(createCompletion, new ModelRunnerSettings { ApiType = "XAI", Endpoint = "https://api.x.ai" }, "API key");
+            AssertClientFailure(createCompletion, new ModelRunnerSettings { ApiType = "Anthropic", Endpoint = "https://api.anthropic.com" }, "API key");
+            AssertClientFailure(createCompletion, new ModelRunnerSettings { ApiType = "AzureOpenAI", Endpoint = "https://example.openai.azure.com", ApiKey = "key" }, "deployment");
+            AssertClientFailure(createCompletion, new ModelRunnerSettings { ApiType = "VertexAI", ApiKey = "token" }, "project");
+        }
+
+        private static void AssertClientFailure(MethodInfo factory, ModelRunnerSettings runner, string expectedFragment)
+        {
+            try
+            {
+                object? client = factory.Invoke(null, new object[] { runner });
+                (client as IDisposable)?.Dispose();
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException inner)
+            {
+                if (inner.Message.IndexOf(expectedFragment, StringComparison.OrdinalIgnoreCase) < 0)
+                    throw new InvalidOperationException("Expected a failure mentioning '" + expectedFragment + "', got: " + inner.Message);
+                return;
+            }
+
+            throw new InvalidOperationException("Expected API type '" + runner.ApiType + "' without required credentials to fail client creation.");
+        }
+
+        private static ModelRunnerSettings CreateProviderRunner(string apiType, string runnerId)
+        {
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(apiType);
+            return new ModelRunnerSettings
+            {
+                Id = runnerId,
+                Name = runnerId,
+                ApiType = apiType,
+                Endpoint = String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint) ? "http://localhost:1" : descriptor.DefaultEndpoint,
+                ApiKey = descriptor.RequiresApiKey ? "test-key" : null,
+                ApiSecretKey = String.Equals(descriptor.Name, "Bedrock", StringComparison.Ordinal) ? "test-secret" : null,
+                Deployment = descriptor.RequiresDeployment ? "test-deployment" : null,
+                ApiVersion = descriptor.RequiresApiVersion ? descriptor.DefaultApiVersion : null,
+                Region = descriptor.RequiresRegion ? descriptor.DefaultRegion : null,
+                ProjectId = descriptor.RequiresProjectId ? "test-project" : null
+            };
         }
 
         private static void ToolCapableInferenceParsing()

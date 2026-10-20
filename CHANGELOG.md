@@ -6,9 +6,41 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 
 ### Dependencies
 
-- Updated PolyPrompt from 2.6.0 to 3.1.0. Inference now uses the 3.x per-capability clients: `OllamaCompletionClient`/`OpenAiCompletionClient` for chat and tool chat, and `OllamaModelClient`/`OpenAiModelClient` for model listing. Chat options moved to `CompletionOptions`/`OllamaCompletionOptions`. Tool-chat model, temperature, top-p, and max tokens now go in `ToolChatRequest.Options`.
+- Updated PolyPrompt from 2.6.0 to 3.1.0, then to 3.4.0. Inference now uses the 3.x per-capability clients: `OllamaCompletionClient`/`OpenAiCompletionClient` for chat and tool chat, and `OllamaModelClient`/`OpenAiModelClient` for model listing. Chat options moved to `CompletionOptions`/`OllamaCompletionOptions`. Tool-chat model, temperature, top-p, and max tokens now go in `ToolChatRequest.Options`.
 - Updated Voltaic from 2.0.0 to 2.2.1, Watson from 7.2.0 to 7.2.2, Touchstone (Core, Cli, XunitAdapter, NunitAdapter) from 0.1.12 to 0.2.0, and NUnit from 4.6.1 to 5.0.0.
 - Bumped the server, dashboard, SDK, and OpenAPI document versions to `0.1.1`.
+
+### Providers and endpoint types
+
+- PolyPrompt 3.2.0 through 3.4.0 added endpoint types and providers beyond the original Ollama/OpenAI pair. Wilson now integrates all of them through a provider catalog (`Wilson.Core.Settings.ApiTypes`): Ollama, Ollama Cloud, OpenAI, OpenAI-compatible, Azure OpenAI, xAI Grok, Anthropic, Google Gemini, Google Vertex AI, AWS Bedrock, Cohere, VoyageAI, and Hugging Face Text Embeddings Inference.
+- Added `ApiTypes`, `ToolCallingApiFormats`, and `ApiTypeDescriptor`. Descriptors carry default endpoints, default health paths and timings, per-provider default regions, capability flags for chat, embeddings, model listing, streaming, and tools, the default tool-calling format, and required credential fields.
+- `InferenceService` now creates a per-provider PolyPrompt client for chat, embeddings, and model listing instead of switching between just Ollama and OpenAI. Credentials are provider-specific: static bearer token for Vertex AI, static AWS credentials or the AWS environment chain for Bedrock, required keys for hosted providers.
+- Provider-specific completion options are built per API type: `OllamaCompletionOptions` for Ollama and Ollama Cloud, `OpenAiCompletionOptions` for OpenAI/OpenAI-compatible/Azure OpenAI, `XAiCompletionOptions`, `AnthropicCompletionOptions`, `GeminiCompletionOptions` for Gemini and Vertex AI, and `CohereCompletionOptions`.
+- Added a `PolyPromptNative` tool-calling format that dispatches through the provider-native PolyPrompt tool-chat clients, which unlocks tool calls on xAI, Anthropic, Gemini, Cohere, and Bedrock.
+- `ValidateRunnerAsync` embedding checks now use the PolyPrompt embedding clients instead of hand-built provider HTTP calls, so embeddings work across every provider that supports them.
+
+### Configuration
+
+- `ModelRunnerSettings` gained `Deployment`, `ApiVersion`, `Region`, `ProjectId`, `ApiSecretKey`, and `AwsSessionToken`. `ApplyProviderDefaults` fills the provider endpoint, API version, and region defaults, and `ApplyHealthCheckDefaults`/`ApplyToolDefaults` are now descriptor-driven.
+- Added `POST`-safe normalization (`WilsonServer.NormalizeModelRunner`) that trims provider fields and canonicalizes `apiType` casing so configuration never breaks on casing or whitespace.
+- An unrecognized `apiType` keeps the legacy Ollama-family clients so existing configuration still chats. Cataloged providers that genuinely lack a capability fail explicitly instead of silently degrading.
+
+### API
+
+- Added `GET /v1.0/api/model-runners/api-types`, returning the provider catalog. It is documented in the OpenAPI document and Swagger UI, and `ApiTypeDescriptor` is a component schema.
+- `ModelRunnerStatus` now reports `apiTypeDisplayName`, `apiTypeSupported`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `deployment`, `apiVersion`, `region`, and `projectId`.
+
+### Dashboard
+
+- Added `dashboard/src/utils/apiTypes.js`, a provider catalog mirroring the server's, with `describeApiType`, `normalizeApiType`, `isSupportedApiType`, `defaultHealthSettings`, `defaultToolSettings`, and `validateRunnerDraft`.
+- Both model runner editors list all thirteen API types and render provider-specific fields (deployment, API version, project ID, region) only when the selected provider needs them. Save is blocked with a specific message when a required credential field is missing.
+- The model server card shows the provider display name, provider fields, and capability summary, and warns when `apiTypeSupported` is false.
+
+### SDKs, documentation, Postman
+
+- Added `ApiTypeDescriptor` and the new `ModelRunnerStatus` fields to the C# SDK, plus `GetModelRunnerApiTypesAsync`. Added `modelRunnerApiTypes()` to the JavaScript SDK and `model_runner_api_types()` to the Python SDK.
+- Documented the provider catalog, `apiType` table, provider-specific configuration fields, and the `PolyPromptNative` tool format in `README.md`, `REST_API.md`, and `DOCKERHUB_README.md`.
+- Added the API type catalog request to the Postman collection.
 
 ### Fixes
 
@@ -21,6 +53,8 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 ### Tests
 
 - Added a `PolyPrompt option mapping` test that covers tool-chat `Options` mapping, defaulting to client settings, and Ollama versus OpenAI completion option types.
+- Added provider catalog tests covering canonicalization, case and whitespace tolerance, unrecognized-API-type fallback, per-provider health and tool defaults, provider-specific completion option types, credential validation for each hosted provider, and explicit capability failures.
+- Added dashboard tests for the provider catalog: coverage of all thirteen API types, case-insensitive resolution, Ollama fallback, per-provider health and tool defaults, and positive/negative runner draft validation.
 
 ## v0.1.0
 

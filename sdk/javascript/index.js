@@ -53,6 +53,12 @@ export class WilsonClient {
     return this.request('GET', '/v1.0/api/model-runners/health');
   }
 
+  // Supported provider API types with their capabilities, default endpoints,
+  // health paths, and required credential fields.
+  modelRunnerApiTypes() {
+    return this.request('GET', '/v1.0/api/model-runners/api-types');
+  }
+
   modelRunnerHealthById(runnerId) {
     return this.request('GET', `/v1.0/api/model-runners/${encodeURIComponent(runnerId)}/health`);
   }

@@ -267,19 +267,50 @@ namespace Wilson.Core.Settings
         public string Name { get; set; } = String.Empty;
 
         /// <summary>
-        /// API type, Ollama or OpenAI.
+        /// API type. One of the values in <see cref="ApiTypes.All"/>.
         /// </summary>
-        public string ApiType { get; set; } = "Ollama";
+        public string ApiType { get; set; } = ApiTypes.Ollama;
 
         /// <summary>
-        /// Endpoint URL.
+        /// Endpoint URL. Empty means "use the API type default" from the provider catalog.
         /// </summary>
-        public string Endpoint { get; set; } = "http://localhost:11434";
+        public string Endpoint { get; set; } = String.Empty;
 
         /// <summary>
-        /// Optional API key.
+        /// Optional API key or bearer token.
         /// </summary>
         public string? ApiKey { get; set; } = null;
+
+        /// <summary>
+        /// Deployment name for Azure OpenAI.
+        /// </summary>
+        public string? Deployment { get; set; } = null;
+
+        /// <summary>
+        /// API version for Azure OpenAI.
+        /// </summary>
+        public string? ApiVersion { get; set; } = null;
+
+        /// <summary>
+        /// Cloud region for Vertex AI and AWS Bedrock.
+        /// </summary>
+        public string? Region { get; set; } = null;
+
+        /// <summary>
+        /// Google Cloud project identifier for Vertex AI.
+        /// </summary>
+        public string? ProjectId { get; set; } = null;
+
+        /// <summary>
+        /// AWS secret access key for Bedrock when static credentials are used. The
+        /// <see cref="ApiKey"/> property carries the AWS access key identifier.
+        /// </summary>
+        public string? ApiSecretKey { get; set; } = null;
+
+        /// <summary>
+        /// Optional AWS session token for temporary Bedrock credentials.
+        /// </summary>
+        public string? AwsSessionToken { get; set; } = null;
 
         /// <summary>
         /// Optional known model list.
@@ -374,20 +405,28 @@ namespace Wilson.Core.Settings
         {
             if (runner == null) throw new ArgumentNullException(nameof(runner));
 
+            ApiTypeDescriptor descriptor;
+
+            // Provider defaults first so an empty endpoint is filled in before the health URL is derived.
+            ApplyProviderDefaults(runner);
+            descriptor = ApiTypes.Describe(runner.ApiType);
+
             if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl))
             {
                 string baseUrl = (runner.Endpoint ?? String.Empty).TrimEnd('/');
-                runner.HealthCheckUrl = IsOllama(runner) ? baseUrl + "/api/tags" : baseUrl + "/v1/models";
+                runner.HealthCheckUrl = String.IsNullOrWhiteSpace(descriptor.DefaultHealthPath)
+                    ? baseUrl
+                    : baseUrl + descriptor.DefaultHealthPath;
             }
 
             if (runner.HealthCheckIntervalMs <= 0)
             {
-                runner.HealthCheckIntervalMs = IsOllama(runner) ? 5000 : 15000;
+                runner.HealthCheckIntervalMs = descriptor.DefaultHealthIntervalMs;
             }
 
             if (runner.HealthCheckTimeoutMs <= 0)
             {
-                runner.HealthCheckTimeoutMs = IsOllama(runner) ? 2000 : 5000;
+                runner.HealthCheckTimeoutMs = descriptor.DefaultHealthTimeoutMs;
             }
 
             if (runner.HealthCheckExpectedStatusCode < 100 || runner.HealthCheckExpectedStatusCode > 599)
@@ -398,12 +437,40 @@ namespace Wilson.Core.Settings
             if (runner.HealthyThreshold <= 0) runner.HealthyThreshold = 2;
             if (runner.UnhealthyThreshold <= 0) runner.UnhealthyThreshold = 2;
 
-            if (!IsOllama(runner) && !String.IsNullOrWhiteSpace(runner.ApiKey))
+            if (descriptor.RequiresApiKey && !String.IsNullOrWhiteSpace(runner.ApiKey))
             {
                 runner.HealthCheckUseAuth = true;
             }
 
             ApplyToolDefaults(runner);
+        }
+
+        /// <summary>
+        /// Apply provider-specific endpoint and credential defaults for the configured API type.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        public static void ApplyProviderDefaults(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
+
+            if (String.IsNullOrWhiteSpace(runner.Endpoint) && !String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint))
+            {
+                runner.Endpoint = descriptor.DefaultEndpoint;
+            }
+
+            if (descriptor.RequiresApiVersion && String.IsNullOrWhiteSpace(runner.ApiVersion))
+            {
+                runner.ApiVersion = descriptor.DefaultApiVersion;
+            }
+
+            if (descriptor.RequiresRegion && String.IsNullOrWhiteSpace(runner.Region))
+            {
+                runner.Region = descriptor.DefaultRegion;
+            }
+
+            runner.ApiType = ApiTypes.Normalize(runner.ApiType);
         }
 
         /// <summary>
@@ -414,30 +481,33 @@ namespace Wilson.Core.Settings
         {
             if (runner == null) throw new ArgumentNullException(nameof(runner));
 
-            string apiType = runner.ApiType ?? String.Empty;
-            bool ollama = IsOllama(runner);
-            bool openAiLike = String.Equals(apiType, "OpenAI", StringComparison.OrdinalIgnoreCase)
-                || String.Equals(apiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
+            // An unrecognized API type is treated as a legacy configuration. It keeps chatting through
+            // the Ollama-family clients but never advertises tool support, because Wilson cannot know
+            // what tool wire format the endpoint speaks.
+            if (!ApiTypes.IsSupported(runner.ApiType))
+            {
+                runner.ToolCallingApiFormat = String.Empty;
+                runner.ChatCompletionsPath = String.Empty;
+                runner.SupportsTools = false;
+                return;
+            }
+
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
 
             if (String.IsNullOrWhiteSpace(runner.ToolCallingApiFormat))
             {
-                runner.ToolCallingApiFormat = ollama ? "OllamaChat" : openAiLike ? "OpenAIChatCompletions" : String.Empty;
+                runner.ToolCallingApiFormat = descriptor.DefaultToolCallingApiFormat;
             }
 
-            if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && openAiLike)
+            if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && !String.IsNullOrWhiteSpace(descriptor.DefaultChatCompletionsPath))
             {
-                runner.ChatCompletionsPath = "/v1/chat/completions";
+                runner.ChatCompletionsPath = descriptor.DefaultChatCompletionsPath;
             }
 
-            if (!openAiLike && !ollama)
+            if (!descriptor.SupportsToolCalls)
             {
                 runner.SupportsTools = false;
             }
-        }
-
-        private static bool IsOllama(ModelRunnerSettings runner)
-        {
-            return String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase);
         }
     }
 
