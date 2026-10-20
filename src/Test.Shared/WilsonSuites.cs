@@ -4127,6 +4127,21 @@ namespace Test.Shared
                     throw new InvalidOperationException("Expected '" + apiType + "' to preserve an explicitly configured absolute health URL.");
                 if (explicitUrl.HealthCheckEnabled)
                     throw new InvalidOperationException("Expected '" + apiType + "' to preserve a user-disabled health check.");
+
+                // An ENABLED custom absolute HTTP(S) URL must also survive normalization for providers
+                // with no default probe route (AWS Bedrock, Vertex AI, VoyageAI). Deriving enablement
+                // from the provider defaults instead of the retained URL silently disabled monitoring
+                // the operator had explicitly turned on.
+                ModelRunnerSettings explicitEnabledUrl = CreateHealthProbeRunner(apiType, "127.0.0.1", 1, "valid-key");
+                explicitEnabledUrl.HealthCheckUrl = "https://proxy.example/health";
+                explicitEnabledUrl.HealthCheckEnabled = true;
+                ModelRunnerSettings.ApplyHealthCheckDefaults(explicitEnabledUrl);
+                if (!String.Equals(explicitEnabledUrl.HealthCheckUrl, "https://proxy.example/health", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + apiType + "' to keep an enabled custom absolute health URL.");
+                if (!explicitEnabledUrl.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to keep an explicitly enabled custom absolute health URL enabled.");
+                if (ModelRunnerSettings.DescribeHealthCheckUrlProblem(explicitEnabledUrl) != null)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to report no health URL problem for an enabled custom absolute health URL.");
             }
 
             // Provider-specific protocol requirements the health probe has to honour.

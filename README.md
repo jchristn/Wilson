@@ -184,7 +184,7 @@ Wilson 3.4.0 of PolyPrompt adds endpoint types and providers beyond the original
 
 `GET /v1.0/api/model-runners/api-types` returns the same catalog at runtime, including default endpoints, default health paths, default health timings, capability flags, default tool-calling format, required credential fields, whether the provider supports a health probe at all, and the health-probe authentication scheme and protocol version the provider expects. The dashboard builds its API type picker from that catalog.
 
-Changing `apiType` in either dashboard model server editor re-derives the new provider's endpoint, health URL and timings, tool format, and capability flags, so selecting a provider from a fresh Ollama draft always yields a usable configuration. Values that still equal the previous provider's defaults are replaced; a custom endpoint, a custom health URL or timing, and any control the operator disabled are preserved.
+Changing `apiType` in either dashboard model server editor re-derives the new provider's endpoint, health URL and timings, tool format, and capability flags, so selecting a provider from a fresh Ollama draft always yields a usable configuration. Values that still equal the previous provider's defaults are replaced; a custom endpoint, a custom health URL or timing, and any control the operator disabled are preserved. An enabled health check stays enabled when a custom absolute HTTP(S) health URL is retained, including on providers that have no default probe route (Google Vertex AI, AWS Bedrock, VoyageAI); it is only turned off when the retained URL cannot resolve to an absolute HTTP(S) URL.
 
 Provider-specific fields beyond `apiType`, `endpoint`, and `apiKey`:
 

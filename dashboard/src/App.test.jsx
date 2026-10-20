@@ -362,6 +362,39 @@ describe('applyApiTypeDefaults', () => {
     expect(next.supportsStreamingToolCalls).toBe(false);
   });
 
+  it('keeps an enabled custom absolute health URL when switching to a provider without a probe route', () => {
+    // Regression: VoyageAI, VertexAI, and Bedrock have no default probe route, so deriving enablement
+    // from the destination provider's defaults disabled a custom absolute URL the operator had
+    // explicitly enabled and left in place. Enablement must follow the retained URL instead.
+    ['VoyageAI', 'VertexAI', 'Bedrock'].forEach(name => {
+      const custom = {
+        ...freshOllamaDraft(),
+        healthCheckUrl: 'https://proxy.example/health',
+        healthCheckEnabled: true
+      };
+
+      const next = applyApiTypeDefaults(custom, name);
+      expect(next.apiType, `${name} apiType`).toBe(name);
+      expect(next.healthCheckUrl, `${name} health URL`).toBe('https://proxy.example/health');
+      expect(next.healthCheckEnabled, `${name} enabled`).toBe(true);
+      expect(resolveHealthCheckUrl(name, next.endpoint, next.healthCheckUrl), `${name} resolves`).toBe('https://proxy.example/health');
+    });
+  });
+
+  it('disables an enabled check only when the retained URL cannot resolve', () => {
+    // No custom URL and a destination with no probe route: nothing resolves, so checks come back off.
+    ['VoyageAI', 'VertexAI', 'Bedrock'].forEach(name => {
+      const next = applyApiTypeDefaults(freshOllamaDraft(), name);
+      expect(next.healthCheckUrl, `${name} health URL`).toBe('');
+      expect(next.healthCheckEnabled, `${name} enabled`).toBe(false);
+    });
+
+    // An explicitly disabled check stays disabled even with a usable custom URL.
+    const disabled = applyApiTypeDefaults({ ...freshOllamaDraft(), healthCheckUrl: 'https://proxy.example/health', healthCheckEnabled: false }, 'VoyageAI');
+    expect(disabled.healthCheckUrl).toBe('https://proxy.example/health');
+    expect(disabled.healthCheckEnabled).toBe(false);
+  });
+
   it('round-trips back to the original provider defaults', () => {
     const openAi = applyApiTypeDefaults(freshOllamaDraft(), 'OpenAI');
     expect(openAi.endpoint).toBe('https://api.openai.com');

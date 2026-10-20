@@ -534,13 +534,19 @@ export function applyApiTypeDefaults(runner, nextApiType) {
   // Health defaults are derived from the endpoint and API version the draft now carries.
   const nextHealth = defaultHealthSettings(nextType, draft.endpoint, runner.apiKey);
 
-  // Health settings: replace anything still equal to the previous provider's default. An explicit
-  // "disabled" toggle is preserved, and providers with no probe route come back disabled.
-  if (runner.healthCheckEnabled !== false) {
-    draft.healthCheckEnabled = nextHealth.healthCheckEnabled;
-  }
+  // Health URL first: a custom value the user typed is retained, otherwise the new provider's
+  // default replaces anything still equal to the previous provider's default.
   if (!String(runner.healthCheckUrl || '').trim() || stillDefault(runner.healthCheckUrl, previousHealth.healthCheckUrl)) {
     draft.healthCheckUrl = nextHealth.healthCheckUrl;
+  }
+
+  // Enablement is derived from the URL the draft actually retains, not from the new provider's
+  // default. An explicit "disabled" toggle is always preserved; an enabled check stays enabled when
+  // the retained URL still resolves (for example a custom absolute URL on a provider with no default
+  // probe route such as VoyageAI, VertexAI, or Bedrock) and is only turned off when nothing usable
+  // resolves, so the server is never asked to probe an empty or relative URL.
+  if (runner.healthCheckEnabled !== false) {
+    draft.healthCheckEnabled = Boolean(resolveHealthCheckUrl(nextType, draft.endpoint, draft.healthCheckUrl));
   }
   if (stillDefault(runner.healthCheckMethod || 'GET', previousHealth.healthCheckMethod)) draft.healthCheckMethod = nextHealth.healthCheckMethod;
   if (stillDefault(runner.healthCheckIntervalMs, previousHealth.healthCheckIntervalMs)) draft.healthCheckIntervalMs = nextHealth.healthCheckIntervalMs;
