@@ -5,6 +5,8 @@ namespace Wilson.Core.Services
     using System.Collections.Generic;
     using System.Linq;
     using System.Net.Http;
+    using System.Security.Cryptography;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using Radiant;
@@ -109,6 +111,7 @@ namespace Wilson.Core.Services
                 foreach (ModelRunnerSettings runner in settings.ModelRunners ?? new List<ModelRunnerSettings>())
                 {
                     if (String.IsNullOrWhiteSpace(runner.Id)) continue;
+                    string? configuredHealthUrl = runner.HealthCheckUrl;
                     ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
 
                     configuredRunnerIds.Add(runner.Id);
@@ -126,6 +129,17 @@ namespace Wilson.Core.Services
                     else
                     {
                         MarkDisabledRunnerAvailable(state, now);
+                        // When checks are off because the provider has no probe route or the URL
+                        // cannot be resolved, surface the reason so the operator can fix it instead
+                        // of seeing a silently disabled toggle.
+                        if (ApiTypes.Describe(runner.ApiType).SupportsHealthChecks || !String.IsNullOrWhiteSpace(configuredHealthUrl))
+                        {
+                            lock (state.Lock)
+                            {
+                                state.LastError = ModelRunnerSettings.DescribeHealthCheckUrlProblem(runner);
+                            }
+                        }
+
                         _NextChecksUtc.Remove(runner.Id);
                     }
                 }
@@ -225,7 +239,7 @@ namespace Wilson.Core.Services
 
         private async Task CheckDueRunnersAsync(List<ModelRunnerSettings> runners, CancellationToken token)
         {
-            foreach (IGrouping<string, ModelRunnerSettings> group in runners.GroupBy(BuildMonitorKey, StringComparer.OrdinalIgnoreCase))
+            foreach (IGrouping<string, ModelRunnerSettings> group in runners.GroupBy(BuildMonitorKey, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
                 List<ModelRunnerSettings> subscriptions = group.ToList();
@@ -260,14 +274,23 @@ namespace Wilson.Core.Services
 
         private async Task<HealthCheckResult> PerformCheckInnerAsync(ModelRunnerSettings runner, CancellationToken token)
         {
-            string url = ResolveHealthCheckUrl(runner);
+            // Resolve the probe URL and refuse to send anything when Wilson cannot build an absolute
+            // HTTP(S) URL. A relative or empty URL would either throw inside HttpClient or, worse,
+            // hit an unintended host, so the failure is reported before the request is created.
+            string url = ModelRunnerSettings.BuildHealthCheckRequestUrl(runner);
+            if (String.IsNullOrWhiteSpace(url))
+            {
+                return new HealthCheckResult
+                {
+                    Success = false,
+                    ErrorMessage = ModelRunnerSettings.DescribeHealthCheckUrlProblem(runner) ?? "health check URL could not be resolved; no probe was sent"
+                };
+            }
+
             HttpMethod method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? HttpMethod.Head : HttpMethod.Get;
 
             using HttpRequestMessage request = new HttpRequestMessage(method, url);
-            if (runner.HealthCheckUseAuth && !String.IsNullOrWhiteSpace(runner.ApiKey))
-            {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", runner.ApiKey);
-            }
+            ApplyHealthCheckAuthentication(request, runner);
 
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(Math.Max(1, runner.HealthCheckTimeoutMs));
@@ -290,6 +313,50 @@ namespace Wilson.Core.Services
             catch (Exception ex)
             {
                 return new HealthCheckResult { Success = false, ErrorMessage = ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// Attach the provider's own authentication contract to a health probe. Every provider Wilson
+        /// catalogs authenticates differently, so a blanket bearer token makes healthy hosted endpoints
+        /// answer 401: Anthropic uses x-api-key plus anthropic-version, Gemini uses x-goog-api-key, and
+        /// Azure OpenAI uses api-key with the api-version query parameter. Credentials are only sent
+        /// when the runner asks for it and a key is configured.
+        /// </summary>
+        private static void ApplyHealthCheckAuthentication(HttpRequestMessage request, ModelRunnerSettings runner)
+        {
+            if (!runner.HealthCheckUseAuth) return;
+
+            string apiKey = (runner.ApiKey ?? String.Empty).Trim();
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
+            string scheme = ResolveHealthCheckAuthScheme(runner);
+
+            if (String.Equals(scheme, HealthCheckAuthSchemes.None, StringComparison.Ordinal)) return;
+            if (String.IsNullOrWhiteSpace(apiKey)) return;
+
+            switch (scheme)
+            {
+                case HealthCheckAuthSchemes.AnthropicApiKey:
+                    request.Headers.Remove("x-api-key");
+                    request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+                    string version = String.IsNullOrWhiteSpace(descriptor.DefaultHealthCheckVersion) ? "2023-06-01" : descriptor.DefaultHealthCheckVersion;
+                    request.Headers.Remove("anthropic-version");
+                    request.Headers.TryAddWithoutValidation("anthropic-version", version);
+                    break;
+
+                case HealthCheckAuthSchemes.GoogleApiKey:
+                    request.Headers.Remove("x-goog-api-key");
+                    request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
+                    break;
+
+                case HealthCheckAuthSchemes.AzureApiKey:
+                    request.Headers.Remove("api-key");
+                    request.Headers.TryAddWithoutValidation("api-key", apiKey);
+                    break;
+
+                default:
+                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+                    break;
             }
         }
 
@@ -442,38 +509,48 @@ namespace Wilson.Core.Services
             return copy;
         }
 
+        private static string ResolveHealthCheckAuthScheme(ModelRunnerSettings runner)
+        {
+            string scheme = ApiTypes.Describe(runner.ApiType).DefaultHealthCheckAuthScheme;
+            return String.IsNullOrWhiteSpace(scheme) ? HealthCheckAuthSchemes.Bearer : scheme;
+        }
+
         private static string BuildMonitorKey(ModelRunnerSettings runner)
         {
             string method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? "HEAD" : "GET";
-            string auth = runner.HealthCheckUseAuth ? "auth:" + (runner.ApiType ?? String.Empty).ToLowerInvariant() : "anon";
-            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + auth + "|" + NormalizeUrl(ResolveHealthCheckUrl(runner));
-        }
-
-        private static string ResolveHealthCheckUrl(ModelRunnerSettings runner)
-        {
-            string configured = (runner.HealthCheckUrl ?? String.Empty).Trim();
-            if (Uri.TryCreate(configured, UriKind.Absolute, out _)) return configured;
-            if (String.IsNullOrWhiteSpace(configured))
+            string apiKey = (runner.ApiKey ?? String.Empty).Trim();
+            string scheme = ResolveHealthCheckAuthScheme(runner);
+            string auth = "anon";
+            if (runner.HealthCheckUseAuth && apiKey.Length > 0 && !String.Equals(scheme, HealthCheckAuthSchemes.None, StringComparison.Ordinal))
             {
-                ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
-                configured = runner.HealthCheckUrl ?? String.Empty;
+                // Match the credential actually sent, without retaining raw secrets in monitor keys.
+                auth = scheme + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
+                if (String.Equals(scheme, HealthCheckAuthSchemes.AnthropicApiKey, StringComparison.Ordinal))
+                {
+                    string version = ApiTypes.Describe(runner.ApiType).DefaultHealthCheckVersion;
+                    auth += ":" + (String.IsNullOrWhiteSpace(version) ? "2023-06-01" : version);
+                }
             }
 
-            if (configured.StartsWith("/", StringComparison.Ordinal)) return (runner.Endpoint ?? String.Empty).TrimEnd('/') + configured;
-            return (runner.Endpoint ?? String.Empty).TrimEnd('/') + "/" + configured.TrimStart('/');
+            // Timeouts and expected status affect the verdict even when the wire request is identical.
+            // The final URL includes provider queries such as Azure's api-version.
+            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + Math.Max(1, runner.HealthCheckTimeoutMs)
+                + "|" + auth + "|" + NormalizeUrl(ModelRunnerSettings.BuildHealthCheckRequestUrl(runner));
         }
 
         private static string NormalizeUrl(string url)
         {
-            string trimmed = (url ?? String.Empty).Trim().TrimEnd('/');
+            string trimmed = (url ?? String.Empty).Trim();
             if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri))
             {
                 UriBuilder builder = new UriBuilder(uri);
+                builder.Scheme = builder.Scheme.ToLowerInvariant();
                 builder.Host = builder.Host.ToLowerInvariant();
-                return builder.Uri.ToString().TrimEnd('/');
+                // AbsoluteUri retains escaping and significant path/query case and trailing slashes.
+                return builder.Uri.AbsoluteUri;
             }
 
-            return trimmed.ToLowerInvariant();
+            return trimmed;
         }
 
         private void ThrowIfDisposed()

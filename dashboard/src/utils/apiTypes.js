@@ -11,6 +11,15 @@ export const TOOL_CALLING_API_FORMATS = {
   native: 'PolyPromptNative'
 };
 
+// Health probe authentication schemes, mirroring Wilson.Core.Settings.HealthCheckAuthSchemes.
+export const HEALTH_CHECK_AUTH_SCHEMES = {
+  bearer: 'Bearer',
+  anthropicApiKey: 'AnthropicApiKey',
+  googleApiKey: 'GoogleApiKey',
+  azureApiKey: 'AzureApiKey',
+  none: 'None'
+};
+
 export const API_TYPES = [
   {
     name: 'Ollama',
@@ -18,6 +27,10 @@ export const API_TYPES = [
     description: 'Local Ollama server using the native Ollama API.',
     defaultEndpoint: 'http://localhost:11434',
     defaultHealthPath: '/api/tags',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 5000,
     healthTimeoutMs: 2000,
     supportsChatCompletions: true,
@@ -40,6 +53,10 @@ export const API_TYPES = [
     description: 'Ollama Cloud hosted models using the native Ollama API.',
     defaultEndpoint: 'https://ollama.com',
     defaultHealthPath: '/api/tags',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -62,6 +79,10 @@ export const API_TYPES = [
     description: 'OpenAI public API using chat completions.',
     defaultEndpoint: 'https://api.openai.com',
     defaultHealthPath: '/v1/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -84,6 +105,10 @@ export const API_TYPES = [
     description: 'Any server that implements the OpenAI chat-completions contract.',
     defaultEndpoint: 'http://localhost:8000',
     defaultHealthPath: '/v1/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -106,6 +131,10 @@ export const API_TYPES = [
     description: 'Azure OpenAI deployments. Requires a deployment name and API version.',
     defaultEndpoint: 'https://example.openai.azure.com',
     defaultHealthPath: '/openai/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.azureApiKey,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: true,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -130,6 +159,10 @@ export const API_TYPES = [
     description: 'xAI Grok using the native Responses API, including hosted tools.',
     defaultEndpoint: 'https://api.x.ai',
     defaultHealthPath: '/v1/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -152,6 +185,10 @@ export const API_TYPES = [
     description: 'Anthropic Claude Messages API.',
     defaultEndpoint: 'https://api.anthropic.com',
     defaultHealthPath: '/v1/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.anthropicApiKey,
+    healthCheckVersion: '2023-06-01',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -174,6 +211,10 @@ export const API_TYPES = [
     description: 'Google Gemini API using generateContent.',
     defaultEndpoint: 'https://generativelanguage.googleapis.com',
     defaultHealthPath: '/v1beta/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.googleApiKey,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -196,6 +237,10 @@ export const API_TYPES = [
     description: 'Vertex AI Gemini models. Requires a project and region plus a bearer token or ADC.',
     defaultEndpoint: '',
     defaultHealthPath: '',
+    supportsHealthChecks: false,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 30000,
     healthTimeoutMs: 8000,
     supportsChatCompletions: true,
@@ -218,6 +263,10 @@ export const API_TYPES = [
     description: 'AWS Bedrock model runtime. Requires a region plus static credentials or the AWS environment chain.',
     defaultEndpoint: '',
     defaultHealthPath: '',
+    supportsHealthChecks: false,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.none,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 30000,
     healthTimeoutMs: 8000,
     supportsChatCompletions: true,
@@ -240,6 +289,10 @@ export const API_TYPES = [
     description: 'Cohere platform API for chat and embeddings.',
     defaultEndpoint: 'https://api.cohere.com',
     defaultHealthPath: '/v1/models',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 15000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: true,
@@ -262,6 +315,10 @@ export const API_TYPES = [
     description: 'VoyageAI embedding models.',
     defaultEndpoint: 'https://api.voyageai.com',
     defaultHealthPath: '',
+    supportsHealthChecks: false,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 30000,
     healthTimeoutMs: 5000,
     supportsChatCompletions: false,
@@ -284,6 +341,10 @@ export const API_TYPES = [
     description: 'Hugging Face Text Embeddings Inference server.',
     defaultEndpoint: 'http://localhost:8080',
     defaultHealthPath: '/info',
+    supportsHealthChecks: true,
+    healthCheckAuthScheme: HEALTH_CHECK_AUTH_SCHEMES.bearer,
+    healthCheckVersion: '',
+    healthCheckRequiresApiVersion: false,
     healthIntervalMs: 5000,
     healthTimeoutMs: 2000,
     supportsChatCompletions: false,
@@ -333,21 +394,80 @@ export function defaultEndpointFor(apiType) {
   return describeApiType(apiType).defaultEndpoint;
 }
 
-// Build default health probe settings for an API type.
+// True when the value is an absolute http or https URL Wilson can actually probe.
+export function isAbsoluteHttpUrl(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return false;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// Resolve the absolute health probe URL exactly like the server does: an absolute http(s) value
+// wins, otherwise the path is appended to the endpoint. Returns '' when nothing absolute can be
+// produced, which callers must treat as "do not probe". This is the value stored in the draft.
+export function resolveHealthCheckUrl(apiType, endpoint, healthCheckUrl = '') {
+  const descriptor = describeApiType(apiType);
+  const configured = String(healthCheckUrl || '').trim();
+  let candidate;
+
+  if (isAbsoluteHttpUrl(configured)) {
+    candidate = configured;
+  } else {
+    // A non-http(s) absolute URL is a configuration mistake, never concatenated onto the endpoint.
+    if (configured) {
+      try {
+        new URL(configured);
+        return '';
+      } catch {
+        // Not an absolute URL; treated as a path below.
+      }
+    }
+
+    // Bedrock signs AWS SDK calls, Vertex AI derives a regional resource URL, and VoyageAI has no
+    // models route, so Wilson never invents a probe URL for them.
+    if (!descriptor.supportsHealthChecks) return '';
+    const base = String(endpoint || descriptor.defaultEndpoint || '').trim().replace(/\/+$/, '');
+    const path = configured || descriptor.defaultHealthPath || '';
+    const normalizedPath = !path || path.startsWith('/') ? path : `/${path}`;
+    candidate = `${base}${normalizedPath}`;
+  }
+
+  return isAbsoluteHttpUrl(candidate) ? candidate : '';
+}
+
+// Build the URL Wilson actually sends: the resolved health URL plus any query parameter the
+// provider contract requires (Azure OpenAI's api-version).
+export function buildHealthCheckRequestUrl(apiType, endpoint, healthCheckUrl = '', apiVersion = '') {
+  const descriptor = describeApiType(apiType);
+  let url = resolveHealthCheckUrl(apiType, endpoint, healthCheckUrl);
+  if (!url) return '';
+  if (descriptor.healthCheckRequiresApiVersion && !/api-version=/i.test(url)) {
+    const version = String(apiVersion || descriptor.defaultApiVersion || '').trim();
+    if (version) url += `${url.includes('?') ? '&' : '?'}api-version=${encodeURIComponent(version)}`;
+  }
+  return url;
+}
+
+// Build default health probe settings for an API type. Providers without a usable probe route, and
+// drafts whose endpoint is not yet an absolute URL, come back with healthCheckEnabled: false so the
+// server never polls an empty or relative URL.
 export function defaultHealthSettings(apiType, endpoint, apiKey = '') {
   const descriptor = describeApiType(apiType);
-  const base = String(endpoint || descriptor.defaultEndpoint || '').replace(/\/+$/, '');
-  const path = descriptor.defaultHealthPath || '';
+  const healthCheckUrl = resolveHealthCheckUrl(apiType, endpoint, '');
   return {
-    healthCheckEnabled: true,
-    healthCheckUrl: path ? `${base}${path}` : base,
+    healthCheckEnabled: Boolean(healthCheckUrl),
+    healthCheckUrl,
     healthCheckMethod: 'GET',
     healthCheckIntervalMs: descriptor.healthIntervalMs,
     healthCheckTimeoutMs: descriptor.healthTimeoutMs,
     healthCheckExpectedStatusCode: 200,
     healthyThreshold: 2,
     unhealthyThreshold: 2,
-    healthCheckUseAuth: descriptor.requiresApiKey && Boolean(apiKey)
+    healthCheckUseAuth: descriptor.healthCheckAuthScheme !== HEALTH_CHECK_AUTH_SCHEMES.none && Boolean(apiKey)
   };
 }
 
@@ -362,6 +482,92 @@ export function defaultToolSettings(apiType) {
     supportsStreamingToolCalls: descriptor.supportsToolCalls,
     chatCompletionsPath: descriptor.chatCompletionsPath
   };
+}
+
+// True when a draft value still carries the previous provider's default, meaning it is safe to
+// replace when the provider changes. A value the user typed never matches and is preserved.
+function stillDefault(value, previousDefault, blankAliases = []) {
+  const current = value === undefined || value === null ? '' : String(value).trim();
+  const defaults = [String(previousDefault === undefined || previousDefault === null ? '' : previousDefault).trim(), ...blankAliases];
+  return defaults.some(item => item === current);
+}
+
+// Re-derive provider defaults when the API type changes in a model server editor.
+//
+// Both dashboard editors (the model server create/edit modal and the inline settings editor) route
+// their API type change through this function. Selecting a new provider from a fresh Ollama draft
+// therefore yields the new provider's endpoint, health URL, tool format, and capability flags,
+// while user-entered custom endpoints, custom health URLs/settings, and disabled controls survive.
+export function applyApiTypeDefaults(runner, nextApiType) {
+  if (!runner) return runner;
+  const previousType = normalizeApiType(runner.apiType || 'Ollama');
+  const resolvedType = normalizeApiType(nextApiType || previousType);
+  if (resolvedType === previousType) return { ...runner, apiType: resolvedType };
+
+  const previous = describeApiType(previousType);
+  const next = describeApiType(resolvedType);
+  const nextType = next.name;
+
+  const draft = { ...runner, apiType: nextType };
+  const previousHealth = defaultHealthSettings(previousType, runner.endpoint, runner.apiKey);
+  const previousTools = defaultToolSettings(previousType);
+  const nextTools = defaultToolSettings(nextType);
+
+  // Endpoint: a blank endpoint or the previous provider's default is replaced. A custom endpoint,
+  // including a self-hosted or proxied URL, is preserved.
+  if (stillDefault(runner.endpoint, previous.defaultEndpoint)) {
+    draft.endpoint = next.defaultEndpoint || '';
+  }
+
+  // Resource-derived fields keep their previous-provider default until the user edits them.
+  if (stillDefault(runner.deployment, '')) draft.deployment = next.requiresDeployment ? runner.deployment || '' : null;
+  if (stillDefault(runner.apiVersion, previous.defaultApiVersion)) {
+    draft.apiVersion = next.defaultApiVersion || null;
+  }
+  if (stillDefault(runner.region, previous.defaultRegion)) {
+    draft.region = next.defaultRegion || null;
+  }
+  if (stillDefault(runner.projectId, '')) {
+    draft.projectId = next.requiresProjectId ? runner.projectId || null : null;
+  }
+
+  // Health defaults are derived from the endpoint and API version the draft now carries.
+  const nextHealth = defaultHealthSettings(nextType, draft.endpoint, runner.apiKey);
+
+  // Health URL first: a custom value the user typed is retained, otherwise the new provider's
+  // default replaces anything still equal to the previous provider's default.
+  if (!String(runner.healthCheckUrl || '').trim() || stillDefault(runner.healthCheckUrl, previousHealth.healthCheckUrl)) {
+    draft.healthCheckUrl = nextHealth.healthCheckUrl;
+  }
+
+  // Enablement is derived from the URL the draft actually retains, not from the new provider's
+  // default. An explicit "disabled" toggle is always preserved; an enabled check stays enabled when
+  // the retained URL still resolves (for example a custom absolute URL on a provider with no default
+  // probe route such as VoyageAI, VertexAI, or Bedrock) and is only turned off when nothing usable
+  // resolves, so the server is never asked to probe an empty or relative URL.
+  if (runner.healthCheckEnabled !== false) {
+    draft.healthCheckEnabled = Boolean(resolveHealthCheckUrl(nextType, draft.endpoint, draft.healthCheckUrl));
+  }
+  if (stillDefault(runner.healthCheckMethod || 'GET', previousHealth.healthCheckMethod)) draft.healthCheckMethod = nextHealth.healthCheckMethod;
+  if (stillDefault(runner.healthCheckIntervalMs, previousHealth.healthCheckIntervalMs)) draft.healthCheckIntervalMs = nextHealth.healthCheckIntervalMs;
+  if (stillDefault(runner.healthCheckTimeoutMs, previousHealth.healthCheckTimeoutMs)) draft.healthCheckTimeoutMs = nextHealth.healthCheckTimeoutMs;
+  if (stillDefault(runner.healthCheckExpectedStatusCode, previousHealth.healthCheckExpectedStatusCode)) draft.healthCheckExpectedStatusCode = nextHealth.healthCheckExpectedStatusCode;
+  if (stillDefault(runner.healthyThreshold, previousHealth.healthyThreshold)) draft.healthyThreshold = nextHealth.healthyThreshold;
+  if (stillDefault(runner.unhealthyThreshold, previousHealth.unhealthyThreshold)) draft.unhealthyThreshold = nextHealth.unhealthyThreshold;
+  if (Boolean(runner.healthCheckUseAuth) === Boolean(previousHealth.healthCheckUseAuth)) {
+    draft.healthCheckUseAuth = nextHealth.healthCheckUseAuth;
+  }
+
+  // Tool settings follow the same rule, so switching to an embeddings-only provider turns tools off
+  // and switching back to a tool-capable provider turns them on again.
+  if (runner.toolsEnabled !== false) draft.toolsEnabled = nextTools.toolsEnabled;
+  if (stillDefault(runner.supportsTools, previousTools.supportsTools, previousTools.supportsTools ? [] : ['true'])) draft.supportsTools = nextTools.supportsTools;
+  if (stillDefault(runner.toolCallingApiFormat, previousTools.toolCallingApiFormat)) draft.toolCallingApiFormat = nextTools.toolCallingApiFormat;
+  if (stillDefault(runner.chatCompletionsPath, previousTools.chatCompletionsPath)) draft.chatCompletionsPath = nextTools.chatCompletionsPath;
+  if (stillDefault(runner.supportsParallelToolCalls, previousTools.supportsParallelToolCalls)) draft.supportsParallelToolCalls = nextTools.supportsParallelToolCalls;
+  if (stillDefault(runner.supportsStreamingToolCalls, previousTools.supportsStreamingToolCalls)) draft.supportsStreamingToolCalls = nextTools.supportsStreamingToolCalls;
+
+  return draft;
 }
 
 // Validate a model runner draft against the provider catalog. Returns an array of
@@ -422,6 +628,14 @@ export function validateRunnerDraft(runner, existingIds = []) {
 
   if (runner.supportsTools && !descriptor.supportsToolCalls) {
     errors.push(`${descriptor.displayName} does not support tool calls.`);
+  }
+
+  // A draft that explicitly enables health checks must be able to resolve an absolute http(s) URL,
+  // so the error surfaces before save instead of the server queueing a probe it cannot send.
+  if (runner.healthCheckEnabled === true && !resolveHealthCheckUrl(apiType, endpoint, runner.healthCheckUrl)) {
+    errors.push(descriptor.supportsHealthChecks
+      ? `${descriptor.displayName} health checks need an absolute http or https health URL; set the endpoint or the health URL, or disable health checks.`
+      : `${descriptor.displayName} has no health route Wilson can probe; set an absolute http or https health URL, or disable health checks.`);
   }
 
   return errors;

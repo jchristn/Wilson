@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import ApiClient from './utils/api.js';
 import {
   API_TYPE_NAMES,
+  applyApiTypeDefaults,
+  buildHealthCheckRequestUrl,
   describeApiType,
   defaultHealthSettings,
   defaultToolSettings,
   isSupportedApiType,
   normalizeApiType,
+  resolveHealthCheckUrl,
   validateRunnerDraft
 } from './utils/apiTypes.js';
 import { mergeToolProgress, parseSseFrame } from './utils/sseTools.js';
@@ -185,6 +188,231 @@ describe('apiTypes catalog', () => {
   it('requires a server id', () => {
     expect(validateRunnerDraft({ id: '  ', apiType: 'Ollama', endpoint: 'http://localhost:11434' }))
       .toContain('Server ID is required.');
+  });
+
+  it('derives a usable health default for every advertised provider', () => {
+    // Every provider must either resolve an absolute http(s) probe URL or come back disabled. A
+    // relative or empty default would make the server poll a URL it cannot send.
+    API_TYPE_NAMES.forEach(name => {
+      const settings = defaultHealthSettings(name, '');
+      const descriptor = describeApiType(name);
+      if (descriptor.supportsHealthChecks) {
+        expect(settings.healthCheckUrl.startsWith('http'), `${name} health URL`).toBe(true);
+        expect(settings.healthCheckEnabled, `${name} enabled`).toBe(true);
+      } else {
+        expect(settings.healthCheckUrl, `${name} health URL`).toBe('');
+        expect(settings.healthCheckEnabled, `${name} enabled`).toBe(false);
+      }
+      expect(settings.healthCheckIntervalMs).toBeGreaterThan(0);
+      expect(settings.healthCheckTimeoutMs).toBeGreaterThan(0);
+    });
+  });
+
+  it('keeps derived endpoints and the Azure api-version requirement in the probe request URL', () => {
+    // Azure only answers its models route with api-version present, so the request URL carries it
+    // while the stored health URL stays provider-neutral.
+    expect(buildHealthCheckRequestUrl('AzureOpenAI', 'https://example.openai.azure.com', '', '2024-10-21'))
+      .toBe('https://example.openai.azure.com/openai/models?api-version=2024-10-21');
+    expect(resolveHealthCheckUrl('AzureOpenAI', 'https://example.openai.azure.com', ''))
+      .toBe('https://example.openai.azure.com/openai/models');
+    // An explicitly configured absolute URL always wins, including for providers with no default.
+    expect(resolveHealthCheckUrl('Bedrock', '', 'https://health.example.com/probe', ''))
+      .toBe('https://health.example.com/probe');
+    // A provider with no probe route and no absolute URL resolves to nothing rather than a relative URL.
+    expect(resolveHealthCheckUrl('VertexAI', '', '', '')).toBe('');
+    expect(resolveHealthCheckUrl('VoyageAI', 'https://api.voyageai.com', '', '')).toBe('');
+    // A relative endpoint is never turned into a probe.
+    expect(resolveHealthCheckUrl('Ollama', 'localhost:11434', '', '')).toBe('');
+    // A non-http(s) absolute URL is rejected instead of being concatenated onto the endpoint.
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'ftp://example.com/tags')).toBe('');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'file:///tmp/probe')).toBe('');
+  });
+
+  it('joins endpoint-relative health paths the same way the server does', () => {
+    // Regression: a leading-slash path is an endpoint-relative path, not an absolute URL. .NET
+    // parses '/api/tags' as an absolute file URI, and the server rejected those until it learned to
+    // distinguish a real scheme from a path. The dashboard must produce the joined URL, and the
+    // default settings for a leading-slash path must stay enabled.
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', '/api/tags'))
+      .toBe('http://localhost:11434/api/tags');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', '/health'))
+      .toBe('http://localhost:11434/health');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'health/status'))
+      .toBe('http://localhost:11434/health/status');
+    expect(buildHealthCheckRequestUrl('Ollama', 'http://localhost:11434', '/api/tags'))
+      .toBe('http://localhost:11434/api/tags');
+
+    // A leading-slash path must not disable checks or raise a validation error.
+    expect(validateRunnerDraft({ id: 'rel', apiType: 'Ollama', endpoint: 'http://localhost:11434', healthCheckEnabled: true, healthCheckUrl: '/api/tags' }))
+      .toEqual([]);
+
+    // Explicit non-HTTP schemes are still rejected.
+    expect(validateRunnerDraft({ id: 'ftp', apiType: 'Ollama', endpoint: 'http://localhost:11434', healthCheckEnabled: true, healthCheckUrl: 'file:///tmp/probe' }))
+      .toContain('Ollama health checks need an absolute http or https health URL; set the endpoint or the health URL, or disable health checks.');
+  });
+
+  it('reports an actionable health error before save when no probe URL can be resolved', () => {
+    expect(validateRunnerDraft({ id: 'vertex', apiType: 'VertexAI', endpoint: '', healthCheckEnabled: true, apiKey: 'token', projectId: 'p', region: 'us-central1' }))
+      .toContain('Google Vertex AI has no health route Wilson can probe; set an absolute http or https health URL, or disable health checks.');
+    expect(validateRunnerDraft({ id: 'rel', apiType: 'Ollama', endpoint: 'localhost:11434', healthCheckEnabled: true }))
+      .toContain('Ollama health checks need an absolute http or https health URL; set the endpoint or the health URL, or disable health checks.');
+    // Disabled checks need no URL.
+    expect(validateRunnerDraft({ id: 'vertex', apiType: 'VertexAI', endpoint: '', healthCheckEnabled: false, apiKey: 'token', projectId: 'p', region: 'us-central1' }))
+      .toEqual([]);
+  });
+});
+
+describe('applyApiTypeDefaults', () => {
+  function freshOllamaDraft() {
+    return {
+      id: 'server-1',
+      name: 'Server 1',
+      apiType: 'Ollama',
+      endpoint: 'http://localhost:11434',
+      apiKey: 'ollama-token',
+      models: ['llama3'],
+      ...defaultToolSettings('Ollama'),
+      ...defaultHealthSettings('Ollama', 'http://localhost:11434', 'ollama-token')
+    };
+  }
+
+  it('gives a fresh Ollama draft valid defaults for every other provider', () => {
+    API_TYPE_NAMES.filter(name => name !== 'Ollama').forEach(name => {
+      const next = applyApiTypeDefaults(freshOllamaDraft(), name);
+      const descriptor = describeApiType(name);
+      const health = defaultHealthSettings(name, next.endpoint, next.apiKey);
+
+      expect(next.apiType, `${name} apiType`).toBe(name);
+      expect(next.endpoint, `${name} endpoint`).toBe(descriptor.defaultEndpoint);
+      expect(next.toolCallingApiFormat, `${name} tool format`).toBe(descriptor.toolCallingApiFormat);
+      expect(next.supportsTools, `${name} tools`).toBe(descriptor.supportsToolCalls);
+      expect(next.healthCheckUrl, `${name} health URL`).toBe(health.healthCheckUrl);
+      expect(next.healthCheckEnabled, `${name} health enabled`).toBe(health.healthCheckEnabled);
+      expect(next.healthCheckIntervalMs, `${name} interval`).toBe(descriptor.healthIntervalMs);
+      expect(next.healthCheckTimeoutMs, `${name} timeout`).toBe(descriptor.healthTimeoutMs);
+      if (descriptor.requiresDeployment) expect(next.deployment, `${name} deployment`).toBe('');
+      if (descriptor.requiresApiVersion) expect(next.apiVersion, `${name} apiVersion`).toBe(descriptor.defaultApiVersion);
+      if (descriptor.requiresRegion) expect(next.region, `${name} region`).toBe(descriptor.defaultRegion);
+      if (!descriptor.requiresProjectId) expect(next.projectId, `${name} projectId`).toBeNull();
+    });
+  });
+
+  it('handles embeddings-only and resource-derived providers', () => {
+    expect(applyApiTypeDefaults(freshOllamaDraft(), 'VoyageAI')).toMatchObject({
+      apiType: 'VoyageAI',
+      endpoint: 'https://api.voyageai.com',
+      supportsTools: false,
+      toolCallingApiFormat: '',
+      healthCheckEnabled: false,
+      healthCheckUrl: ''
+    });
+
+    expect(applyApiTypeDefaults(freshOllamaDraft(), 'Bedrock')).toMatchObject({
+      apiType: 'Bedrock',
+      endpoint: '',
+      region: 'us-east-1',
+      healthCheckEnabled: false,
+      healthCheckUrl: ''
+    });
+
+    expect(applyApiTypeDefaults(freshOllamaDraft(), 'VertexAI')).toMatchObject({
+      apiType: 'VertexAI',
+      endpoint: '',
+      projectId: null,
+      region: 'us-central1',
+      healthCheckEnabled: false,
+      healthCheckUrl: ''
+    });
+
+    expect(applyApiTypeDefaults(freshOllamaDraft(), 'AzureOpenAI')).toMatchObject({
+      apiType: 'AzureOpenAI',
+      endpoint: 'https://example.openai.azure.com',
+      apiVersion: '2024-10-21',
+      healthCheckUrl: 'https://example.openai.azure.com/openai/models'
+    });
+  });
+
+  it('preserves custom endpoints, custom health URLs, and disabled controls', () => {
+    const custom = {
+      ...freshOllamaDraft(),
+      endpoint: 'http://ollama.internal:11434',
+      healthCheckUrl: 'http://health.internal:9090/status',
+      healthCheckIntervalMs: 1234,
+      healthCheckTimeoutMs: 4321,
+      healthCheckMethod: 'HEAD',
+      healthCheckExpectedStatusCode: 204,
+      healthCheckEnabled: false,
+      toolsEnabled: false,
+      supportsTools: true,
+      supportsParallelToolCalls: false,
+      supportsStreamingToolCalls: false
+    };
+
+    const next = applyApiTypeDefaults(custom, 'OpenAI');
+    expect(next.apiType).toBe('OpenAI');
+    expect(next.endpoint).toBe('http://ollama.internal:11434');
+    expect(next.healthCheckUrl).toBe('http://health.internal:9090/status');
+    expect(next.healthCheckIntervalMs).toBe(1234);
+    expect(next.healthCheckTimeoutMs).toBe(4321);
+    expect(next.healthCheckMethod).toBe('HEAD');
+    expect(next.healthCheckExpectedStatusCode).toBe(204);
+    expect(next.healthCheckEnabled).toBe(false);
+    expect(next.toolsEnabled).toBe(false);
+    expect(next.supportsParallelToolCalls).toBe(false);
+    expect(next.supportsStreamingToolCalls).toBe(false);
+  });
+
+  it('keeps an enabled custom absolute health URL when switching to a provider without a probe route', () => {
+    // Regression: VoyageAI, VertexAI, and Bedrock have no default probe route, so deriving enablement
+    // from the destination provider's defaults disabled a custom absolute URL the operator had
+    // explicitly enabled and left in place. Enablement must follow the retained URL instead.
+    ['VoyageAI', 'VertexAI', 'Bedrock'].forEach(name => {
+      const custom = {
+        ...freshOllamaDraft(),
+        healthCheckUrl: 'https://proxy.example/health',
+        healthCheckEnabled: true
+      };
+
+      const next = applyApiTypeDefaults(custom, name);
+      expect(next.apiType, `${name} apiType`).toBe(name);
+      expect(next.healthCheckUrl, `${name} health URL`).toBe('https://proxy.example/health');
+      expect(next.healthCheckEnabled, `${name} enabled`).toBe(true);
+      expect(resolveHealthCheckUrl(name, next.endpoint, next.healthCheckUrl), `${name} resolves`).toBe('https://proxy.example/health');
+    });
+  });
+
+  it('disables an enabled check only when the retained URL cannot resolve', () => {
+    // No custom URL and a destination with no probe route: nothing resolves, so checks come back off.
+    ['VoyageAI', 'VertexAI', 'Bedrock'].forEach(name => {
+      const next = applyApiTypeDefaults(freshOllamaDraft(), name);
+      expect(next.healthCheckUrl, `${name} health URL`).toBe('');
+      expect(next.healthCheckEnabled, `${name} enabled`).toBe(false);
+    });
+
+    // An explicitly disabled check stays disabled even with a usable custom URL.
+    const disabled = applyApiTypeDefaults({ ...freshOllamaDraft(), healthCheckUrl: 'https://proxy.example/health', healthCheckEnabled: false }, 'VoyageAI');
+    expect(disabled.healthCheckUrl).toBe('https://proxy.example/health');
+    expect(disabled.healthCheckEnabled).toBe(false);
+  });
+
+  it('round-trips back to the original provider defaults', () => {
+    const openAi = applyApiTypeDefaults(freshOllamaDraft(), 'OpenAI');
+    expect(openAi.endpoint).toBe('https://api.openai.com');
+    expect(openAi.healthCheckUrl).toBe('https://api.openai.com/v1/models');
+
+    const backToOllama = applyApiTypeDefaults(openAi, 'Ollama');
+    expect(backToOllama.endpoint).toBe('http://localhost:11434');
+    expect(backToOllama.healthCheckUrl).toBe('http://localhost:11434/api/tags');
+    expect(backToOllama.toolCallingApiFormat).toBe('OllamaChat');
+    expect(backToOllama.healthCheckIntervalMs).toBe(5000);
+    expect(backToOllama.healthCheckTimeoutMs).toBe(2000);
+  });
+
+  it('leaves the draft untouched when the API type does not change', () => {
+    const draft = freshOllamaDraft();
+    const next = applyApiTypeDefaults(draft, 'ollama');
+    expect(next.apiType).toBe('Ollama');
+    expect(next).toEqual({ ...draft, apiType: 'Ollama' });
   });
 });
 

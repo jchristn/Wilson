@@ -86,6 +86,12 @@ namespace Test.Shared
                         CreateAsyncCase("tool-agent-per-turn-output-limit", "Tool agent per-turn output limit", ToolAgentPerTurnOutputLimitAsync),
                         CreateSyncCase("context-truncation", "Context truncation", ContextTruncationAsync),
                         CreateSyncCase("health-check-defaults", "Health check defaults", HealthCheckDefaults),
+                        CreateSyncCase("health-check-provider-defaults-coverage", "Health check provider defaults coverage", HealthCheckProviderDefaultsCoverage),
+                        CreateAsyncCase("health-check-provider-auth-headers", "Health check provider auth headers", HealthCheckProviderAuthHeadersAsync),
+                        CreateAsyncCase("health-check-invalid-url-no-send", "Health check invalid URL sends nothing", HealthCheckInvalidUrlSendsNothingAsync),
+                        CreateAsyncCase("health-check-batch-request-identity", "Health check batch request identity", HealthCheckBatchRequestIdentityAsync),
+                        CreateAsyncCase("health-check-azure-version-isolation", "Azure health check version isolation", HealthCheckAzureVersionIsolationAsync),
+                        CreateAsyncCase("health-check-relative-path-url", "Health check relative path URL", HealthCheckRelativePathUrlAsync),
                         CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
                         CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
                     })
@@ -4071,6 +4077,776 @@ namespace Test.Shared
             finally
             {
                 Directory.Delete(workspace, true);
+            }
+        }
+
+        private static void HealthCheckProviderDefaultsCoverage()
+        {
+            // Every advertised provider must either have a usable default probe (an absolute URL
+            // derived from the catalog endpoint) or explicitly advertise that it has none, so
+            // Wilson never queues a probe against an empty or relative URL.
+            foreach (string apiType in ApiTypes.All)
+            {
+                ApiTypeDescriptor descriptor = ApiTypes.Describe(apiType);
+                ModelRunnerSettings runner = CreateHealthProbeRunner(apiType, "127.0.0.1", 1, "valid-key");
+                runner.HealthCheckUrl = null;
+                runner.HealthCheckEnabled = true;
+                ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
+
+                string resolved = ModelRunnerSettings.ResolveHealthCheckUrl(runner);
+                if (descriptor.SupportsHealthChecks)
+                {
+                    if (String.IsNullOrWhiteSpace(resolved))
+                        throw new InvalidOperationException("Expected '" + apiType + "' to resolve a default absolute health URL.");
+                    if (!ModelRunnerSettings.IsAbsoluteHttpUrl(resolved))
+                        throw new InvalidOperationException("Expected '" + apiType + "' health URL to be an absolute http(s) URL, got '" + resolved + "'.");
+                    if (!uri_IsAbsoluteHttp(resolved))
+                        throw new InvalidOperationException("Expected '" + apiType + "' health URL to be absolute, got '" + resolved + "'.");
+                    if (!runner.HealthCheckEnabled)
+                        throw new InvalidOperationException("Expected '" + apiType + "' health checks to stay enabled when a URL resolves.");
+                    if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl))
+                        throw new InvalidOperationException("Expected '" + apiType + "' to persist the resolved health URL.");
+                    if (ModelRunnerSettings.DescribeHealthCheckUrlProblem(runner) != null)
+                        throw new InvalidOperationException("Expected '" + apiType + "' to report no health URL problem once resolved.");
+                }
+                else
+                {
+                    if (!String.IsNullOrWhiteSpace(resolved))
+                        throw new InvalidOperationException("Expected '" + apiType + "' to derive no default probe URL because it has no health route Wilson can call.");
+                    if (runner.HealthCheckEnabled)
+                        throw new InvalidOperationException("Expected '" + apiType + "' health checks to default to disabled.");
+                    if (String.IsNullOrWhiteSpace(ModelRunnerSettings.DescribeHealthCheckUrlProblem(runner)))
+                        throw new InvalidOperationException("Expected '" + apiType + "' to explain why no probe is possible.");
+                }
+
+                // An explicitly configured absolute HTTP(S) URL always wins, including for providers
+                // with no default route, and it keeps user-disabled checks disabled.
+                ModelRunnerSettings explicitUrl = CreateHealthProbeRunner(apiType, "127.0.0.1", 1, "valid-key");
+                explicitUrl.HealthCheckUrl = "https://health.example.com/probe";
+                explicitUrl.HealthCheckEnabled = false;
+                ModelRunnerSettings.ApplyHealthCheckDefaults(explicitUrl);
+                if (!String.Equals(explicitUrl.HealthCheckUrl, "https://health.example.com/probe", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + apiType + "' to preserve an explicitly configured absolute health URL.");
+                if (explicitUrl.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to preserve a user-disabled health check.");
+
+                // An ENABLED custom absolute HTTP(S) URL must also survive normalization for providers
+                // with no default probe route (AWS Bedrock, Vertex AI, VoyageAI). Deriving enablement
+                // from the provider defaults instead of the retained URL silently disabled monitoring
+                // the operator had explicitly turned on.
+                ModelRunnerSettings explicitEnabledUrl = CreateHealthProbeRunner(apiType, "127.0.0.1", 1, "valid-key");
+                explicitEnabledUrl.HealthCheckUrl = "https://proxy.example/health";
+                explicitEnabledUrl.HealthCheckEnabled = true;
+                ModelRunnerSettings.ApplyHealthCheckDefaults(explicitEnabledUrl);
+                if (!String.Equals(explicitEnabledUrl.HealthCheckUrl, "https://proxy.example/health", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + apiType + "' to keep an enabled custom absolute health URL.");
+                if (!explicitEnabledUrl.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to keep an explicitly enabled custom absolute health URL enabled.");
+                if (ModelRunnerSettings.DescribeHealthCheckUrlProblem(explicitEnabledUrl) != null)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to report no health URL problem for an enabled custom absolute health URL.");
+            }
+
+            // Provider-specific protocol requirements the health probe has to honour.
+            if (!String.Equals(ApiTypes.Describe("Anthropic").DefaultHealthCheckAuthScheme, HealthCheckAuthSchemes.AnthropicApiKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Anthropic health probes to authenticate with the x-api-key scheme.");
+            if (!String.Equals(ApiTypes.Describe("Anthropic").DefaultHealthCheckVersion, "2023-06-01", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Anthropic health probes to send the anthropic-version header.");
+            if (!String.Equals(ApiTypes.Describe("Gemini").DefaultHealthCheckAuthScheme, HealthCheckAuthSchemes.GoogleApiKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Gemini health probes to authenticate with x-goog-api-key.");
+            if (!String.Equals(ApiTypes.Describe("AzureOpenAI").DefaultHealthCheckAuthScheme, HealthCheckAuthSchemes.AzureApiKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI health probes to authenticate with the api-key header.");
+            if (!ApiTypes.Describe("AzureOpenAI").HealthCheckRequiresApiVersion)
+                throw new InvalidOperationException("Expected Azure OpenAI health probes to carry api-version.");
+            if (!String.Equals(ApiTypes.Describe("OpenAI").DefaultHealthCheckAuthScheme, HealthCheckAuthSchemes.Bearer, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected OpenAI health probes to keep bearer authentication.");
+
+            // Azure only answers /openai/models with the api-version query parameter, so the request
+            // URL carries it while the stored health URL stays provider-neutral.
+            ModelRunnerSettings azure = CreateHealthProbeRunner("AzureOpenAI", "127.0.0.1", 1, "valid-key");
+            azure.ApiVersion = "2024-10-21";
+            azure.HealthCheckUrl = "https://example.openai.azure.com/openai/models";
+            string azureUrl = ModelRunnerSettings.BuildHealthCheckRequestUrl(azure);
+            if (!azureUrl.Contains("api-version=2024-10-21", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the Azure OpenAI health request URL to carry api-version, got '" + azureUrl + "'.");
+            azure.HealthCheckUrl = "https://example.openai.azure.com/openai/models?api-version=2024-06-01";
+            if (ModelRunnerSettings.BuildHealthCheckRequestUrl(azure).Contains("api-version=2024-10-21", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an explicit api-version query parameter to survive.");
+
+            // Invalid URLs must be explained before any HTTP send.
+            ModelRunnerSettings relativeEndpoint = new ModelRunnerSettings { Id = "relative", ApiType = "Ollama", Endpoint = "localhost:11434", HealthCheckEnabled = true };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(relativeEndpoint);
+            if (!String.IsNullOrWhiteSpace(ModelRunnerSettings.ResolveHealthCheckUrl(relativeEndpoint)))
+                throw new InvalidOperationException("Expected a relative endpoint to resolve no health URL.");
+            string? relativeProblem = ModelRunnerSettings.DescribeHealthCheckUrlProblem(relativeEndpoint);
+            if (String.IsNullOrWhiteSpace(relativeProblem) || !relativeProblem!.Contains("no probe was sent", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an actionable invalid-URL error before an HTTP send.");
+            if (relativeEndpoint.HealthCheckEnabled)
+                throw new InvalidOperationException("Expected an unresolvable health URL to leave checks disabled.");
+
+            // A non-HTTP scheme is a configuration mistake, never probed and never concatenated onto
+            // the endpoint.
+            ModelRunnerSettings nonHttp = new ModelRunnerSettings { Id = "ftp", ApiType = "Ollama", Endpoint = "http://localhost:11434", HealthCheckUrl = "ftp://example.com/tags", HealthCheckEnabled = true };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(nonHttp);
+            if (!String.IsNullOrWhiteSpace(ModelRunnerSettings.ResolveHealthCheckUrl(nonHttp)))
+                throw new InvalidOperationException("Expected a non-HTTP health URL to be rejected.");
+            if (nonHttp.HealthCheckEnabled)
+                throw new InvalidOperationException("Expected a non-HTTP health URL to leave checks disabled.");
+            string? nonHttpProblem = ModelRunnerSettings.DescribeHealthCheckUrlProblem(nonHttp);
+            if (String.IsNullOrWhiteSpace(nonHttpProblem) || !nonHttpProblem!.Contains("http or https", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected an actionable error for a non-HTTP health URL.");
+
+            // A provider with no probe route and no configured URL is refused outright.
+            ModelRunnerSettings noRoute = new ModelRunnerSettings { Id = "no-route", ApiType = "VertexAI", ProjectId = "proj", ApiKey = "token", HealthCheckEnabled = true };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(noRoute);
+            if (!String.IsNullOrWhiteSpace(ModelRunnerSettings.ResolveHealthCheckUrl(noRoute)))
+                throw new InvalidOperationException("Expected a provider without a probe route to leave no health URL.");
+        }
+
+        private static bool uri_IsAbsoluteHttp(string value)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out Uri? parsed)
+                && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
+        }
+
+        private static ModelRunnerSettings CreateHealthProbeRunner(string apiType, string host, int port, string apiKey)
+        {
+            ApiTypeDescriptor descriptor = ApiTypes.Describe(apiType);
+            string endpoint = String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint)
+                ? "http://" + host + ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : descriptor.DefaultEndpoint;
+            if (!endpoint.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                endpoint = "http://" + host + ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return new ModelRunnerSettings
+            {
+                Id = "health-" + apiType,
+                Name = apiType,
+                ApiType = apiType,
+                Endpoint = endpoint,
+                ApiKey = apiKey,
+                ApiSecretKey = String.Equals(apiType, "Bedrock", StringComparison.Ordinal) ? "secret" : null,
+                Deployment = descriptor.RequiresDeployment ? "deploy" : null,
+                ApiVersion = descriptor.RequiresApiVersion ? descriptor.DefaultApiVersion : null,
+                Region = descriptor.RequiresRegion ? descriptor.DefaultRegion : null,
+                ProjectId = descriptor.RequiresProjectId ? "project" : null
+            };
+        }
+
+        private static async Task HealthCheckProviderAuthHeadersAsync()
+        {
+            // Drive the real ModelRunnerHealthCheckService over local HTTP and assert the outgoing
+            // request (method, path, query, and authentication headers) plus the resulting health
+            // verdict. Each provider speaks its own authentication contract, so a blanket bearer
+            // token makes healthy hosted endpoints answer 401.
+            string validKey = "valid-test-key";
+            string wrongKey = "wrong-test-key";
+
+            (string ApiType, string PathPrefix, string[] RequiredHeaders)[] cases = new (string, string, string[])[]
+            {
+                ("OpenAI", "/v1/models", new[] { "Authorization: Bearer " + validKey }),
+                ("OllamaCloud", "/api/tags", new[] { "Authorization: Bearer " + validKey }),
+                ("XAI", "/v1/models", new[] { "Authorization: Bearer " + validKey }),
+                ("Cohere", "/v1/models", new[] { "Authorization: Bearer " + validKey }),
+                ("Anthropic", "/v1/models", new[] { "x-api-key: " + validKey, "anthropic-version: 2023-06-01" }),
+                ("Gemini", "/v1beta/models", new[] { "x-goog-api-key: " + validKey }),
+                ("AzureOpenAI", "/openai/models", new[] { "api-key: " + validKey }),
+                ("VoyageAI", "/v1/embeddings", new[] { "Authorization: Bearer " + validKey, "GET" })
+            };
+
+            foreach ((string apiType, string pathPrefix, string[] requiredHeaders) in cases)
+            {
+                using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                int port = GetFreePort();
+                List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+                TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+                listener.Start();
+                Task server = RunFakeProviderHealthServerAsync(listener, records, validKey, cts.Token);
+
+                ModelRunnerSettings runner = CreateHealthProbeRunner(apiType, "127.0.0.1", port, validKey);
+                runner.Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                runner.HealthCheckUrl = apiType == "VoyageAI" ? runner.Endpoint + pathPrefix : null;
+                runner.HealthCheckEnabled = true;
+                runner.HealthCheckUseAuth = true;
+                runner.HealthCheckIntervalMs = 25;
+                runner.HealthCheckTimeoutMs = 5000;
+                runner.HealthyThreshold = 1;
+                runner.UnhealthyThreshold = 1;
+
+                EndpointHealthStatus status = await ProbeHealthOnceAsync(runner, true, cts.Token).ConfigureAwait(false);
+                cts.Cancel();
+                await IgnoreCancellationAsync(server).ConfigureAwait(false);
+                listener.Stop();
+
+                if (!status.IsHealthy)
+                    throw new InvalidOperationException("Expected '" + apiType + "' health probe to succeed over local HTTP, error: " + (status.LastError ?? "none"));
+                if (records.Count == 0)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to send a health probe request.");
+
+                HealthProbeRecord record = records[0];
+                if (!record.RequestLine.StartsWith("GET ", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + apiType + "' to send a GET probe, got: " + record.RequestLine);
+                string target = record.RequestLine.Split(' ')[1];
+                if (target.IndexOf(pathPrefix, StringComparison.Ordinal) != 0)
+                    throw new InvalidOperationException("Expected '" + apiType + "' to probe '" + pathPrefix + "', got: " + target);
+                foreach (string header in requiredHeaders)
+                {
+                    if (header == "GET") continue;
+                    if (!record.Raw.Contains(header, StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected '" + apiType + "' health probe to send header '" + header + "', got:\r\n" + record.Raw);
+                }
+
+                if (String.Equals(apiType, "AzureOpenAI", StringComparison.Ordinal))
+                {
+                    if (record.Raw.Contains("Authorization:", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Expected Azure OpenAI health probes not to send a bearer token.");
+                    if (!target.Contains("api-version=", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected the Azure OpenAI health probe to carry api-version, got: " + target);
+                }
+
+                if (String.Equals(apiType, "Anthropic", StringComparison.Ordinal) && record.Raw.Contains("Authorization:", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected Anthropic health probes not to send a bearer token.");
+                if (String.Equals(apiType, "Gemini", StringComparison.Ordinal) && record.Raw.Contains("Authorization:", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected Gemini health probes not to send a bearer token.");
+
+                // Same provider, wrong credential: the fixture rejects with 401 and Wilson records
+                // the failure instead of silently reporting healthy.
+                using CancellationTokenSource badCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                int badPort = GetFreePort();
+                List<HealthProbeRecord> badRecords = new List<HealthProbeRecord>();
+                TcpListener badListener = new TcpListener(IPAddress.Loopback, badPort);
+                badListener.Start();
+                Task badServer = RunFakeProviderHealthServerAsync(badListener, badRecords, validKey, badCts.Token);
+
+                ModelRunnerSettings badRunner = CreateHealthProbeRunner(apiType, "127.0.0.1", badPort, wrongKey);
+                badRunner.Endpoint = "http://127.0.0.1:" + badPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                badRunner.HealthCheckUrl = apiType == "VoyageAI" ? badRunner.Endpoint + pathPrefix : null;
+                badRunner.HealthCheckEnabled = true;
+                badRunner.HealthCheckUseAuth = true;
+                badRunner.HealthCheckIntervalMs = 25;
+                badRunner.HealthCheckTimeoutMs = 5000;
+                badRunner.HealthyThreshold = 1;
+                badRunner.UnhealthyThreshold = 1;
+
+                EndpointHealthStatus badStatus = await ProbeHealthOnceAsync(badRunner, false, badCts.Token).ConfigureAwait(false);
+                badCts.Cancel();
+                await IgnoreCancellationAsync(badServer).ConfigureAwait(false);
+                badListener.Stop();
+
+                if (badStatus.IsHealthy)
+                    throw new InvalidOperationException("Expected '" + apiType + "' health probe with an invalid credential to be reported unhealthy.");
+                if (badStatus.LastError == null || !badStatus.LastError!.Contains("401", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected '" + apiType + "' to report the HTTP 401 rejection, got: " + (badStatus.LastError ?? "none"));
+            }
+
+            // Anonymous providers must not send credentials at all.
+            using (CancellationTokenSource anonymousCts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            {
+                int port = GetFreePort();
+                List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+                TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+                listener.Start();
+                Task server = RunFakeProviderHealthServerAsync(listener, records, null, anonymousCts.Token);
+
+                ModelRunnerSettings tei = CreateHealthProbeRunner("Tei", "127.0.0.1", port, String.Empty);
+                tei.Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                tei.HealthCheckUrl = null;
+                tei.HealthCheckEnabled = true;
+                tei.HealthCheckUseAuth = false;
+                tei.HealthCheckIntervalMs = 25;
+                tei.HealthCheckTimeoutMs = 5000;
+                tei.HealthyThreshold = 1;
+                tei.UnhealthyThreshold = 1;
+
+                EndpointHealthStatus status = await ProbeHealthOnceAsync(tei, true, anonymousCts.Token).ConfigureAwait(false);
+                anonymousCts.Cancel();
+                await IgnoreCancellationAsync(server).ConfigureAwait(false);
+                listener.Stop();
+
+                if (!status.IsHealthy)
+                    throw new InvalidOperationException("Expected the anonymous Text Embeddings Inference probe to succeed, error: " + (status.LastError ?? "none"));
+                if (records.Count != 1)
+                    throw new InvalidOperationException("Expected exactly one Text Embeddings Inference probe, got " + records.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".");
+                if (!records[0].RequestLine.Contains("/info", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected Text Embeddings Inference to probe /info, got: " + records[0].RequestLine);
+                if (records[0].Raw.Contains("Authorization:", StringComparison.OrdinalIgnoreCase)
+                    || records[0].Raw.Contains("x-api-key:", StringComparison.OrdinalIgnoreCase)
+                    || records[0].Raw.Contains("api-key:", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected an anonymous probe to send no credentials.");
+            }
+        }
+
+        private static async Task HealthCheckInvalidUrlSendsNothingAsync()
+        {
+            // A runner whose health URL cannot resolve to an absolute http(s) URL must fail with an
+            // actionable error and must not open a connection.
+            int port = GetFreePort();
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            bool connected = false;
+            Task watch = Task.Run(async () =>
+            {
+                try
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
+                    connected = true;
+                }
+                catch (Exception)
+                {
+                }
+            });
+
+            Settings settings = new Settings
+            {
+                ModelRunners = new List<ModelRunnerSettings>
+                {
+                    new ModelRunnerSettings
+                    {
+                        Id = "relative-health",
+                        Name = "Relative Health",
+                        ApiType = "Ollama",
+                        Endpoint = "127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        HealthCheckEnabled = true,
+                        HealthCheckUrl = "not-a-url",
+                        HealthCheckIntervalMs = 25,
+                        HealthCheckTimeoutMs = 500
+                    }
+                }
+            };
+
+            using (ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings))
+            {
+                healthChecks.Start();
+                await Task.Delay(500).ConfigureAwait(false);
+                await healthChecks.StopAsync().ConfigureAwait(false);
+
+                EndpointHealthStatus? status = healthChecks.GetHealthStatus("relative-health");
+                if (status == null) throw new InvalidOperationException("Expected a health status for the unresolvable runner.");
+                if (status.HealthCheckEnabled) throw new InvalidOperationException("Expected checks to be disabled when no absolute URL can be resolved.");
+                if (String.IsNullOrWhiteSpace(status.LastError) || !status.LastError!.Contains("no probe was sent", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an actionable invalid-URL error, got: " + (status.LastError ?? "none"));
+                if (status.LastCheckUtc.HasValue) throw new InvalidOperationException("Expected no probe attempt when the health URL cannot be resolved.");
+            }
+
+            cts.Cancel();
+            await IgnoreCancellationAsync(watch).ConfigureAwait(false);
+            listener.Stop();
+            if (connected) throw new InvalidOperationException("Expected no HTTP connection for an invalid health URL.");
+        }
+
+        private static async Task HealthCheckBatchRequestIdentityAsync()
+        {
+            // Start the production loop with both subscriptions due in the same batch. Reverse both
+            // insertion order and ID ordering so a successful representative cannot mask a collision.
+            foreach (string scenario in new[] { "credentials", "path-case", "query-case", "path-slash", "query-slash", "azure-version", "identical", "trimmed-key", "anonymous", "no-auth-scheme", "auth-scheme", "method", "expected-status", "timeout" })
+            {
+                foreach (bool reverse in new[] { false, true })
+                {
+                    using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    int port = GetFreePort();
+                    string endpoint = "http://localhost:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    string[] targets = { "/v1/models?limit=1000", "/v1/models?limit=1000" };
+                    string[] keys = { "valid-key", "valid-key" };
+                    string[] headers = { "x-api-key: valid-key", "x-api-key: valid-key" };
+                    string[] methods = { "GET", "GET" };
+                    int[] errors = { 0, 0 };
+                    bool deduplicate = scenario == "identical" || scenario == "trimmed-key" || scenario == "anonymous" || scenario == "no-auth-scheme";
+                    ModelRunnerSettings[] runners = new ModelRunnerSettings[2];
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        ModelRunnerSettings runner = CreateHealthProbeRunner("Anthropic", "127.0.0.1", port, "valid-key");
+                        runner.Id = (reverse ? 1 - i : i).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        runner.Endpoint = endpoint;
+                        runner.HealthCheckEnabled = true;
+                        runner.HealthCheckUseAuth = true;
+                        runner.HealthCheckIntervalMs = 60000;
+                        runner.HealthCheckTimeoutMs = 5000;
+                        runner.HealthyThreshold = 1;
+                        runner.UnhealthyThreshold = 1;
+                        runners[i] = runner;
+                    }
+
+                    switch (scenario)
+                    {
+                        case "credentials":
+                            keys[1] = "invalid-key";
+                            headers[1] = "x-api-key: invalid-key";
+                            errors[1] = 401;
+                            break;
+                        case "path-case":
+                            targets[1] = "/V1/models?limit=1000";
+                            errors[1] = 400;
+                            break;
+                        case "query-case":
+                            targets[0] = "/v1/models?name=Good";
+                            targets[1] = "/v1/models?name=good";
+                            errors[1] = 400;
+                            break;
+                        case "path-slash":
+                            targets[0] = "/v1/models";
+                            targets[1] = "/v1/models/";
+                            errors[1] = 400;
+                            break;
+                        case "query-slash":
+                            targets[0] = "/v1/models?name=Good";
+                            targets[1] = "/v1/models?name=Good/";
+                            errors[1] = 400;
+                            break;
+                        case "azure-version":
+                            for (int i = 0; i < runners.Length; i++)
+                            {
+                                runners[i].ApiType = "AzureOpenAI";
+                                runners[i].ApiVersion = i == 0 ? "2024-10-21" : "invalid";
+                                targets[i] = "/openai/models?api-version=" + runners[i].ApiVersion;
+                                headers[i] = "api-key: valid-key";
+                            }
+                            errors[1] = 400;
+                            break;
+                        case "trimmed-key":
+                            keys[1] = "  valid-key  ";
+                            break;
+                        case "anonymous":
+                            runners[0].ApiType = runners[1].ApiType = "Ollama";
+                            runners[0].HealthCheckUseAuth = false;
+                            keys[1] = String.Empty;
+                            headers[0] = headers[1] = String.Empty;
+                            break;
+                        case "no-auth-scheme":
+                            runners[0].ApiType = runners[1].ApiType = "Bedrock";
+                            keys[1] = "unused-key";
+                            headers[0] = headers[1] = String.Empty;
+                            break;
+                        case "auth-scheme":
+                            runners[1].ApiType = "OpenAI";
+                            headers[1] = "Authorization: Bearer valid-key";
+                            break;
+                        case "method":
+                            runners[1].HealthCheckMethod = HealthCheckMethodEnum.HEAD;
+                            methods[1] = "HEAD";
+                            break;
+                        case "expected-status":
+                            runners[1].HealthCheckExpectedStatusCode = 201;
+                            errors[1] = 200;
+                            break;
+                        case "timeout":
+                            runners[1].HealthCheckTimeoutMs = 6000;
+                            break;
+                    }
+
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        runners[i].ApiKey = keys[i];
+                        // Scheme/host case alone must still deduplicate, unlike path/query case.
+                        string origin = i == 1 ? endpoint.Replace("http://localhost", "HTTP://LOCALHOST", StringComparison.Ordinal) : endpoint;
+                        runners[i].HealthCheckUrl = origin + targets[i];
+                    }
+
+                    List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+                    TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+                    listener.Start();
+                    string? expectedKey = headers[0].Length == 0 ? null : "valid-key";
+                    bool rejectTarget = errors[1] == 400;
+                    Task server = RunFakeProviderHealthServerAsync(listener, records, expectedKey, cts.Token,
+                        expectedRequestTarget: rejectTarget ? targets[0] : null);
+                    Settings settings = new Settings();
+                    settings.ModelRunners.AddRange(reverse ? runners.Reverse() : runners);
+                    using ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings);
+                    try
+                    {
+                        healthChecks.Start(cts.Token);
+                        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            if (runners.All(runner => healthChecks.GetHealthStatus(runner.Id)?.LastCheckUtc.HasValue == true)) break;
+                            await Task.Delay(25, cts.Token).ConfigureAwait(false);
+                        }
+
+                        for (int i = 0; i < runners.Length; i++)
+                        {
+                            EndpointHealthStatus? status = healthChecks.GetHealthStatus(runners[i].Id);
+                            if (status?.LastCheckUtc == null || status.IsHealthy != (errors[i] == 0)
+                                || (errors[i] != 0 && status.LastError?.Contains("HTTP " + errors[i] + ";", StringComparison.Ordinal) != true))
+                                throw new InvalidOperationException("Incorrect independent batch verdict for " + scenario + ", reverse=" + reverse + ", subscription=" + i + ".");
+                        }
+                    }
+                    finally
+                    {
+                        await healthChecks.StopAsync().ConfigureAwait(false);
+                        cts.Cancel();
+                        await server.ConfigureAwait(false);
+                        listener.Stop();
+                    }
+
+                    if (records.Count != (deduplicate ? 1 : 2))
+                        throw new InvalidOperationException("Incorrect batch request count for " + scenario + ", reverse=" + reverse + ": " + records.Count + ".");
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        string requestLine = methods[i] + " " + targets[i] + " HTTP/1.1";
+                        HealthProbeRecord[] matching = records.Where(record => record.RequestLine == requestLine
+                            && (headers[i].Length == 0 || record.Raw.Contains(headers[i] + "\r\n", StringComparison.Ordinal))).ToArray();
+                        int expectedCount = !deduplicate && targets[0] == targets[1] && headers[0] == headers[1] && methods[0] == methods[1] ? 2 : 1;
+                        if (matching.Length != expectedCount)
+                            throw new InvalidOperationException("Incorrect outgoing batch URL/header for " + scenario + ", reverse=" + reverse + ".");
+                        foreach (HealthProbeRecord record in matching)
+                        {
+                            if (headers[i].StartsWith("x-api-key:", StringComparison.Ordinal)
+                                && !record.Raw.Contains("anthropic-version: 2023-06-01\r\n", StringComparison.Ordinal))
+                                throw new InvalidOperationException("Missing Anthropic version in batch probe.");
+                            if (headers[i].Length == 0 && new[] { "Authorization:", "x-api-key:", "api-key:", "x-goog-api-key:", "anthropic-version:" }.Any(header => record.Raw.Contains(header, StringComparison.OrdinalIgnoreCase)))
+                                throw new InvalidOperationException("Anonymous batch probe sent authentication headers.");
+                        }
+                    }
+                }
+            }
+        }
+
+        private static async Task HealthCheckAzureVersionIsolationAsync()
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            int port = GetFreePort();
+            List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            Task server = RunFakeProviderHealthServerAsync(listener, records, "valid-key", cts.Token, "2024-10-21");
+            Settings settings = new Settings();
+            foreach (string version in new[] { "2024-10-21", "invalid" })
+            {
+                ModelRunnerSettings runner = CreateHealthProbeRunner("AzureOpenAI", "127.0.0.1", port, "valid-key");
+                runner.Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                runner.Id = "azure-" + version;
+                runner.ApiVersion = version;
+                runner.HealthCheckEnabled = true;
+                runner.HealthCheckUseAuth = true;
+                runner.HealthCheckIntervalMs = 60000;
+                runner.HealthCheckTimeoutMs = 5000;
+                runner.HealthyThreshold = 1;
+                runner.UnhealthyThreshold = 1;
+                settings.ModelRunners.Add(runner);
+            }
+
+            using ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings);
+            try
+            {
+                healthChecks.Start(cts.Token);
+                DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (settings.ModelRunners.All(runner => healthChecks.GetHealthStatus(runner.Id)?.LastCheckUtc.HasValue == true)) break;
+                    await Task.Delay(25, cts.Token).ConfigureAwait(false);
+                }
+
+                EndpointHealthStatus? valid = healthChecks.GetHealthStatus("azure-2024-10-21");
+                EndpointHealthStatus? invalid = healthChecks.GetHealthStatus("azure-invalid");
+                if (valid?.LastCheckUtc == null || !valid.IsHealthy)
+                    throw new InvalidOperationException("Expected the valid Azure API version to be healthy.");
+                if (invalid?.LastCheckUtc == null || invalid.IsHealthy || invalid.LastError?.Contains("400", StringComparison.Ordinal) != true)
+                    throw new InvalidOperationException("Expected the invalid Azure API version to fail independently with HTTP 400.");
+            }
+            finally
+            {
+                await healthChecks.StopAsync().ConfigureAwait(false);
+                cts.Cancel();
+                await IgnoreCancellationAsync(server).ConfigureAwait(false);
+                listener.Stop();
+            }
+
+            foreach (string version in new[] { "2024-10-21", "invalid" })
+            {
+                HealthProbeRecord[] matching = records.Where(record => record.RequestLine == "GET /openai/models?api-version=" + version + " HTTP/1.1").ToArray();
+                if (matching.Length != 1 || !matching[0].Raw.Contains("api-key: valid-key", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected one authenticated Azure health request for API version " + version + ".");
+            }
+        }
+
+        private static async Task HealthCheckRelativePathUrlAsync()
+        {
+            // Regression: a leading-slash health path such as '/api/tags' is an endpoint-relative
+            // path, but .NET parses it as an absolute 'file' URI. Resolution must append it to the
+            // endpoint instead of rejecting it, normalization must keep checks enabled, and the real
+            // service must send a probe to the joined URL.
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            int port = GetFreePort();
+            List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            Task server = RunFakeProviderHealthServerAsync(listener, records, "valid-key", cts.Token);
+
+            string endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach (string relativePath in new[] { "/api/tags", "/health", "health/status" })
+            {
+                ModelRunnerSettings runner = new ModelRunnerSettings
+                {
+                    Id = "relative-path-" + relativePath.Replace('/', '-'),
+                    Name = "Relative Path",
+                    ApiType = "Ollama",
+                    Endpoint = endpoint,
+                    ApiKey = "valid-key",
+                    HealthCheckUrl = relativePath,
+                    HealthCheckEnabled = true,
+                    HealthCheckUseAuth = true
+                };
+
+                string expected = relativePath.StartsWith("/", StringComparison.Ordinal) ? endpoint + relativePath : endpoint + "/" + relativePath;
+                string resolved = ModelRunnerSettings.ResolveHealthCheckUrl(runner);
+                if (!String.Equals(resolved, expected, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected the relative health path '" + relativePath + "' to resolve to '" + expected + "', got '" + (resolved ?? "null") + "'.");
+
+                ModelRunnerSettings normalizedRunner = new ModelRunnerSettings
+                {
+                    Id = runner.Id,
+                    Name = runner.Name,
+                    ApiType = runner.ApiType,
+                    Endpoint = runner.Endpoint,
+                    ApiKey = runner.ApiKey,
+                    HealthCheckUrl = relativePath,
+                    HealthCheckEnabled = true,
+                    HealthCheckUseAuth = true
+                };
+                ModelRunnerSettings.ApplyHealthCheckDefaults(normalizedRunner);
+                if (!normalizedRunner.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected health checks to stay enabled for the relative health path '" + relativePath + "'.");
+                if (!String.Equals(normalizedRunner.HealthCheckUrl, expected, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected normalization to persist '" + expected + "' for the relative health path '" + relativePath + "', got '" + (normalizedRunner.HealthCheckUrl ?? "null") + "'.");
+                if (ModelRunnerSettings.DescribeHealthCheckUrlProblem(normalizedRunner) != null)
+                    throw new InvalidOperationException("Expected no health URL problem for the relative health path '" + relativePath + "'.");
+            }
+
+            // Drive the real service against local HTTP with a leading-slash path and confirm the
+            // request lands on the joined URL rather than being rejected before the send.
+            ModelRunnerSettings probeRunner = new ModelRunnerSettings
+            {
+                Id = "relative-path-probe",
+                Name = "Relative Path Probe",
+                ApiType = "Ollama",
+                Endpoint = endpoint,
+                ApiKey = "valid-key",
+                HealthCheckUrl = "/api/tags",
+                HealthCheckEnabled = true,
+                HealthCheckUseAuth = true,
+                HealthCheckIntervalMs = 25,
+                HealthCheckTimeoutMs = 5000,
+                HealthyThreshold = 1,
+                UnhealthyThreshold = 1
+            };
+
+            EndpointHealthStatus status = await ProbeHealthOnceAsync(probeRunner, true, cts.Token).ConfigureAwait(false);
+            cts.Cancel();
+            await IgnoreCancellationAsync(server).ConfigureAwait(false);
+            listener.Stop();
+
+            if (!status.IsHealthy)
+                throw new InvalidOperationException("Expected the relative health path probe to succeed over local HTTP, error: " + (status.LastError ?? "none"));
+            if (records.Count == 0)
+                throw new InvalidOperationException("Expected the relative health path to send a health probe request.");
+            string requestTarget = records[0].RequestLine.Split(' ')[1];
+            if (!String.Equals(requestTarget, "/api/tags", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the relative health path probe to hit '/api/tags', got: " + requestTarget);
+
+            // Explicit non-HTTP schemes are still rejected instead of being appended to the endpoint.
+            foreach (string explicitScheme in new[] { "file:///tmp/probe", "ftp://example.com/tags", "unix:///var/run/probe" })
+            {
+                ModelRunnerSettings rejected = new ModelRunnerSettings
+                {
+                    Id = "explicit-scheme",
+                    ApiType = "Ollama",
+                    Endpoint = "http://localhost:11434",
+                    HealthCheckUrl = explicitScheme,
+                    HealthCheckEnabled = true
+                };
+                if (!String.IsNullOrWhiteSpace(ModelRunnerSettings.ResolveHealthCheckUrl(rejected)))
+                    throw new InvalidOperationException("Expected the non-HTTP health URL '" + explicitScheme + "' to be rejected.");
+                if (!ModelRunnerSettings.IsExplicitNonHttpUrl(explicitScheme))
+                    throw new InvalidOperationException("Expected '" + explicitScheme + "' to be recognized as an explicit non-HTTP scheme.");
+                ModelRunnerSettings.ApplyHealthCheckDefaults(rejected);
+                if (rejected.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected '" + explicitScheme + "' to leave health checks disabled.");
+                string? problem = ModelRunnerSettings.DescribeHealthCheckUrlProblem(rejected);
+                if (String.IsNullOrWhiteSpace(problem) || !problem!.Contains("http or https", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an actionable error for '" + explicitScheme + "', got: " + (problem ?? "none"));
+            }
+
+            // A leading-slash path is never mistaken for an explicit scheme.
+            if (ModelRunnerSettings.IsExplicitNonHttpUrl("/api/tags"))
+                throw new InvalidOperationException("Expected '/api/tags' to be treated as an endpoint-relative path, not an explicit scheme.");
+            if (ModelRunnerSettings.IsExplicitNonHttpUrl("health/status"))
+                throw new InvalidOperationException("Expected 'health/status' to be treated as an endpoint-relative path, not an explicit scheme.");
+        }
+
+        private static async Task<EndpointHealthStatus> ProbeHealthOnceAsync(ModelRunnerSettings runner, bool expectSuccess, CancellationToken token)
+        {
+            Settings settings = new Settings();
+            settings.ModelRunners.Add(runner);
+            using ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings);
+            healthChecks.Start(token);
+            try
+            {
+                DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+                EndpointHealthStatus? status = null;
+                while (DateTime.UtcNow < deadline && !token.IsCancellationRequested)
+                {
+                    status = healthChecks.GetHealthStatus(runner.Id);
+                    if (status != null && status.LastCheckUtc.HasValue && (expectSuccess ? status.IsHealthy : status.LastError != null)) break;
+                    await Task.Delay(25, token).ConfigureAwait(false);
+                }
+
+                return healthChecks.GetHealthStatus(runner.Id) ?? status ?? new EndpointHealthStatus { EndpointId = runner.Id };
+            }
+            finally
+            {
+                await healthChecks.StopAsync().ConfigureAwait(false);
+            }
+        }
+
+        private static async Task IgnoreCancellationAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private sealed class HealthProbeRecord
+        {
+            public string RequestLine { get; set; } = String.Empty;
+            public string Raw { get; set; } = String.Empty;
+        }
+
+        private static async Task RunFakeProviderHealthServerAsync(TcpListener listener, List<HealthProbeRecord> records, string? expectedKey, CancellationToken token, string? expectedApiVersion = null, string? expectedRequestTarget = null)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string raw = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    if (String.IsNullOrWhiteSpace(raw)) continue;
+
+                    int lineEnd = raw.IndexOf("\r\n", StringComparison.Ordinal);
+                    string requestLine = lineEnd >= 0 ? raw.Substring(0, lineEnd) : raw;
+                    lock (records)
+                    {
+                        records.Add(new HealthProbeRecord { RequestLine = requestLine, Raw = raw });
+                    }
+
+                    bool authorized = String.IsNullOrWhiteSpace(expectedKey)
+                        || raw.Contains("Authorization: Bearer " + expectedKey, StringComparison.Ordinal)
+                        || raw.Contains("x-api-key: " + expectedKey, StringComparison.Ordinal)
+                        || raw.Contains("x-goog-api-key: " + expectedKey, StringComparison.Ordinal)
+                        || raw.Contains("api-key: " + expectedKey, StringComparison.Ordinal);
+
+                    if (expectedRequestTarget != null && !requestLine.Contains(" " + expectedRequestTarget + " HTTP/1.1", StringComparison.Ordinal))
+                        await WriteHttpResponseAsync(stream, "{\"error\":\"invalid request target\"}", token, 400, "Bad Request").ConfigureAwait(false);
+                    else if (expectedApiVersion != null && !requestLine.Contains("?api-version=" + expectedApiVersion + " ", StringComparison.Ordinal))
+                        await WriteHttpResponseAsync(stream, "{\"error\":\"invalid API version\"}", token, 400, "Bad Request").ConfigureAwait(false);
+                    else if (authorized) await WriteHttpResponseAsync(stream, "{\"data\":[]}", token).ConfigureAwait(false);
+                    else await WriteHttpResponseAsync(stream, "{\"error\":\"unauthorized\"}", token, 401, "Unauthorized").ConfigureAwait(false);
+                }
+            }
+            catch (Exception)
+            {
             }
         }
 
