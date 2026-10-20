@@ -514,10 +514,12 @@ namespace Wilson.Core.Services
             string method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? "HEAD" : "GET";
             // Include the resolved authentication scheme, not just the API type, so two runners that
             // share a URL but authenticate differently are never collapsed into one probe.
+            // Use the final request URL so provider-required queries (Azure API versions) also
+            // distinguish probes whose responses can differ.
             string auth = runner.HealthCheckUseAuth
                 ? "auth:" + ApiTypes.Describe(runner.ApiType).DefaultHealthCheckAuthScheme
                 : "anon";
-            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + auth + "|" + NormalizeUrl(ModelRunnerSettings.ResolveHealthCheckUrl(runner));
+            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + auth + "|" + NormalizeUrl(ModelRunnerSettings.BuildHealthCheckRequestUrl(runner));
         }
 
         private static string NormalizeUrl(string url)

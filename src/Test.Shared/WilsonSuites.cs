@@ -89,6 +89,7 @@ namespace Test.Shared
                         CreateSyncCase("health-check-provider-defaults-coverage", "Health check provider defaults coverage", HealthCheckProviderDefaultsCoverage),
                         CreateAsyncCase("health-check-provider-auth-headers", "Health check provider auth headers", HealthCheckProviderAuthHeadersAsync),
                         CreateAsyncCase("health-check-invalid-url-no-send", "Health check invalid URL sends nothing", HealthCheckInvalidUrlSendsNothingAsync),
+                        CreateAsyncCase("health-check-azure-version-isolation", "Azure health check version isolation", HealthCheckAzureVersionIsolationAsync),
                         CreateAsyncCase("health-check-relative-path-url", "Health check relative path URL", HealthCheckRelativePathUrlAsync),
                         CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
                         CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
@@ -4431,6 +4432,64 @@ namespace Test.Shared
             if (connected) throw new InvalidOperationException("Expected no HTTP connection for an invalid health URL.");
         }
 
+        private static async Task HealthCheckAzureVersionIsolationAsync()
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            int port = GetFreePort();
+            List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            Task server = RunFakeProviderHealthServerAsync(listener, records, "valid-key", cts.Token, "2024-10-21");
+            Settings settings = new Settings();
+            foreach (string version in new[] { "2024-10-21", "invalid" })
+            {
+                ModelRunnerSettings runner = CreateHealthProbeRunner("AzureOpenAI", "127.0.0.1", port, "valid-key");
+                runner.Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                runner.Id = "azure-" + version;
+                runner.ApiVersion = version;
+                runner.HealthCheckEnabled = true;
+                runner.HealthCheckUseAuth = true;
+                runner.HealthCheckIntervalMs = 60000;
+                runner.HealthCheckTimeoutMs = 5000;
+                runner.HealthyThreshold = 1;
+                runner.UnhealthyThreshold = 1;
+                settings.ModelRunners.Add(runner);
+            }
+
+            using ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings);
+            try
+            {
+                healthChecks.Start(cts.Token);
+                DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (settings.ModelRunners.All(runner => healthChecks.GetHealthStatus(runner.Id)?.LastCheckUtc.HasValue == true)) break;
+                    await Task.Delay(25, cts.Token).ConfigureAwait(false);
+                }
+
+                EndpointHealthStatus? valid = healthChecks.GetHealthStatus("azure-2024-10-21");
+                EndpointHealthStatus? invalid = healthChecks.GetHealthStatus("azure-invalid");
+                if (valid?.LastCheckUtc == null || !valid.IsHealthy)
+                    throw new InvalidOperationException("Expected the valid Azure API version to be healthy.");
+                if (invalid?.LastCheckUtc == null || invalid.IsHealthy || invalid.LastError?.Contains("400", StringComparison.Ordinal) != true)
+                    throw new InvalidOperationException("Expected the invalid Azure API version to fail independently with HTTP 400.");
+            }
+            finally
+            {
+                await healthChecks.StopAsync().ConfigureAwait(false);
+                cts.Cancel();
+                await IgnoreCancellationAsync(server).ConfigureAwait(false);
+                listener.Stop();
+            }
+
+            foreach (string version in new[] { "2024-10-21", "invalid" })
+            {
+                HealthProbeRecord[] matching = records.Where(record => record.RequestLine == "GET /openai/models?api-version=" + version + " HTTP/1.1").ToArray();
+                if (matching.Length != 1 || !matching[0].Raw.Contains("api-key: valid-key", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected one authenticated Azure health request for API version " + version + ".");
+            }
+        }
+
         private static async Task HealthCheckRelativePathUrlAsync()
         {
             // Regression: a leading-slash health path such as '/api/tags' is an endpoint-relative
@@ -4587,7 +4646,7 @@ namespace Test.Shared
             public string Raw { get; set; } = String.Empty;
         }
 
-        private static async Task RunFakeProviderHealthServerAsync(TcpListener listener, List<HealthProbeRecord> records, string? expectedKey, CancellationToken token)
+        private static async Task RunFakeProviderHealthServerAsync(TcpListener listener, List<HealthProbeRecord> records, string? expectedKey, CancellationToken token, string? expectedApiVersion = null)
         {
             try
             {
@@ -4611,7 +4670,9 @@ namespace Test.Shared
                         || raw.Contains("x-goog-api-key: " + expectedKey, StringComparison.Ordinal)
                         || raw.Contains("api-key: " + expectedKey, StringComparison.Ordinal);
 
-                    if (authorized) await WriteHttpResponseAsync(stream, "{\"data\":[]}", token).ConfigureAwait(false);
+                    if (expectedApiVersion != null && !requestLine.Contains("?api-version=" + expectedApiVersion + " ", StringComparison.Ordinal))
+                        await WriteHttpResponseAsync(stream, "{\"error\":\"invalid API version\"}", token, 400, "Bad Request").ConfigureAwait(false);
+                    else if (authorized) await WriteHttpResponseAsync(stream, "{\"data\":[]}", token).ConfigureAwait(false);
                     else await WriteHttpResponseAsync(stream, "{\"error\":\"unauthorized\"}", token, 401, "Unauthorized").ConfigureAwait(false);
                 }
             }
