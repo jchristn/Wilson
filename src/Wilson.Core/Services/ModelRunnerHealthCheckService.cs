@@ -261,12 +261,24 @@ namespace Wilson.Core.Services
         private async Task<HealthCheckResult> PerformCheckInnerAsync(ModelRunnerSettings runner, CancellationToken token)
         {
             string url = ResolveHealthCheckUrl(runner);
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? probe)
+                || (probe.Scheme != Uri.UriSchemeHttp && probe.Scheme != Uri.UriSchemeHttps))
+                return new HealthCheckResult { Success = false, ErrorMessage = "Health checks require an absolute HTTP or HTTPS URL. Configure healthCheckUrl or disable health checks." };
             HttpMethod method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? HttpMethod.Head : HttpMethod.Get;
 
             using HttpRequestMessage request = new HttpRequestMessage(method, url);
             if (runner.HealthCheckUseAuth && !String.IsNullOrWhiteSpace(runner.ApiKey))
             {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", runner.ApiKey);
+                if (String.Equals(runner.ApiType, ApiTypes.Anthropic, StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Headers.TryAddWithoutValidation("x-api-key", runner.ApiKey);
+                    request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+                }
+                else if (String.Equals(runner.ApiType, ApiTypes.Gemini, StringComparison.OrdinalIgnoreCase))
+                    request.Headers.TryAddWithoutValidation("x-goog-api-key", runner.ApiKey);
+                else if (String.Equals(runner.ApiType, ApiTypes.AzureOpenAI, StringComparison.OrdinalIgnoreCase))
+                    request.Headers.TryAddWithoutValidation("api-key", runner.ApiKey);
+                else request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", runner.ApiKey);
             }
 
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -413,6 +425,10 @@ namespace Wilson.Core.Services
                 ApiType = runner.ApiType,
                 Endpoint = runner.Endpoint,
                 ApiKey = runner.ApiKey,
+                Deployment = runner.Deployment,
+                ApiVersion = runner.ApiVersion,
+                Region = runner.Region,
+                ProjectId = runner.ProjectId,
                 Models = new List<string>(runner.Models ?? new List<string>()),
                 ContextWindowTokens = runner.ContextWindowTokens,
                 ToolsEnabled = runner.ToolsEnabled,

@@ -56,6 +56,16 @@ namespace Wilson.Sdk
             return SendAsync<List<EndpointHealthStatus>>(HttpMethod.Get, "/v1.0/api/model-runners/health", null, token);
         }
 
+        /// <summary>
+        /// List the model server API types Wilson supports through PolyPrompt.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>API type descriptors.</returns>
+        public Task<List<ApiTypeDescriptor>> GetApiTypesAsync(CancellationToken token = default)
+        {
+            return SendAsync<List<ApiTypeDescriptor>>(HttpMethod.Get, "/v1.0/api/api-types", null, token);
+        }
+
         public Task<EndpointHealthStatus> GetModelRunnerHealthAsync(string runnerId, CancellationToken token = default)
         {
             if (String.IsNullOrWhiteSpace(runnerId)) throw new ArgumentException("Runner ID is required.", nameof(runnerId));

@@ -603,6 +603,22 @@ namespace Wilson.Core.Models
         public string Name { get; set; } = String.Empty;
         /// <summary>API type.</summary>
         public string ApiType { get; set; } = String.Empty;
+        /// <summary>Whether the API type is a cataloged Wilson provider.</summary>
+        public bool ApiTypeSupported { get; set; } = true;
+        /// <summary>Whether the API type can serve chat completions.</summary>
+        public bool SupportsChatCompletions { get; set; } = true;
+        /// <summary>Whether the API type can serve embedding requests.</summary>
+        public bool SupportsEmbeddings { get; set; } = true;
+        /// <summary>Whether the API type can enumerate models.</summary>
+        public bool SupportsModelListing { get; set; } = true;
+        /// <summary>Azure OpenAI deployment name, when configured.</summary>
+        public string? Deployment { get; set; }
+        /// <summary>Provider API version, when configured.</summary>
+        public string? ApiVersion { get; set; }
+        /// <summary>Cloud region for region-scoped providers, when configured.</summary>
+        public string? Region { get; set; }
+        /// <summary>Google Cloud project id for Vertex AI, when configured.</summary>
+        public string? ProjectId { get; set; }
         /// <summary>Endpoint URL.</summary>
         public string Endpoint { get; set; } = String.Empty;
         /// <summary>Configured model list from settings.</summary>

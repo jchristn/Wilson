@@ -1,6 +1,6 @@
 # Wilson — a chat server that does not phone home
 
-**Wilson** is a local-first chat server and dashboard for talking to Ollama, OpenAI, and OpenAI-compatible model runners. It gives you a browser dashboard, a REST API, tenant-aware users and credentials, conversation storage, request history, feedback capture, model-directed tools, and background model-runner health checks — all running on infrastructure you control.
+**Wilson** is a local-first chat server and dashboard for talking to Ollama, Ollama Cloud, OpenAI, Azure OpenAI, Anthropic, Google Gemini, Vertex AI, AWS Bedrock, Cohere, xAI, and OpenAI-compatible model runners, plus embeddings through TEI and VoyageAI. It gives you a browser dashboard, a REST API, tenant-aware users and credentials, conversation storage, request history, feedback capture, model-directed tools, and background model-runner health checks — all running on infrastructure you control.
 
 No signal. No noise. No rescue ships. Just Wilson, your local model, and a chat window that does not need to reach the outside world.
 
@@ -18,7 +18,7 @@ Wilson fits three kinds of people, and the same server serves all of them.
 
 ## What it does
 
-Wilson chats with local Ollama models or OpenAI-compatible APIs and streams the responses as they arrive. It keeps conversation history, manages several configured model servers at once, and probes each one in the background with healthy/unhealthy thresholds and recent history. From the dashboard you can pull and load Ollama models, see which models are available and loaded, and switch runners mid-conversation.
+Wilson chats with local Ollama models, hosted providers, or OpenAI-compatible APIs and streams the responses as they arrive. It keeps conversation history, manages several configured model servers at once, and probes each one in the background with healthy/unhealthy thresholds and recent history. From the dashboard you can pull and load Ollama models, see which models are available and loaded, and switch runners mid-conversation.
 
 The parts that matter for operators sit close to the surface. Every request is captured with status, latency, time-to-first-token, and token estimates. Thumbs-up and thumbs-down feedback, with optional comments, is stored against the message that earned it. When you enable tools, the model can read and write files, run processes, retrieve and search the web, and call external MCP servers — each execution approval-gated where it matters, with raw arguments and output redacted before anything is persisted or returned. Prompt templates are tenant-scoped database records, seeded with a sensible default system prompt and tool prompt for every tenant.
 
@@ -28,7 +28,8 @@ The parts that matter for operators sit close to the surface. Every request is c
 Browser dashboard ─┐
 REST / SDK client ─┼─► Wilson backend (Watson 7.1, C# / .NET 10)
 MCP-aware client  ─┘        │
-                            ├─ Inference (PolyPrompt) ─► Ollama / OpenAI-compatible runners
+                            ├─ Inference (PolyPrompt) ─► Ollama, OpenAI, Azure, Anthropic,
+                            │     Gemini, Vertex, Bedrock, Cohere, xAI, TEI, VoyageAI
                             ├─ Agentic tool loop ─► built-in tools + MCP servers
                             ├─ Storage ─► SQLite or PostgreSQL
                             └─ Telemetry (Radiant/OTLP) ─► Collector ─► Prometheus / Tempo / Loki ─► Grafana

@@ -14,6 +14,30 @@ namespace Wilson.Sdk.Models
         [JsonPropertyName("apiType")]
         public string ApiType { get; set; } = string.Empty;
 
+        [JsonPropertyName("apiTypeSupported")]
+        public bool ApiTypeSupported { get; set; } = true;
+
+        [JsonPropertyName("supportsChatCompletions")]
+        public bool SupportsChatCompletions { get; set; } = true;
+
+        [JsonPropertyName("supportsEmbeddings")]
+        public bool SupportsEmbeddings { get; set; } = true;
+
+        [JsonPropertyName("supportsModelListing")]
+        public bool SupportsModelListing { get; set; } = true;
+
+        [JsonPropertyName("deployment")]
+        public string? Deployment { get; set; }
+
+        [JsonPropertyName("apiVersion")]
+        public string? ApiVersion { get; set; }
+
+        [JsonPropertyName("region")]
+        public string? Region { get; set; }
+
+        [JsonPropertyName("projectId")]
+        public string? ProjectId { get; set; }
+
         [JsonPropertyName("endpoint")]
         public string Endpoint { get; set; } = string.Empty;
 

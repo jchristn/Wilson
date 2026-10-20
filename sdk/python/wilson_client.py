@@ -61,6 +61,9 @@ class WilsonClient:
     def model_runner_health(self) -> list[dict[str, Any]]:
         return self.request("GET", "/v1.0/api/model-runners/health")
 
+    def api_types(self) -> list[dict[str, Any]]:
+        return self.request("GET", "/v1.0/api/api-types")
+
     def model_runner_health_by_id(self, runner_id: str) -> dict[str, Any]:
         return self.request("GET", f"/v1.0/api/model-runners/{quote(runner_id, safe='')}/health")
 
