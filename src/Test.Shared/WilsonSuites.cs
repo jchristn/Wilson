@@ -89,6 +89,7 @@ namespace Test.Shared
                         CreateSyncCase("health-check-provider-defaults-coverage", "Health check provider defaults coverage", HealthCheckProviderDefaultsCoverage),
                         CreateAsyncCase("health-check-provider-auth-headers", "Health check provider auth headers", HealthCheckProviderAuthHeadersAsync),
                         CreateAsyncCase("health-check-invalid-url-no-send", "Health check invalid URL sends nothing", HealthCheckInvalidUrlSendsNothingAsync),
+                        CreateAsyncCase("health-check-relative-path-url", "Health check relative path URL", HealthCheckRelativePathUrlAsync),
                         CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
                         CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
                     })
@@ -4413,6 +4414,120 @@ namespace Test.Shared
             await IgnoreCancellationAsync(watch).ConfigureAwait(false);
             listener.Stop();
             if (connected) throw new InvalidOperationException("Expected no HTTP connection for an invalid health URL.");
+        }
+
+        private static async Task HealthCheckRelativePathUrlAsync()
+        {
+            // Regression: a leading-slash health path such as '/api/tags' is an endpoint-relative
+            // path, but .NET parses it as an absolute 'file' URI. Resolution must append it to the
+            // endpoint instead of rejecting it, normalization must keep checks enabled, and the real
+            // service must send a probe to the joined URL.
+            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            int port = GetFreePort();
+            List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            Task server = RunFakeProviderHealthServerAsync(listener, records, "valid-key", cts.Token);
+
+            string endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach (string relativePath in new[] { "/api/tags", "/health", "health/status" })
+            {
+                ModelRunnerSettings runner = new ModelRunnerSettings
+                {
+                    Id = "relative-path-" + relativePath.Replace('/', '-'),
+                    Name = "Relative Path",
+                    ApiType = "Ollama",
+                    Endpoint = endpoint,
+                    ApiKey = "valid-key",
+                    HealthCheckUrl = relativePath,
+                    HealthCheckEnabled = true,
+                    HealthCheckUseAuth = true
+                };
+
+                string expected = relativePath.StartsWith("/", StringComparison.Ordinal) ? endpoint + relativePath : endpoint + "/" + relativePath;
+                string resolved = ModelRunnerSettings.ResolveHealthCheckUrl(runner);
+                if (!String.Equals(resolved, expected, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected the relative health path '" + relativePath + "' to resolve to '" + expected + "', got '" + (resolved ?? "null") + "'.");
+
+                ModelRunnerSettings normalizedRunner = new ModelRunnerSettings
+                {
+                    Id = runner.Id,
+                    Name = runner.Name,
+                    ApiType = runner.ApiType,
+                    Endpoint = runner.Endpoint,
+                    ApiKey = runner.ApiKey,
+                    HealthCheckUrl = relativePath,
+                    HealthCheckEnabled = true,
+                    HealthCheckUseAuth = true
+                };
+                ModelRunnerSettings.ApplyHealthCheckDefaults(normalizedRunner);
+                if (!normalizedRunner.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected health checks to stay enabled for the relative health path '" + relativePath + "'.");
+                if (!String.Equals(normalizedRunner.HealthCheckUrl, expected, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected normalization to persist '" + expected + "' for the relative health path '" + relativePath + "', got '" + (normalizedRunner.HealthCheckUrl ?? "null") + "'.");
+                if (ModelRunnerSettings.DescribeHealthCheckUrlProblem(normalizedRunner) != null)
+                    throw new InvalidOperationException("Expected no health URL problem for the relative health path '" + relativePath + "'.");
+            }
+
+            // Drive the real service against local HTTP with a leading-slash path and confirm the
+            // request lands on the joined URL rather than being rejected before the send.
+            ModelRunnerSettings probeRunner = new ModelRunnerSettings
+            {
+                Id = "relative-path-probe",
+                Name = "Relative Path Probe",
+                ApiType = "Ollama",
+                Endpoint = endpoint,
+                ApiKey = "valid-key",
+                HealthCheckUrl = "/api/tags",
+                HealthCheckEnabled = true,
+                HealthCheckUseAuth = true,
+                HealthCheckIntervalMs = 25,
+                HealthCheckTimeoutMs = 5000,
+                HealthyThreshold = 1,
+                UnhealthyThreshold = 1
+            };
+
+            EndpointHealthStatus status = await ProbeHealthOnceAsync(probeRunner, true, cts.Token).ConfigureAwait(false);
+            cts.Cancel();
+            await IgnoreCancellationAsync(server).ConfigureAwait(false);
+            listener.Stop();
+
+            if (!status.IsHealthy)
+                throw new InvalidOperationException("Expected the relative health path probe to succeed over local HTTP, error: " + (status.LastError ?? "none"));
+            if (records.Count == 0)
+                throw new InvalidOperationException("Expected the relative health path to send a health probe request.");
+            string requestTarget = records[0].RequestLine.Split(' ')[1];
+            if (!String.Equals(requestTarget, "/api/tags", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the relative health path probe to hit '/api/tags', got: " + requestTarget);
+
+            // Explicit non-HTTP schemes are still rejected instead of being appended to the endpoint.
+            foreach (string explicitScheme in new[] { "file:///tmp/probe", "ftp://example.com/tags", "unix:///var/run/probe" })
+            {
+                ModelRunnerSettings rejected = new ModelRunnerSettings
+                {
+                    Id = "explicit-scheme",
+                    ApiType = "Ollama",
+                    Endpoint = "http://localhost:11434",
+                    HealthCheckUrl = explicitScheme,
+                    HealthCheckEnabled = true
+                };
+                if (!String.IsNullOrWhiteSpace(ModelRunnerSettings.ResolveHealthCheckUrl(rejected)))
+                    throw new InvalidOperationException("Expected the non-HTTP health URL '" + explicitScheme + "' to be rejected.");
+                if (!ModelRunnerSettings.IsExplicitNonHttpUrl(explicitScheme))
+                    throw new InvalidOperationException("Expected '" + explicitScheme + "' to be recognized as an explicit non-HTTP scheme.");
+                ModelRunnerSettings.ApplyHealthCheckDefaults(rejected);
+                if (rejected.HealthCheckEnabled)
+                    throw new InvalidOperationException("Expected '" + explicitScheme + "' to leave health checks disabled.");
+                string? problem = ModelRunnerSettings.DescribeHealthCheckUrlProblem(rejected);
+                if (String.IsNullOrWhiteSpace(problem) || !problem!.Contains("http or https", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an actionable error for '" + explicitScheme + "', got: " + (problem ?? "none"));
+            }
+
+            // A leading-slash path is never mistaken for an explicit scheme.
+            if (ModelRunnerSettings.IsExplicitNonHttpUrl("/api/tags"))
+                throw new InvalidOperationException("Expected '/api/tags' to be treated as an endpoint-relative path, not an explicit scheme.");
+            if (ModelRunnerSettings.IsExplicitNonHttpUrl("health/status"))
+                throw new InvalidOperationException("Expected 'health/status' to be treated as an endpoint-relative path, not an explicit scheme.");
         }
 
         private static async Task<EndpointHealthStatus> ProbeHealthOnceAsync(ModelRunnerSettings runner, bool expectSuccess, CancellationToken token)

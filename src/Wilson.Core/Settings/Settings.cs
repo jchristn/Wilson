@@ -411,6 +411,32 @@ namespace Wilson.Core.Settings
         }
 
         /// <summary>
+        /// Whether a configured health check value is an explicitly supplied absolute URL with a
+        /// non-HTTP scheme, such as <c>file:///tmp/probe</c> or <c>ftp://example.com/tags</c>. Such a
+        /// value is a configuration mistake and is rejected rather than concatenated onto the
+        /// endpoint. Endpoint-relative paths are NOT rejected: .NET parses <c>/api/tags</c> as an
+        /// absolute <c>file</c> URI, so the check has to distinguish a real scheme from a leading
+        /// slash path the operator meant to append to the endpoint.
+        /// </summary>
+        /// <param name="value">Candidate health check value.</param>
+        /// <returns>True when the value is an absolute URL with a scheme other than http or https.</returns>
+        public static bool IsExplicitNonHttpUrl(string? value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return false;
+            string trimmed = value.Trim();
+
+            // A leading slash is always an endpoint-relative path, never an explicit scheme, even
+            // though Uri.TryCreate reports it as an absolute file URI.
+            if (trimmed.StartsWith("/", StringComparison.Ordinal)) return false;
+            if (trimmed.StartsWith("\\", StringComparison.Ordinal)) return false;
+
+            if (!Uri.TryCreate(trimmed, UriKind.RelativeOrAbsolute, out Uri? uri)) return false;
+            if (!uri.IsAbsoluteUri) return false;
+            return !String.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                && !String.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Resolve the absolute health probe URL for a runner, deriving it from the provider catalog
         /// defaults and endpoint when no absolute URL is configured. Returns an empty string when no
         /// absolute HTTP(S) URL can be produced, which callers must treat as "do not probe".
@@ -431,9 +457,12 @@ namespace Wilson.Core.Settings
             }
             else
             {
-                // A configured value that parses as an absolute URL but is not http(s) is a mistake the
-                // operator has to fix; concatenating it onto the endpoint would build a nonsense URL.
-                if (Uri.TryCreate(configured, UriKind.Absolute, out _)) return String.Empty;
+                // A configured value that is an explicitly supplied absolute URL with a non-http(s)
+                // scheme is a mistake the operator has to fix; concatenating it onto the endpoint
+                // would build a nonsense URL. Endpoint-relative paths such as '/api/tags' are NOT
+                // rejected here: .NET reports those as absolute 'file' URIs, but they are meant to be
+                // appended to the endpoint and are handled as paths below.
+                if (IsExplicitNonHttpUrl(configured)) return String.Empty;
 
                 // A provider with no usable health route (AWS Bedrock signs SDK calls, Vertex AI
                 // derives a regional resource URL, VoyageAI has no models route) must never get a
@@ -491,7 +520,7 @@ namespace Wilson.Core.Settings
             string configured = (runner.HealthCheckUrl ?? String.Empty).Trim();
             string endpoint = (runner.Endpoint ?? String.Empty).Trim();
 
-            if (!String.IsNullOrWhiteSpace(configured) && !IsAbsoluteHttpUrl(configured) && Uri.TryCreate(configured, UriKind.Absolute, out _))
+            if (IsExplicitNonHttpUrl(configured))
             {
                 return "health check URL '" + configured + "' must use the http or https scheme; no probe was sent";
             }

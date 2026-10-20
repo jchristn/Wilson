@@ -154,7 +154,7 @@ Important sections:
 Each `modelRunners` entry supports endpoint health checks:
 
 - `healthCheckEnabled`: enables background probing. Defaults to off for providers that expose no health or model-list route Wilson can call (Google Vertex AI, AWS Bedrock, VoyageAI) and for any runner whose endpoint is not an absolute HTTP(S) URL, because Wilson never sends a probe to an empty or relative URL. Supplying an absolute `healthCheckUrl` re-enables probing for those providers.
-- `healthCheckUrl`: absolute URL or endpoint path; defaults to the provider catalog health path (`/api/tags` for Ollama and Ollama Cloud, `/v1/models` for OpenAI, Anthropic, xAI, and Cohere, `/v1beta/models` for Gemini, `/openai/models` for Azure OpenAI, `/info` for Text Embeddings Inference). An explicitly configured absolute HTTP(S) URL is always preserved. A value with a non-HTTP scheme is rejected and checks stay off.
+- `healthCheckUrl`: absolute URL or endpoint path; defaults to the provider catalog health path (`/api/tags` for Ollama and Ollama Cloud, `/v1/models` for OpenAI, Anthropic, xAI, and Cohere, `/v1beta/models` for Gemini, `/openai/models` for Azure OpenAI, `/info` for Text Embeddings Inference). An explicitly configured absolute HTTP(S) URL is always preserved. A leading-slash value such as `/api/tags` is an endpoint-relative path and is joined onto the endpoint, so custom probe paths keep working. A value that is an explicitly supplied absolute URL with a non-HTTP scheme, such as `file:///tmp/probe` or `ftp://example.com/tags`, is rejected and checks stay off.
 - `healthCheckMethod`: `GET` or `HEAD`
 - `healthCheckIntervalMs`, `healthCheckTimeoutMs`
 - `healthCheckExpectedStatusCode`

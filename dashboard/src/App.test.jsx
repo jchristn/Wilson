@@ -225,6 +225,30 @@ describe('apiTypes catalog', () => {
     expect(resolveHealthCheckUrl('Ollama', 'localhost:11434', '', '')).toBe('');
     // A non-http(s) absolute URL is rejected instead of being concatenated onto the endpoint.
     expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'ftp://example.com/tags')).toBe('');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'file:///tmp/probe')).toBe('');
+  });
+
+  it('joins endpoint-relative health paths the same way the server does', () => {
+    // Regression: a leading-slash path is an endpoint-relative path, not an absolute URL. .NET
+    // parses '/api/tags' as an absolute file URI, and the server rejected those until it learned to
+    // distinguish a real scheme from a path. The dashboard must produce the joined URL, and the
+    // default settings for a leading-slash path must stay enabled.
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', '/api/tags'))
+      .toBe('http://localhost:11434/api/tags');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', '/health'))
+      .toBe('http://localhost:11434/health');
+    expect(resolveHealthCheckUrl('Ollama', 'http://localhost:11434', 'health/status'))
+      .toBe('http://localhost:11434/health/status');
+    expect(buildHealthCheckRequestUrl('Ollama', 'http://localhost:11434', '/api/tags'))
+      .toBe('http://localhost:11434/api/tags');
+
+    // A leading-slash path must not disable checks or raise a validation error.
+    expect(validateRunnerDraft({ id: 'rel', apiType: 'Ollama', endpoint: 'http://localhost:11434', healthCheckEnabled: true, healthCheckUrl: '/api/tags' }))
+      .toEqual([]);
+
+    // Explicit non-HTTP schemes are still rejected.
+    expect(validateRunnerDraft({ id: 'ftp', apiType: 'Ollama', endpoint: 'http://localhost:11434', healthCheckEnabled: true, healthCheckUrl: 'file:///tmp/probe' }))
+      .toContain('Ollama health checks need an absolute http or https health URL; set the endpoint or the health URL, or disable health checks.');
   });
 
   it('reports an actionable health error before save when no probe URL can be resolved', () => {
