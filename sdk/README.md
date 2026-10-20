@@ -8,7 +8,7 @@ Wilson includes small first-party SDK surfaces for common API automation:
 
 All SDKs are versioned `0.1.1`, matching Wilson `0.1.1` (C# `<Version>`, JavaScript `package.json`, Python `wilson_client.__version__`).
 
-Each SDK exposes authentication, model-server enumeration, model-server API type discovery, model-server health, prompt templates, and read APIs for Wilson tool metadata:
+Each SDK exposes authentication, model-server enumeration, model-server health, prompt templates, and read APIs for Wilson tool metadata:
 
 - `POST /v1.0/api/chat`
 - `GET /v1.0/api/prompts`
@@ -18,7 +18,6 @@ Each SDK exposes authentication, model-server enumeration, model-server API type
 - `DELETE /v1.0/api/prompts/{id}`
 - `POST /v1.0/api/prompts/{id}/default`
 - `GET /v1.0/api/model-runners`
-- `GET /v1.0/api/api-types`
 - `GET /v1.0/api/model-runners/health`
 - `GET /v1.0/api/model-runners/{id}/health`
 - `GET /v1.0/api/tools`
@@ -36,7 +35,3 @@ Chat requests can pass `systemPromptId` and `toolPromptId` along with visible pr
 Tool-call records are redacted summaries intended for chat history, audit review, and operations dashboards. Normal SDK responses do not expose raw model arguments, raw tool output, or provider request identifiers from chat traces.
 
 Tool diagnostics calls are admin-only. They validate draft settings without saving them and can test runner readiness before admins expose tools to chat users.
-
-`GET /v1.0/api/api-types` returns the model server API types Wilson supports through PolyPrompt: `Ollama`, `OllamaCloud`, `OpenAI`, `OpenAICompatible`, `AzureOpenAI`, `Anthropic`, `Gemini`, `VertexAI`, `Bedrock`, `Cohere`, `XAI`, `TEI`, and `VoyageAI`. Each descriptor includes the default endpoint, default health path, and capability flags so SDK consumers can build configuration forms without hard-coding provider knowledge.
-
-Model runner responses also report `apiTypeSupported`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `deployment`, `apiVersion`, `region`, and `projectId`.

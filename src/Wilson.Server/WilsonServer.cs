@@ -195,7 +195,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             foreach (ModelRunnerSettings runner in settings.ModelRunners)
             {
                 runner.Models ??= new List<string>();
-                NormalizeModelRunner(runner);
                 ModelRunnerSettings.ApplyHealthCheckDefaults(runner);
             }
 
@@ -205,29 +204,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             if (!String.Equals(settings.Telemetry.OtlpProtocol, "httpprotobuf", StringComparison.OrdinalIgnoreCase)) settings.Telemetry.OtlpProtocol = "grpc";
             settings.Telemetry.TracesSamplingRatio = Math.Clamp(settings.Telemetry.TracesSamplingRatio, 0.0, 1.0);
             if (settings.Telemetry.PrometheusScrapePort <= 0 || settings.Telemetry.PrometheusScrapePort > 65535) settings.Telemetry.PrometheusScrapePort = 9464;
-        }
-
-        /// <summary>
-        /// Normalize one model runner's API type, provider fields, and endpoint.
-        /// Unsupported API types are preserved so configuration is never silently rewritten.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        private static void NormalizeModelRunner(ModelRunnerSettings runner)
-        {
-            runner.ApiType = (runner.ApiType ?? String.Empty).Trim();
-            if (String.IsNullOrWhiteSpace(runner.ApiType)) runner.ApiType = ApiTypes.Default;
-
-            ApiTypeDescriptor? descriptor = ApiTypes.Describe(runner.ApiType);
-            runner.Deployment = runner.Deployment?.Trim();
-            runner.ApiVersion = runner.ApiVersion?.Trim();
-            runner.Region = runner.Region?.Trim();
-            runner.ProjectId = runner.ProjectId?.Trim();
-            runner.Endpoint = (runner.Endpoint ?? String.Empty).Trim();
-
-            if (descriptor != null && String.IsNullOrWhiteSpace(runner.Endpoint) && !String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint))
-            {
-                runner.Endpoint = descriptor.DefaultEndpoint;
-            }
         }
 
         private static void NormalizeTools(ToolsSettings tools, bool applyWorkspaceDefaults = false)
@@ -517,12 +493,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 List<ModelRunnerStatus> statuses = await Inference.GetRunnerStatusesAsync(includeLiveStatus, ctx.Token).ConfigureAwait(false);
                 AttachHealth(statuses);
                 await SendJsonAsync(ctx, Enumerate(statuses, Enumeration(ctx))).ConfigureAwait(false);
-                return;
-            }
-
-            if (path == "/v1.0/api/api-types" && method == "GET")
-            {
-                await SendJsonAsync(ctx, ApiTypes.DescribeAll()).ConfigureAwait(false);
                 return;
             }
 
@@ -1518,10 +1488,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ApiType = runner.ApiType,
                 Endpoint = runner.Endpoint,
                 ApiKey = runner.ApiKey,
-                Deployment = runner.Deployment,
-                ApiVersion = runner.ApiVersion,
-                Region = runner.Region,
-                ProjectId = runner.ProjectId,
                 Models = new List<string>(runner.Models),
                 ContextWindowTokens = runner.ContextWindowTokens,
                 ToolsEnabled = runner.ToolsEnabled,
@@ -1740,10 +1706,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                 ApiType = source.ApiType,
                 Endpoint = source.Endpoint,
                 ApiKey = source.ApiKey,
-                Deployment = source.Deployment,
-                ApiVersion = source.ApiVersion,
-                Region = source.Region,
-                ProjectId = source.ProjectId,
                 Models = new List<string>(source.Models),
                 ContextWindowTokens = source.ContextWindowTokens,
                 ToolsEnabled = source.ToolsEnabled,
@@ -2191,7 +2153,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
                     { "/v1.0/auth/token", Path(Operation("post", "authenticateWithAccessKey", "Authentication", "Authenticate with an access key", "Validates a Wilson access key and returns the bearer token plus principal metadata.", "AuthTokenResponse", false, requestSchema: "AuthTokenRequest")) },
                     { "/v1.0/api/me", Path(Operation("get", "getCurrentPrincipal", "Authentication", "Current principal", "Returns the authenticated user or administrator represented by the bearer token.", "RequestContext", true)) },
                     { "/v1.0/api/model-runners", Path(Operation("get", "listModelRunners", "Model Runners", "List model runners", "Lists configured model runners with model inventory and health metadata.", "ModelRunnerStatusEnumeration", true, parameters: WithPagination(QueryParameter("includeLiveStatus", "When false, skips live upstream model inventory refreshes.", BooleanSchema())))) },
-                    { "/v1.0/api/api-types", Path(Operation("get", "listApiTypes", "Model Runners", "List model server API types", "Lists the model server API types Wilson supports through PolyPrompt, including default endpoints, health paths, and capability flags.", "ApiTypeDescriptorArray", true)) },
                     { "/v1.0/api/model-runners/health", Path(Operation("get", "listModelRunnerHealth", "Model Runners", "List model runner health", "Lists the latest health status for all model runners with health checks enabled.", "EndpointHealthStatusArray", true)) },
                     { "/v1.0/api/model-runners/{id}/health", Path(Operation("get", "getModelRunnerHealth", "Model Runners", "Get model runner health", "Returns the latest health status for one model runner.", "EndpointHealthStatus", true, parameters: Parameters(PathParameter("id", "Model runner identifier.")))) },
                     { "/v1.0/api/model-runners/{id}/pull", Path(Operation("post", "pullOllamaModel", "Model Runners", "Pull an Ollama model", "Starts an Ollama model pull for the selected model runner. Requires a global administrator bearer token.", "ModelPullResult", true, parameters: Parameters(PathParameter("id", "Model runner identifier.")), requestSchema: "ModelPullRequest")) },
@@ -2469,7 +2430,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
 
             AddComponentSchema(schemas, typeof(RequestContext));
             AddComponentSchema(schemas, typeof(ModelRunnerStatus));
-            AddComponentSchema(schemas, typeof(ApiTypeDescriptor));
             AddComponentSchema(schemas, typeof(EndpointHealthStatus));
             AddComponentSchema(schemas, typeof(ModelPullResult));
             AddComponentSchema(schemas, typeof(Settings));
@@ -2513,7 +2473,6 @@ oooo oooo    ooo oooo   888   .oooo.o  .ooooo.  ooo. .oo.
             AddComponentSchema(schemas, typeof(ToolApprovalResponse));
 
             schemas["EndpointHealthStatusArray"] = ArraySchema(SchemaRef("EndpointHealthStatus"));
-            schemas["ApiTypeDescriptorArray"] = ArraySchema(SchemaRef("ApiTypeDescriptor"));
             schemas["ToolDescriptorArray"] = ArraySchema(SchemaRef("ToolDescriptor"));
             schemas["ModelRunnerStatusEnumeration"] = EnumerationSchema("ModelRunnerStatus");
             schemas["TenantEnumeration"] = EnumerationSchema("Tenant");

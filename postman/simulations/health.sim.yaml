@@ -1,5 +1,0 @@
-simulation: wilson-health
-routing: path
-mocks:
-  - routeKey: health
-    path: ../mocks/health/config.yaml

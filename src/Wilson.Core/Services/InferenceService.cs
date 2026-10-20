@@ -10,7 +10,6 @@ namespace Wilson.Core.Services
     using System.Text.Json.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
-    using PolyPrompt.Auth;
     using PolyPrompt.Clients;
     using PolyPrompt.Models;
     using PolyPrompt.Options;
@@ -90,7 +89,7 @@ namespace Wilson.Core.Services
                 token.ThrowIfCancellationRequested();
                 ModelRunnerSettings copy = CopyRunner(runner);
 
-                if (copy.Models.Count < 1 && ModelRunnerSettings.IsOllamaApiType(copy))
+                if (copy.Models.Count < 1 && String.Equals(copy.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
@@ -139,21 +138,12 @@ namespace Wilson.Core.Services
         {
             runnerDefaults = CopyRunner(runner);
             ModelRunnerSettings.ApplyHealthCheckDefaults(runnerDefaults);
-            ApiTypeDescriptor? descriptor = ApiTypes.Describe(runner.ApiType);
             return new ModelRunnerStatus
             {
                 Id = runner.Id,
                 Name = runner.Name,
                 ApiType = runner.ApiType,
-                ApiTypeSupported = descriptor != null,
-                SupportsChatCompletions = descriptor?.SupportsChat ?? true,
-                SupportsEmbeddings = descriptor?.SupportsEmbeddings ?? true,
-                SupportsModelListing = descriptor?.SupportsModelListing ?? true,
-                Deployment = runnerDefaults.Deployment,
-                ApiVersion = runnerDefaults.ApiVersion,
-                Region = runnerDefaults.Region,
-                ProjectId = runnerDefaults.ProjectId,
-                Endpoint = ModelRunnerSettings.ResolveEndpoint(runner),
+                Endpoint = runner.Endpoint,
                 ConfiguredModels = new List<string>(runner.Models),
                 ContextWindowTokens = runner.ContextWindowTokens,
                 ToolsEnabled = runnerDefaults.ToolsEnabled,
@@ -187,7 +177,7 @@ namespace Wilson.Core.Services
         private async Task<ModelRunnerStatus> BuildLiveStatusAsync(ModelRunnerSettings runner, CancellationToken token)
         {
             ModelRunnerStatus status = CreateBaseStatus(runner, out ModelRunnerSettings runnerDefaults);
-            bool isOllama = ModelRunnerSettings.IsOllamaApiType(runner);
+            bool isOllama = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase);
 
             using CancellationTokenSource statusTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             int statusTimeoutMs = Math.Max(1000, runnerDefaults.HealthCheckTimeoutMs);
@@ -198,7 +188,7 @@ namespace Wilson.Core.Services
             try
             {
                 if (runner.Models.Count > 0) status.AvailableModels = new List<string>(runner.Models);
-                else if (status.SupportsModelListing) status.AvailableModels = await ListModelsAsync(runner, statusToken).ConfigureAwait(false);
+                else if (isOllama) status.AvailableModels = await ListModelsAsync(runner, statusToken).ConfigureAwait(false);
 
                 if (isOllama) status.LoadedModels = await ListLoadedOllamaModelsAsync(runner, statusToken).ConfigureAwait(false);
 
@@ -232,7 +222,7 @@ namespace Wilson.Core.Services
             status.ChatModels = classification.ChatModels;
             status.EmbeddingModels = classification.EmbeddingModels;
             status.ToolModels = classification.ToolModels;
-            if (!ModelRunnerSettings.IsOllamaApiType(runner) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
+            if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase) && runnerDefaults.SupportsTools) status.ToolModels = new List<string>(status.ChatModels);
             status.Models = new List<string>(status.ChatModels);
         }
 
@@ -255,7 +245,7 @@ namespace Wilson.Core.Services
             ModelRunnerSettings copy = CopyRunner(runner);
             ModelRunnerSettings.ApplyToolDefaults(copy);
             if (!copy.ToolsEnabled || !copy.SupportsTools) return false;
-            if (!ModelRunnerSettings.IsOllamaApiType(copy)) return true;
+            if (!String.Equals(copy.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)) return true;
             ModelCapabilityClassification classification = await ClassifyModelsAsync(copy, new List<string> { model }, token).ConfigureAwait(false);
             return classification.ToolModels.Any(item => String.Equals(item, model, StringComparison.OrdinalIgnoreCase));
         }
@@ -268,7 +258,7 @@ namespace Wilson.Core.Services
             if (String.IsNullOrWhiteSpace(model)) throw new ArgumentException("Model name is required.", nameof(model));
 
             ModelRunnerSettings runner = GetRunner(runnerId);
-            if (!ModelRunnerSettings.IsOllamaApiType(runner))
+            if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("Model pulls are only supported for Ollama model servers.");
             }
@@ -300,7 +290,7 @@ namespace Wilson.Core.Services
             if (String.IsNullOrWhiteSpace(model)) throw new ArgumentException("Model name is required.", nameof(model));
 
             ModelRunnerSettings runner = GetRunner(runnerId);
-            if (!ModelRunnerSettings.IsOllamaApiType(runner))
+            if (!String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("Model loading is only supported for Ollama model servers.");
             }
@@ -410,7 +400,7 @@ namespace Wilson.Core.Services
             if (!String.IsNullOrWhiteSpace(requestedModel)) return requestedModel.Trim();
 
             List<string> candidates = new List<string>(runner.Models ?? new List<string>());
-            if (candidates.Count < 1 && ModelRunnerSettings.IsOllamaApiType(runner))
+            if (candidates.Count < 1 && String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
             {
                 candidates = await ListModelsAsync(runner, token).ConfigureAwait(false);
             }
@@ -428,21 +418,91 @@ namespace Wilson.Core.Services
 
         private async Task<int> RequestEmbeddingAsync(ModelRunnerSettings runner, string model, string input, CancellationToken token)
         {
-            using (EmbeddingClientBase client = CreateEmbeddingClient(runner))
+            bool isOpenAi = String.Equals(runner.ApiType, "OpenAI", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(runner.ApiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
+
+            string url;
+            string body;
+            if (isOpenAi)
             {
-                EmbeddingResponse response = await client.EmbedAsync(input, new EmbeddingOptions { Model = model }, token).ConfigureAwait(false);
-                if (!response.Success)
+                url = EmbeddingsUrl(runner);
+                body = JsonSerializer.Serialize(new { model, input });
+            }
+            else
+            {
+                url = EndpointUrl(runner.Endpoint ?? String.Empty, "/api/embeddings");
+                body = JsonSerializer.Serialize(new { model, prompt = input });
+            }
+
+            using StringContent content = new StringContent(body, Encoding.UTF8, "application/json");
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+            if (!String.IsNullOrWhiteSpace(runner.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runner.ApiKey);
+
+            using HttpResponseMessage response = await _Http.SendAsync(request, token).ConfigureAwait(false);
+            string responseBody = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                string error = ExtractOllamaError(responseBody);
+                throw new InvalidOperationException(String.IsNullOrWhiteSpace(error)
+                    ? "Embedding request failed with HTTP " + (int)response.StatusCode + "."
+                    : error);
+            }
+
+            int dimensions = ExtractEmbeddingDimensions(responseBody);
+            if (dimensions <= 0) throw new InvalidOperationException("Embedding response did not contain a vector. The model may not support embeddings.");
+            return dimensions;
+        }
+
+        private static int ExtractEmbeddingDimensions(string responseBody)
+        {
+            if (String.IsNullOrWhiteSpace(responseBody)) return 0;
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(responseBody);
+                JsonElement root = document.RootElement;
+
+                // Ollama legacy /api/embeddings: { "embedding": [...] }
+                if (root.TryGetProperty("embedding", out JsonElement embedding) && embedding.ValueKind == JsonValueKind.Array)
                 {
-                    throw new InvalidOperationException(String.IsNullOrWhiteSpace(response.Error)
-                        ? "Embedding request failed."
-                        : response.Error!);
+                    return embedding.GetArrayLength();
                 }
 
-                EmbeddingResult? first = response.Embeddings?.FirstOrDefault(item => item?.Embedding != null);
-                int dimensions = first?.Embedding?.Length ?? 0;
-                if (dimensions <= 0) throw new InvalidOperationException("Embedding response did not contain a vector. The model may not support embeddings.");
-                return dimensions;
+                // Ollama /api/embed and batched responses: { "embeddings": [[...]] }
+                if (root.TryGetProperty("embeddings", out JsonElement embeddings) && embeddings.ValueKind == JsonValueKind.Array && embeddings.GetArrayLength() > 0)
+                {
+                    JsonElement first = embeddings[0];
+                    if (first.ValueKind == JsonValueKind.Array) return first.GetArrayLength();
+                }
+
+                // OpenAI-compatible: { "data": [ { "embedding": [...] } ] }
+                if (root.TryGetProperty("data", out JsonElement data) && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+                {
+                    JsonElement item = data[0];
+                    if (item.TryGetProperty("embedding", out JsonElement itemEmbedding) && itemEmbedding.ValueKind == JsonValueKind.Array)
+                    {
+                        return itemEmbedding.GetArrayLength();
+                    }
+                }
             }
+            catch
+            {
+            }
+
+            return 0;
+        }
+
+        private static string EmbeddingsUrl(ModelRunnerSettings runner)
+        {
+            string endpoint = (runner.Endpoint ?? String.Empty).TrimEnd('/');
+            if (endpoint.EndsWith("/embeddings", StringComparison.OrdinalIgnoreCase)) return endpoint;
+
+            string chatPath = String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) ? "/v1/chat/completions" : runner.ChatCompletionsPath.Trim();
+            string path = chatPath.Contains("chat/completions", StringComparison.OrdinalIgnoreCase)
+                ? chatPath.Replace("chat/completions", "embeddings", StringComparison.OrdinalIgnoreCase)
+                : "/v1/embeddings";
+            if (!path.StartsWith("/", StringComparison.Ordinal)) path = "/" + path;
+            return endpoint + path;
         }
 
         private static string TrimResponse(string? response)
@@ -563,19 +623,14 @@ namespace Wilson.Core.Services
             }
 
             string format = effectiveRunner.ToolCallingApiFormat ?? String.Empty;
-            if (String.Equals(format, ToolCallingApiFormats.OpenAIChatCompletions, StringComparison.OrdinalIgnoreCase))
+            if (String.Equals(format, "OpenAIChatCompletions", StringComparison.OrdinalIgnoreCase))
             {
                 return await SendOpenAIChatCompletionsWithToolsAsync(effectiveRunner, request, token).ConfigureAwait(false);
             }
 
-            if (String.Equals(format, ToolCallingApiFormats.OllamaChat, StringComparison.OrdinalIgnoreCase))
+            if (String.Equals(format, "OllamaChat", StringComparison.OrdinalIgnoreCase))
             {
                 return await SendOllamaChatWithToolsAsync(effectiveRunner, request, token).ConfigureAwait(false);
-            }
-
-            if (String.Equals(format, ToolCallingApiFormats.PolyPromptNative, StringComparison.OrdinalIgnoreCase))
-            {
-                return await SendProviderNativeToolChatAsync(effectiveRunner, request, token).ConfigureAwait(false);
             }
 
             return new ToolCapableInferenceResponse
@@ -583,58 +638,6 @@ namespace Wilson.Core.Services
                 Success = false,
                 ErrorMessage = "Unsupported tool-calling API format '" + format + "'."
             };
-        }
-
-        /// <summary>
-        /// Execute a non-streaming tool-capable chat request through the PolyPrompt provider client
-        /// for the runner API type. This is the path used by providers that speak their own tool
-        /// protocol instead of an OpenAI-compatible chat-completions envelope.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <param name="request">Tool-capable request.</param>
-        /// <param name="token">Cancellation token.</param>
-        /// <returns>Tool-capable response.</returns>
-        private async Task<ToolCapableInferenceResponse> SendProviderNativeToolChatAsync(ModelRunnerSettings runner, ToolCapableInferenceRequest request, CancellationToken token)
-        {
-            try
-            {
-                using (CompletionClientBase client = CreateClient(runner, EffectiveToolModel(runner, request)))
-                {
-                    PpToolChatRequest ppRequest = BuildPolyPromptToolRequestForRunner(request, runner);
-                    ToolChatResponse response = await client.ToolChatAsync(ppRequest, token).ConfigureAwait(false);
-                    if (!response.Success)
-                    {
-                        return new ToolCapableInferenceResponse
-                        {
-                            Success = false,
-                            ErrorMessage = response.Error ?? "Provider tool inference request failed.",
-                            Telemetry = new Dictionary<string, object> { ["format"] = ToolCallingApiFormats.PolyPromptNative }
-                        };
-                    }
-
-                    ThinkParser think = new ThinkParser();
-                    string visible = think.Feed(response.Text ?? String.Empty) + think.Finish();
-                    return new ToolCapableInferenceResponse
-                    {
-                        Success = true,
-                        Content = visible,
-                        Thinking = MergeReasoning(response.Reasoning, think.Thinking),
-                        ToolCalls = MapPolyPromptToolCalls(response.ToolCalls),
-                        FinishReason = response.FinishReason,
-                        Telemetry = new Dictionary<string, object> { ["format"] = ToolCallingApiFormats.PolyPromptNative }
-                    };
-                }
-            }
-            catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentException || ex is HttpRequestException || ex is OperationCanceledException)
-            {
-                if (ex is OperationCanceledException && token.IsCancellationRequested) throw;
-                return new ToolCapableInferenceResponse
-                {
-                    Success = false,
-                    ErrorMessage = ex.Message,
-                    Telemetry = new Dictionary<string, object> { ["format"] = ToolCallingApiFormats.PolyPromptNative }
-                };
-            }
         }
 
         /// <summary>
@@ -665,7 +668,7 @@ namespace Wilson.Core.Services
 
             using (CompletionClientBase client = CreateClient(effectiveRunner, request.Model))
             {
-                PpToolChatRequest ppRequest = BuildPolyPromptToolRequestForRunner(request, effectiveRunner);
+                PpToolChatRequest ppRequest = BuildPolyPromptToolRequest(request);
                 ToolChatStreamingResponse response = await client.ToolChatStreamingAsync(ppRequest, token).ConfigureAwait(false);
                 if (!response.Success)
                 {
@@ -721,30 +724,15 @@ namespace Wilson.Core.Services
         /// </summary>
         private static PpToolChatRequest BuildPolyPromptToolRequest(ToolCapableInferenceRequest request)
         {
-            return BuildPolyPromptToolRequestForRunner(request, null);
-        }
-
-        /// <summary>
-        /// Build a PolyPrompt tool-chat request from a Wilson tool-capable request, using
-        /// provider-specific completion options when a runner is supplied.
-        /// </summary>
-        /// <param name="request">Tool-capable request.</param>
-        /// <param name="runner">Optional model runner settings for provider option selection.</param>
-        /// <returns>PolyPrompt tool-chat request.</returns>
-        private static PpToolChatRequest BuildPolyPromptToolRequestForRunner(ToolCapableInferenceRequest request, ModelRunnerSettings? runner)
-        {
-            CompletionOptions options = runner == null
-                ? new CompletionOptions()
-                : CreateProviderCompletionOptions(runner, MapCompletionSettings(request));
-
-            options.Model = String.IsNullOrWhiteSpace(request.Model) ? null : request.Model;
-            options.Temperature = request.Temperature;
-            options.TopP = request.TopP;
-            options.MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null;
-
             PpToolChatRequest ppRequest = new PpToolChatRequest
             {
-                Options = options,
+                Options = new CompletionOptions
+                {
+                    Model = String.IsNullOrWhiteSpace(request.Model) ? null : request.Model,
+                    Temperature = request.Temperature,
+                    TopP = request.TopP,
+                    MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null
+                },
                 ToolChoice = MapToolChoice(request.ToolChoice)
             };
 
@@ -761,21 +749,6 @@ namespace Wilson.Core.Services
             }
 
             return ppRequest;
-        }
-
-        /// <summary>
-        /// Map a tool-capable request's sampling fields onto request-scoped completion settings so
-        /// provider option types receive the same values.
-        /// </summary>
-        private static CompletionRequestSettings MapCompletionSettings(ToolCapableInferenceRequest request)
-        {
-            return new CompletionRequestSettings
-            {
-                Temperature = request.Temperature,
-                TopP = request.TopP,
-                MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : (int?)null,
-                SystemPrompt = String.Empty
-            };
         }
 
         private static string MapToolChoice(string? choice)
@@ -1253,9 +1226,8 @@ namespace Wilson.Core.Services
         private async Task<List<string>> ListModelsAsync(ModelRunnerSettings runner, CancellationToken token)
         {
             List<string> models = new List<string>();
-            using (ModelClientBase? client = CreateModelClient(runner))
+            using (ModelClientBase client = CreateModelClient(runner))
             {
-                if (client == null) return models;
                 await foreach (ModelInformation model in client.ListModelsAsync(token).ConfigureAwait(false))
                 {
                     if (!String.IsNullOrWhiteSpace(model.Name)) models.Add(model.Name);
@@ -1298,7 +1270,7 @@ namespace Wilson.Core.Services
             List<string> distinct = models.Where(item => !String.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             ModelCapability[] capabilities;
 
-            if (ModelRunnerSettings.IsOllamaApiType(runner))
+            if (String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase))
             {
                 // Ollama has no bulk capability endpoint, so each model needs its own /api/show
                 // probe. Run them concurrently (bounded) instead of one blocking round-trip at a
@@ -1490,61 +1462,23 @@ namespace Wilson.Core.Services
         private static CompletionOptions CreateChatOptions(ModelRunnerSettings runner, CompletionRequestSettings? settings)
         {
             settings ??= new CompletionRequestSettings();
-            CompletionOptions options = CreateProviderCompletionOptions(runner, settings);
+            CompletionOptions options = String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase)
+                ? new OllamaCompletionOptions
+                {
+                    ContextLength = runner.ContextWindowTokens,
+                    TopK = settings.TopK,
+                    MinP = settings.MinP,
+                    RepeatPenalty = settings.RepeatPenalty,
+                    RepeatLastN = settings.RepeatLastN,
+                    Seed = settings.Seed
+                }
+                : new CompletionOptions();
 
             options.SystemPrompt = String.IsNullOrWhiteSpace(settings.SystemPrompt) ? CompletionRequestSettings.DefaultSystemPrompt : settings.SystemPrompt;
             options.Temperature = settings.Temperature;
             options.TopP = settings.TopP;
             options.MaxTokens = settings.MaxTokens;
             return options;
-        }
-
-        /// <summary>
-        /// Build the provider-specific PolyPrompt completion options for a runner API type.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <param name="settings">Request-scoped completion settings.</param>
-        /// <returns>Provider-specific completion options.</returns>
-        private static CompletionOptions CreateProviderCompletionOptions(ModelRunnerSettings runner, CompletionRequestSettings settings)
-        {
-            switch (ResolvedApiType(runner))
-            {
-                case ApiTypes.Ollama:
-                case ApiTypes.OllamaCloud:
-                    return new OllamaCompletionOptions
-                    {
-                        ContextLength = runner.ContextWindowTokens,
-                        TopK = settings.TopK,
-                        MinP = settings.MinP,
-                        RepeatPenalty = settings.RepeatPenalty,
-                        RepeatLastN = settings.RepeatLastN,
-                        Seed = settings.Seed
-                    };
-                case ApiTypes.OpenAI:
-                case ApiTypes.OpenAICompatible:
-                    return new OpenAiCompletionOptions
-                    {
-                        Seed = settings.Seed
-                    };
-                case ApiTypes.AzureOpenAI:
-                    return new OpenAiCompletionOptions
-                    {
-                        Seed = settings.Seed
-                    };
-                case ApiTypes.XAI:
-                    return new XAiCompletionOptions();
-                case ApiTypes.Anthropic:
-                    return new AnthropicCompletionOptions();
-                case ApiTypes.Gemini:
-                case ApiTypes.VertexAI:
-                    return new GeminiCompletionOptions();
-                case ApiTypes.Cohere:
-                    return new CohereCompletionOptions();
-                case ApiTypes.Bedrock:
-                    return new CompletionOptions();
-                default:
-                    return new CompletionOptions();
-            }
         }
 
         private static ModelRunnerSettings CopyRunner(ModelRunnerSettings runner)
@@ -1556,10 +1490,6 @@ namespace Wilson.Core.Services
                 ApiType = runner.ApiType,
                 Endpoint = runner.Endpoint,
                 ApiKey = runner.ApiKey,
-                Deployment = runner.Deployment,
-                ApiVersion = runner.ApiVersion,
-                Region = runner.Region,
-                ProjectId = runner.ProjectId,
                 Models = new List<string>(runner.Models),
                 ContextWindowTokens = runner.ContextWindowTokens,
                 ToolsEnabled = runner.ToolsEnabled,
@@ -1582,305 +1512,28 @@ namespace Wilson.Core.Services
 
         private CompletionClientBase CreateClient(ModelRunnerSettings runner, string model)
         {
-            CompletionClientBase client = CreateCompletionClient(runner);
+            CompletionClientBase client;
+            if (IsOpenAiApiType(runner))
+            {
+                client = new OpenAiCompletionClient(runner.Endpoint, runner.ApiKey);
+            }
+            else
+            {
+                client = new OllamaCompletionClient(runner.Endpoint, runner.ApiKey);
+            }
             if (!String.IsNullOrWhiteSpace(model)) client.Model = model;
             return client;
         }
 
-        /// <summary>
-        /// Create the PolyPrompt completion client for a runner API type.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <returns>Completion client for the runner.</returns>
-        /// <remarks>
-        /// Unrecognized API types keep the pre-3.x behavior: they fall back to the Ollama chat
-        /// client so an existing custom configuration continues to answer chat requests. Tool
-        /// calling stays disabled for those runners (see <see cref="ModelRunnerSettings.ApplyToolDefaults"/>).
-        /// </remarks>
-        private static CompletionClientBase CreateCompletionClient(ModelRunnerSettings runner)
+        private static ModelClientBase CreateModelClient(ModelRunnerSettings runner)
         {
-            String endpoint = ModelRunnerSettings.ResolveEndpoint(runner);
-            String? apiKey = String.IsNullOrWhiteSpace(runner.ApiKey) ? null : runner.ApiKey.Trim();
-
-            switch (ResolvedApiType(runner))
-            {
-                case ApiTypes.Ollama:
-                    return new OllamaCompletionClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.OllamaCloud:
-                    return new OllamaCloudCompletionClient(RequireApiKey(runner, apiKey), null, _Http);
-                case ApiTypes.OpenAI:
-                case ApiTypes.OpenAICompatible:
-                    return new OpenAiCompletionClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.AzureOpenAI:
-                    return new AzureOpenAiCompletionClient(
-                        endpoint,
-                        ResolveAzureDeployment(runner),
-                        RequireApiKey(runner, apiKey),
-                        ResolveApiVersion(runner),
-                        null,
-                        _Http);
-                case ApiTypes.Anthropic:
-                    return new AnthropicCompletionClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.Gemini:
-                    return new GeminiCompletionClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.VertexAI:
-                    return new VertexAiCompletionClient(
-                        ResolveProjectId(runner),
-                        ResolveVertexRegion(runner),
-                        ResolveGoogleCredential(apiKey),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? null : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.Bedrock:
-                    return new BedrockCompletionClient(
-                        ResolveAwsCredential(runner, apiKey),
-                        ResolveBedrockRegion(runner),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? null : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.Cohere:
-                    return new CohereCompletionClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.XAI:
-                    return new XAiCompletionClient(
-                        RequireApiKey(runner, apiKey),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? DefaultXAiEndpoint : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.TEI:
-                case ApiTypes.VoyageAI:
-                    throw new InvalidOperationException("API type '" + (runner.ApiType ?? String.Empty) + "' does not support chat completions in Wilson.");
-                default:
-                    // Unrecognized API types are preserved in configuration and keep the legacy
-                    // Ollama-family chat behavior, mirroring the pre-3.x client selection.
-                    return new OllamaCompletionClient(endpoint, apiKey, null, _Http);
-            }
-        }
-
-        /// <summary>
-        /// Create the PolyPrompt model client for a runner API type.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <returns>Model client, or null when the API type cannot enumerate models.</returns>
-        private static ModelClientBase? CreateModelClient(ModelRunnerSettings runner)
-        {
-            String endpoint = ModelRunnerSettings.ResolveEndpoint(runner);
-            String? apiKey = String.IsNullOrWhiteSpace(runner.ApiKey) ? null : runner.ApiKey.Trim();
-
-            switch (ResolvedApiType(runner))
-            {
-                case ApiTypes.Ollama:
-                    return new OllamaModelClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.OllamaCloud:
-                    return new OllamaCloudModelClient(RequireApiKey(runner, apiKey), null, _Http);
-                case ApiTypes.OpenAI:
-                case ApiTypes.OpenAICompatible:
-                    return new OpenAiModelClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.AzureOpenAI:
-                    return new AzureOpenAiModelClient(endpoint, RequireApiKey(runner, apiKey), ResolveApiVersion(runner), null, _Http);
-                case ApiTypes.Anthropic:
-                    return new AnthropicModelClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.Gemini:
-                    return new GeminiModelClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.Bedrock:
-                    return new BedrockModelClient(
-                        ResolveAwsCredential(runner, apiKey),
-                        ResolveBedrockRegion(runner),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? null : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.Cohere:
-                    return new CohereModelClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.XAI:
-                    return new XAiModelClient(
-                        RequireApiKey(runner, apiKey),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? DefaultXAiEndpoint : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.TEI:
-                    return new TeiModelClient(endpoint, apiKey, null, _Http);
-                default:
-                    return null;
-            }
-        }
-
-        /// <summary>
-        /// Create the PolyPrompt embedding client for a runner API type.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <returns>Embedding client for the runner.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the API type does not support embeddings.</exception>
-        private static EmbeddingClientBase CreateEmbeddingClient(ModelRunnerSettings runner)
-        {
-            String endpoint = ModelRunnerSettings.ResolveEndpoint(runner);
-            String? apiKey = String.IsNullOrWhiteSpace(runner.ApiKey) ? null : runner.ApiKey.Trim();
-
-            switch (ResolvedApiType(runner))
-            {
-                case ApiTypes.Ollama:
-                    return new OllamaEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.OllamaCloud:
-                    return new OllamaCloudEmbeddingClient(RequireApiKey(runner, apiKey), null, _Http);
-                case ApiTypes.OpenAI:
-                case ApiTypes.OpenAICompatible:
-                    return new OpenAiEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.AzureOpenAI:
-                    return new AzureOpenAiEmbeddingClient(
-                        endpoint,
-                        ResolveAzureDeployment(runner),
-                        RequireApiKey(runner, apiKey),
-                        ResolveApiVersion(runner),
-                        null,
-                        _Http);
-                case ApiTypes.Gemini:
-                    return new GeminiEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.VertexAI:
-                    return new VertexAiEmbeddingClient(
-                        ResolveProjectId(runner),
-                        ResolveVertexRegion(runner),
-                        ResolveGoogleCredential(apiKey),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? null : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.Bedrock:
-                    return new BedrockEmbeddingClient(
-                        ResolveAwsCredential(runner, apiKey),
-                        ResolveBedrockRegion(runner),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? null : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.Cohere:
-                    return new CohereEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.XAI:
-                    return new XAiEmbeddingClient(
-                        RequireApiKey(runner, apiKey),
-                        String.IsNullOrWhiteSpace(runner.Endpoint) ? DefaultXAiEndpoint : endpoint,
-                        null,
-                        _Http);
-                case ApiTypes.TEI:
-                    return new TeiEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.VoyageAI:
-                    return new VoyageAiEmbeddingClient(endpoint, apiKey, null, _Http);
-                case ApiTypes.Anthropic:
-                    throw new InvalidOperationException("API type '" + (runner.ApiType ?? String.Empty) + "' does not support embeddings in Wilson.");
-                default:
-                    // Unrecognized API types keep the legacy Ollama-family embedding behavior so an
-                    // existing custom configuration is never silently broken by the API type catalog.
-                    return new OllamaEmbeddingClient(endpoint, apiKey, null, _Http);
-            }
-        }
-
-        /// <summary>
-        /// Resolve the cataloged API type name, defaulting unknown values to the legacy default.
-        /// </summary>
-        private const string DefaultXAiEndpoint = "https://api.x.ai";
-
-        /// <summary>AWS region used for Bedrock runners that configure no region and no AWS region environment variable.</summary>
-        private const string DefaultBedrockRegion = ApiTypes.DefaultBedrockRegion;
-
-        /// <summary>
-        /// Google Cloud region used for Vertex AI runners that configure no region and no Google Cloud region
-        /// environment variable. Google locations use identifiers such as <c>us-central1</c>; AWS-style values such
-        /// as <c>us-east-1</c> would build an invalid <c>https://{region}-aiplatform.googleapis.com</c> endpoint.
-        /// </summary>
-        private const string DefaultVertexRegion = ApiTypes.DefaultVertexRegion;
-
-        private static string ResolvedApiType(ModelRunnerSettings runner)
-        {
-            return ApiTypes.TryNormalize(runner.ApiType, out string normalized) ? normalized : (runner.ApiType ?? String.Empty).Trim();
-        }
-
-        private static string RequireApiKey(ModelRunnerSettings runner, string? apiKey)
-        {
-            if (!String.IsNullOrWhiteSpace(apiKey)) return apiKey!;
-            throw new InvalidOperationException("API type '" + (runner.ApiType ?? String.Empty) + "' requires an API key. Configure apiKey on model runner '" + (runner.Id ?? String.Empty) + "'.");
-        }
-
-        private static string ResolveAzureDeployment(ModelRunnerSettings runner)
-        {
-            if (!String.IsNullOrWhiteSpace(runner.Deployment)) return runner.Deployment!.Trim();
-            string model = runner.Models.FirstOrDefault(item => !String.IsNullOrWhiteSpace(item)) ?? String.Empty;
-            if (String.IsNullOrWhiteSpace(model))
-                throw new InvalidOperationException("API type 'AzureOpenAI' requires a deployment name. Configure deployment or a model on model runner '" + (runner.Id ?? String.Empty) + "'.");
-            return model.Trim();
-        }
-
-        private static string ResolveApiVersion(ModelRunnerSettings runner)
-        {
-            return String.IsNullOrWhiteSpace(runner.ApiVersion) ? AzureOpenAiDefaults.ApiVersion : runner.ApiVersion!.Trim();
-        }
-
-        /// <summary>
-        /// Resolve the AWS region for a Bedrock runner.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <returns>Configured region, then the standard AWS region environment variables, then the AWS default.</returns>
-        private static string ResolveBedrockRegion(ModelRunnerSettings runner)
-        {
-            if (!String.IsNullOrWhiteSpace(runner.Region)) return runner.Region!.Trim();
-            string? environment = Environment.GetEnvironmentVariable("AWS_REGION");
-            if (!String.IsNullOrWhiteSpace(environment)) return environment!.Trim();
-            environment = Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION");
-            if (!String.IsNullOrWhiteSpace(environment)) return environment!.Trim();
-            return DefaultBedrockRegion;
-        }
-
-        /// <summary>
-        /// Resolve the Google Cloud region for a Vertex AI runner.
-        /// </summary>
-        /// <param name="runner">Model runner settings.</param>
-        /// <returns>
-        /// Configured region, then the standard Google Cloud region environment variables, then the Google default.
-        /// AWS region environment variables are never consulted: their identifiers (for example
-        /// <c>us-east-1</c>) are not valid Google locations and would build an invalid
-        /// <c>https://{region}-aiplatform.googleapis.com</c> endpoint.
-        /// </returns>
-        private static string ResolveVertexRegion(ModelRunnerSettings runner)
-        {
-            if (!String.IsNullOrWhiteSpace(runner.Region)) return runner.Region!.Trim();
-
-            string? environment = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_REGION");
-            if (!String.IsNullOrWhiteSpace(environment)) return environment!.Trim();
-            environment = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_LOCATION");
-            if (!String.IsNullOrWhiteSpace(environment)) return environment!.Trim();
-
-            return DefaultVertexRegion;
-        }
-
-        private static string ResolveProjectId(ModelRunnerSettings runner)
-        {
-            if (!String.IsNullOrWhiteSpace(runner.ProjectId)) return runner.ProjectId!.Trim();
-            string? environment = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_PROJECT");
-            if (!String.IsNullOrWhiteSpace(environment)) return environment!.Trim();
-            throw new InvalidOperationException("API type 'VertexAI' requires a Google Cloud project id. Configure projectId on model runner '" + (runner.Id ?? String.Empty) + "'.");
-        }
-
-        private static ICredentialProvider ResolveGoogleCredential(string? apiKey)
-        {
-            // An explicit apiKey is treated as an OAuth bearer token; otherwise Google
-            // Application Default Credentials are used.
-            return String.IsNullOrWhiteSpace(apiKey) ? new AdcCredential(_Http) : new StaticTokenCredential(apiKey!);
-        }
-
-        private static IAwsCredentialProvider ResolveAwsCredential(ModelRunnerSettings runner, string? apiKey)
-        {
-            // Accept "accessKeyId:secretAccessKey[:sessionToken]" to support static AWS credentials
-            // while defaulting to the standard environment credential chain.
-            string region = ResolveBedrockRegion(runner);
-            if (String.IsNullOrWhiteSpace(apiKey)) return new EnvironmentAwsCredential(region);
-
-            string[] parts = apiKey!.Split(':');
-            if (parts.Length >= 2)
-            {
-                string? sessionToken = parts.Length > 2 ? String.Join(":", parts.Skip(2)) : null;
-                return new StaticAwsCredential(new AwsCredentials(parts[0], parts[1], region, sessionToken));
-            }
-
-            throw new InvalidOperationException("AWS Bedrock apiKey must use 'accessKeyId:secretAccessKey[:sessionToken]' form.");
+            if (IsOpenAiApiType(runner)) return new OpenAiModelClient(runner.Endpoint, runner.ApiKey);
+            return new OllamaModelClient(runner.Endpoint, runner.ApiKey);
         }
 
         private static bool IsOpenAiApiType(ModelRunnerSettings runner)
         {
-            return ModelRunnerSettings.IsOpenAiCompatibleApiType(runner);
+            return String.Equals(runner.ApiType, "OpenAI", StringComparison.OrdinalIgnoreCase) || String.Equals(runner.ApiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
         }
     }
 

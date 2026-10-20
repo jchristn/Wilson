@@ -76,17 +76,6 @@
           }
         },
         {
-          "name": "List Model Server API Types",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/v1.0/api/api-types",
-              "host": [ "{{baseUrl}}" ],
-              "path": [ "v1.0", "api", "api-types" ]
-            }
-          }
-        },
-        {
           "name": "List Model Server Health",
           "request": {
             "method": "GET",
