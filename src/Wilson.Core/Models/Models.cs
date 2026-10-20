@@ -603,8 +603,26 @@ namespace Wilson.Core.Models
         public string Name { get; set; } = String.Empty;
         /// <summary>API type.</summary>
         public string ApiType { get; set; } = String.Empty;
+        /// <summary>Human-readable API type display name.</summary>
+        public string ApiTypeDisplayName { get; set; } = String.Empty;
+        /// <summary>Whether the configured API type is a cataloged provider.</summary>
+        public bool ApiTypeSupported { get; set; } = true;
+        /// <summary>Whether the API type supports chat and completion requests.</summary>
+        public bool SupportsChatCompletions { get; set; } = true;
+        /// <summary>Whether the API type supports embedding requests.</summary>
+        public bool SupportsEmbeddings { get; set; } = true;
+        /// <summary>Whether the API type supports model listing.</summary>
+        public bool SupportsModelListing { get; set; } = true;
         /// <summary>Endpoint URL.</summary>
         public string Endpoint { get; set; } = String.Empty;
+        /// <summary>Azure OpenAI deployment name.</summary>
+        public string? Deployment { get; set; }
+        /// <summary>Azure OpenAI API version.</summary>
+        public string? ApiVersion { get; set; }
+        /// <summary>Cloud region for Vertex AI and AWS Bedrock.</summary>
+        public string? Region { get; set; }
+        /// <summary>Google Cloud project identifier for Vertex AI.</summary>
+        public string? ProjectId { get; set; }
         /// <summary>Configured model list from settings.</summary>
         public List<string> ConfiguredModels { get; set; } = new List<string>();
         /// <summary>Available model list resolved from configuration or server API.</summary>
@@ -730,5 +748,9 @@ namespace Wilson.Core.Models
         public int? RepeatLastN { get; set; } = 64;
         /// <summary>Optional random seed.</summary>
         public int? Seed { get; set; } = null;
+        /// <summary>Presence penalty for OpenAI, Gemini, Cohere, and xAI providers.</summary>
+        public double? PresencePenalty { get; set; } = null;
+        /// <summary>Frequency penalty for OpenAI, Gemini, Cohere, and xAI providers.</summary>
+        public double? FrequencyPenalty { get; set; } = null;
     }
 }

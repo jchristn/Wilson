@@ -16,7 +16,7 @@ Wilson runs a C# backend using Watson and a React dashboard. The backend stores 
 
 Wilson can:
 
-- Chat with local Ollama models or OpenAI-compatible APIs
+- Chat with local Ollama models, Ollama Cloud, OpenAI, Azure OpenAI, xAI Grok, Anthropic, Google Gemini, Vertex AI, AWS Bedrock, Cohere, VoyageAI, Text Embeddings Inference, or any OpenAI-compatible API
 - Stream model responses over server-sent events
 - Keep conversation history in a database
 - Manage multiple configured model servers
@@ -34,7 +34,7 @@ The waves never answer. Wilson does.
 ## Features
 
 - **Dashboard chat**: browser-based chat with model server/model selectors, streaming responses, response timing details, feedback buttons, and conversation rename/delete.
-- **Model server management**: configure Ollama, OpenAI, or OpenAI-compatible runners; inspect health, uptime, and recent health history; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
+- **Model server management**: configure any of the thirteen supported provider API types (Ollama, Ollama Cloud, OpenAI, OpenAI-compatible, Azure OpenAI, xAI Grok, Anthropic, Google Gemini, Google Vertex AI, AWS Bedrock, Cohere, VoyageAI, Text Embeddings Inference); inspect health, uptime, and recent health history; inspect available models; inspect loaded Ollama models; pull and load Ollama models.
 - **Tenant-aware auth**: tenants, users, credentials, admin tokens, tenant admins, and bearer-token authentication.
 - **Conversation storage**: saved conversations and messages backed by SQLite or PostgreSQL.
 - **Prompt templates**: a Prompts page for tenant-scoped system prompts and tool prompts, seeded defaults, chat prompt selection, and request-history prompt metadata.
@@ -49,7 +49,7 @@ The waves never answer. Wilson does.
 ## Use Cases
 
 - Run a private local chat dashboard for Ollama models
-- Test and compare local and OpenAI-compatible model runners
+- Test and compare local, cloud-hosted, and OpenAI-compatible model runners
 - Give a small team tenant-aware access to shared local model infrastructure
 - Capture operational request history while developing model-backed workflows
 - Collect human feedback on model responses
@@ -148,13 +148,13 @@ Important sections:
 - `requestHistory`: request capture settings
 - Prompt templates are database records, not JSON settings. Wilson creates default system and tool prompts on startup when a tenant is missing them.
 - `tools`: global tool enablement, built-in tool policy, safety limits, allowed roots, web search, and MCP settings
-- `modelRunners`: Ollama/OpenAI/OpenAI-compatible model servers
+- `modelRunners`: model servers for any supported provider API type (see Model Runners below)
 - `seed`: first-run tenant, user, and access key
 
 Each `modelRunners` entry supports endpoint health checks:
 
 - `healthCheckEnabled`: enables background probing
-- `healthCheckUrl`: absolute URL or endpoint path; defaults to `/api/tags` for Ollama and `/v1/models` for OpenAI-compatible APIs
+- `healthCheckUrl`: absolute URL or endpoint path; defaults to the provider catalog health path (`/api/tags` for Ollama and Ollama Cloud, `/v1/models` for OpenAI, Anthropic, xAI, and Cohere, `/v1beta/models` for Gemini, `/openai/models` for Azure OpenAI, `/info` for Text Embeddings Inference)
 - `healthCheckMethod`: `GET` or `HEAD`
 - `healthCheckIntervalMs`, `healthCheckTimeoutMs`
 - `healthCheckExpectedStatusCode`
@@ -163,9 +163,42 @@ Each `modelRunners` entry supports endpoint health checks:
 
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
+### Model Runners
+
+Wilson 3.4.0 of PolyPrompt adds endpoint types and providers beyond the original Ollama/OpenAI pair, and Wilson exposes all of them. `apiType` selects the PolyPrompt client family:
+| `apiType` | Provider | Chat | Embeddings | Model listing | Tools |
+| --- | --- | --- | --- | --- | --- |
+| `Ollama` | Local Ollama server | yes | yes | yes | yes |
+| `OllamaCloud` | Ollama Cloud (hosted, native Ollama API) | yes | yes | yes | no |
+| `OpenAI` | OpenAI public API | yes | yes | yes | yes |
+| `OpenAICompatible` | Any OpenAI chat-completions server | yes | yes | yes | yes |
+| `AzureOpenAI` | Azure OpenAI deployments | yes | yes | yes | yes |
+| `XAI` | xAI Grok (native Responses API, hosted tools) | yes | yes | yes | yes |
+| `Anthropic` | Anthropic Claude Messages API | yes | no | yes | yes |
+| `Gemini` | Google Gemini API | yes | yes | yes | yes |
+| `VertexAI` | Google Vertex AI Gemini models | yes | no | no | no |
+| `Bedrock` | AWS Bedrock model runtime | yes | yes | yes | yes |
+| `Cohere` | Cohere platform API | yes | yes | yes | yes |
+| `VoyageAI` | VoyageAI embedding models | no | yes | no | no |
+| `Tei` | Hugging Face Text Embeddings Inference | no | yes | yes | no |
+
+`GET /v1.0/api/model-runners/api-types` returns the same catalog at runtime, including default endpoints, default health paths, default health timings, capability flags, default tool-calling format, and required credential fields. The dashboard builds its API type picker from that catalog.
+
+Provider-specific fields beyond `apiType`, `endpoint`, and `apiKey`:
+
+- `deployment`: Azure OpenAI deployment name (required)
+- `apiVersion`: Azure OpenAI `api-version` query value; defaults to `2024-10-21`
+- `region`: Vertex AI or AWS Bedrock region; defaults to `us-central1` and `us-east-1`
+- `projectId`: Vertex AI Google Cloud project (required)
+- `apiSecretKey` and `awsSessionToken`: AWS credentials for Bedrock. When `apiKey` and `apiSecretKey` are both set Wilson signs with static credentials; otherwise it uses the standard AWS environment/profile chain.
+
+`endpoint` may be left blank for AWS Bedrock and Google Vertex AI, because both derive it: Bedrock uses the regional AWS endpoint from the SDK and Vertex AI builds a regional resource URL from `projectId` and `region`. Every other provider falls back to the catalog default endpoint when the field is blank.
+
+An unrecognized `apiType` keeps Wilson's legacy Ollama-family clients so existing configuration still chats, and the model runner status reports `apiTypeSupported: false` so the dashboard can flag it. A cataloged provider that genuinely lacks a capability (for example embeddings on Anthropic, or tool calls on VoyageAI) fails explicitly instead of silently degrading.
+
 Tools are enabled by default for tool-capable runners. Safe tools use automatic approval by default; destructive and process tools remain approval-required. If `tools.workingDirectory` or `tools.allowedRoots` are empty, Wilson normalizes them to the server working directory for local installs; Docker defaults them to `/workspace`. Individual model runners also have tool-capability controls (`toolsEnabled`, `supportsTools`, and `toolCallingApiFormat`) so runners that cannot speak a tool-call protocol continue to use normal chat.
 
-Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
+Tool-capable runners must support a structured tool-call wire format. OpenAI and OpenAI-compatible providers should use `toolCallingApiFormat: "OpenAIChatCompletions"` and a chat completions path such as `/v1/chat/completions`. Ollama runners can use `toolCallingApiFormat: "OllamaChat"` through `/api/chat` when the selected model supports tools. Providers with a native PolyPrompt tool-chat client (Azure OpenAI, xAI, Anthropic, Gemini, Cohere, Bedrock) use `toolCallingApiFormat: "PolyPromptNative"`, which is also the default for those API types. Azure OpenAI must use the native client because its operations are deployment-scoped (`/openai/deployments/{deployment}/chat/completions?api-version=...`) and authenticate with the `api-key` header rather than a bearer token. If a runner has tools disabled, lacks tool support, or returns a non-tool-capable response, Wilson keeps normal chat available and diagnostics explain why tools are unavailable.
 
 The Settings page includes tool diagnostics for administrators. Validate checks draft tool settings before saving, Test adds selected-runner readiness checks without calling a model or executing tools, and MCP controls reconnect configured servers and show discovered tools.
 
@@ -205,6 +238,7 @@ Telemetry is controlled by the `telemetry` block in `wilson.json`. It is off by 
 - OpenAPI JSON: `http://127.0.0.1:9400/openapi.json`
 - Swagger UI: `http://127.0.0.1:9400/swagger`
 - Dashboard API Explorer: available inside the dashboard after login
+- Model runner API types: `GET /v1.0/api/model-runners/api-types`
 - Model server health: `GET /v1.0/api/model-runners/health`
 - Single model server health: `GET /v1.0/api/model-runners/{id}/health`
 - Tool catalog: `GET /v1.0/api/tools`
@@ -249,7 +283,7 @@ Useful issue details:
 - Backend URL/port
 - Dashboard URL/port
 - Database type
-- Model runner type, for example Ollama or OpenAI-compatible
+- Model runner type, for example Ollama, Ollama Cloud, OpenAI, Azure OpenAI, xAI, Anthropic, Gemini, Vertex AI, Bedrock, Cohere, VoyageAI, or Text Embeddings Inference
 - Model name
 - Steps to reproduce
 - Expected behavior

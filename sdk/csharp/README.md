@@ -11,6 +11,7 @@ using WilsonClient client = new WilsonClient("http://127.0.0.1:9400");
 await client.LoginAsync("wilsonadmin");
 
 EnumerationResult<ModelRunnerStatus> runners = await client.GetModelRunnersAsync(pageSize: 100);
+List<ApiTypeDescriptor> apiTypes = await client.GetModelRunnerApiTypesAsync();
 List<EndpointHealthStatus> health = await client.GetModelRunnerHealthAsync();
 EndpointHealthStatus local = await client.GetModelRunnerHealthAsync("local-ollama");
 List<ToolDescriptor> tools = await client.GetToolsAsync();

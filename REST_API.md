@@ -211,6 +211,48 @@ Normal chat traces do not expose raw model arguments, raw tool output, provider 
 
 Audit APIs may return redacted arguments and redacted result summaries. Redacted full result JSON is returned only for records created while full result persistence was enabled.
 
+## Model Runner APIs
+
+Wilson supports thirteen provider API types: `Ollama`, `OllamaCloud`, `OpenAI`, `OpenAICompatible`, `AzureOpenAI`, `XAI`, `Anthropic`, `Gemini`, `VertexAI`, `Bedrock`, `Cohere`, `VoyageAI`, and `Tei`.
+
+### List API Types
+
+```http
+GET /v1.0/api/model-runners/api-types
+Authorization: Bearer wilsonadmin
+```
+
+Returns the provider catalog. Each entry carries `name`, `displayName`, `description`, `defaultEndpoint`, `defaultHealthPath`, `defaultHealthIntervalMs`, `defaultHealthTimeoutMs`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `supportsToolCalls`, `supportsStreaming`, `defaultToolCallingApiFormat`, `defaultChatCompletionsPath`, `requiresApiKey`, `requiresDeployment`, `requiresApiVersion`, `defaultApiVersion`, `requiresProjectId`, `requiresRegion`, and `defaultRegion`.
+
+Names are case- and whitespace-insensitive on input and are canonicalized on save, so `xai`, `XA I` (trimmed) and `XAI` all resolve to `XAI`. An unrecognized value is preserved verbatim and falls back to the legacy Ollama-family clients.
+
+### List Model Runners
+
+```http
+GET /v1.0/api/model-runners
+Authorization: Bearer wilsonadmin
+```
+
+Each runner status reports `apiType`, `apiTypeDisplayName`, `apiTypeSupported`, `supportsChatCompletions`, `supportsEmbeddings`, `supportsModelListing`, `endpoint`, `deployment`, `apiVersion`, `region`, `projectId`, and the usual model inventory and health fields. `apiTypeSupported` is `false` when the configured `apiType` is not in the catalog.
+
+### Provider-Specific Runner Fields
+
+| Field | Providers | Notes |
+| --- | --- | --- |
+| `deployment` | `AzureOpenAI` | Required. Routes chat and embedding requests to the named deployment. |
+| `apiVersion` | `AzureOpenAI` | Required. Defaults to `2024-10-21`. |
+| `projectId` | `VertexAI` | Required Google Cloud project. |
+| `region` | `VertexAI`, `Bedrock` | Optional. Defaults to `us-central1` and `us-east-1`. |
+| `apiSecretKey`, `awsSessionToken` | `Bedrock` | Optional. When `apiKey` and `apiSecretKey` are both set Wilson signs with static credentials; otherwise it uses the AWS environment chain. |
+
+### Tool-Calling Formats
+
+`toolCallingApiFormat` accepts `OllamaChat` (Ollama `/api/chat`), `OpenAIChatCompletions` (OpenAI and OpenAI-compatible), and `PolyPromptNative` (provider-native tool chat for Azure OpenAI, xAI, Anthropic, Gemini, Cohere, and Bedrock). Providers with a native tool client default to `PolyPromptNative`; Ollama Cloud, Vertex AI, VoyageAI, and Text Embeddings Inference advertise no tool support and get no format.
+
+Azure OpenAI must use `PolyPromptNative`: its operations are deployment-scoped (`/openai/deployments/{deployment}/chat/completions?api-version=...`) and authenticate with the `api-key` header, not a bearer token. Saving an Azure OpenAI runner that pins `OpenAIChatCompletions` realigns it to `PolyPromptNative`.
+
+`endpoint` may be blank for `Bedrock` and `VertexAI`. Bedrock derives its regional endpoint from the AWS SDK, and Vertex AI builds a regional resource URL from `projectId` and `region`. Blank endpoints for every other cataloged provider fall back to that provider's catalog default.
+
 ## Request History
 
 Request-history entries include tool metrics for tool-enabled chat requests:
