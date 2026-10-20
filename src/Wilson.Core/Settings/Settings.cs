@@ -2,6 +2,7 @@ namespace Wilson.Core.Settings
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
 
     /// <summary>
     /// Wilson server settings.
@@ -267,12 +268,13 @@ namespace Wilson.Core.Settings
         public string Name { get; set; } = String.Empty;
 
         /// <summary>
-        /// API type, Ollama or OpenAI.
+        /// API type. See <see cref="ApiTypes"/> for supported values; unsupported values preserve
+        /// legacy behavior with tools disabled.
         /// </summary>
-        public string ApiType { get; set; } = "Ollama";
+        public string ApiType { get; set; } = ApiTypes.Default;
 
         /// <summary>
-        /// Endpoint URL.
+        /// Endpoint URL. Blank values fall back to the API type default endpoint.
         /// </summary>
         public string Endpoint { get; set; } = "http://localhost:11434";
 
@@ -280,6 +282,29 @@ namespace Wilson.Core.Settings
         /// Optional API key.
         /// </summary>
         public string? ApiKey { get; set; } = null;
+
+        /// <summary>
+        /// Azure OpenAI deployment name. Used as the model when a request does not specify one.
+        /// </summary>
+        public string? Deployment { get; set; } = null;
+
+        /// <summary>
+        /// Provider API version for versioned endpoints such as Azure OpenAI.
+        /// </summary>
+        public string? ApiVersion { get; set; } = null;
+
+        /// <summary>
+        /// Cloud region for region-scoped providers such as Vertex AI and AWS Bedrock, in the provider's own
+        /// identifier style. When blank, Vertex AI uses <c>GOOGLE_CLOUD_REGION</c>/<c>GOOGLE_CLOUD_LOCATION</c> and
+        /// then <see cref="ApiTypes.DefaultVertexRegion"/>, while AWS Bedrock uses
+        /// <c>AWS_REGION</c>/<c>AWS_DEFAULT_REGION</c> and then <see cref="ApiTypes.DefaultBedrockRegion"/>.
+        /// </summary>
+        public string? Region { get; set; } = null;
+
+        /// <summary>
+        /// Google Cloud project identifier for Vertex AI.
+        /// </summary>
+        public string? ProjectId { get; set; } = null;
 
         /// <summary>
         /// Optional known model list.
@@ -374,20 +399,45 @@ namespace Wilson.Core.Settings
         {
             if (runner == null) throw new ArgumentNullException(nameof(runner));
 
-            if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl))
+            ApiTypeDescriptor? descriptor = ApiTypes.Describe(runner.ApiType);
+            bool ollamaLike = IsOllamaApiType(runner);
+
+            // Ollama Cloud cannot be served from a loopback endpoint. Switching apiType without
+            // editing the endpoint should still produce a working configuration.
+            if (String.Equals(runner.ApiType, ApiTypes.OllamaCloud, StringComparison.OrdinalIgnoreCase) && IsLoopbackEndpoint(runner.Endpoint) && descriptor != null)
+            {
+                runner.Endpoint = descriptor.DefaultEndpoint;
+            }
+
+            if (String.IsNullOrWhiteSpace(runner.Endpoint) && descriptor != null && !String.IsNullOrWhiteSpace(descriptor.DefaultEndpoint))
+            {
+                runner.Endpoint = descriptor.DefaultEndpoint;
+            }
+
+            if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl) && !String.IsNullOrWhiteSpace(runner.Endpoint))
             {
                 string baseUrl = (runner.Endpoint ?? String.Empty).TrimEnd('/');
-                runner.HealthCheckUrl = IsOllama(runner) ? baseUrl + "/api/tags" : baseUrl + "/v1/models";
+                string path = descriptor == null ? "/v1/models" : descriptor.DefaultHealthPath;
+                if (!String.IsNullOrWhiteSpace(path)) runner.HealthCheckUrl = baseUrl + path;
             }
+
+            if (String.IsNullOrWhiteSpace(runner.HealthCheckUrl)) runner.HealthCheckEnabled = false;
+
+            // Resource-derived cloud endpoints have no generic models URL to probe.
+            // Preserve an explicitly configured absolute HTTP(S) probe.
+            if (descriptor?.UsesCloudResourceEndpoint == true && String.IsNullOrWhiteSpace(runner.Endpoint)
+                && (!Uri.TryCreate(runner.HealthCheckUrl, UriKind.Absolute, out Uri? probe)
+                    || (probe.Scheme != Uri.UriSchemeHttp && probe.Scheme != Uri.UriSchemeHttps)))
+                runner.HealthCheckEnabled = false;
 
             if (runner.HealthCheckIntervalMs <= 0)
             {
-                runner.HealthCheckIntervalMs = IsOllama(runner) ? 5000 : 15000;
+                runner.HealthCheckIntervalMs = ollamaLike ? 5000 : 15000;
             }
 
             if (runner.HealthCheckTimeoutMs <= 0)
             {
-                runner.HealthCheckTimeoutMs = IsOllama(runner) ? 2000 : 5000;
+                runner.HealthCheckTimeoutMs = ollamaLike ? 2000 : 5000;
             }
 
             if (runner.HealthCheckExpectedStatusCode < 100 || runner.HealthCheckExpectedStatusCode > 599)
@@ -398,7 +448,7 @@ namespace Wilson.Core.Settings
             if (runner.HealthyThreshold <= 0) runner.HealthyThreshold = 2;
             if (runner.UnhealthyThreshold <= 0) runner.UnhealthyThreshold = 2;
 
-            if (!IsOllama(runner) && !String.IsNullOrWhiteSpace(runner.ApiKey))
+            if ((!ollamaLike || descriptor?.RequiresApiKey == true) && !String.IsNullOrWhiteSpace(runner.ApiKey))
             {
                 runner.HealthCheckUseAuth = true;
             }
@@ -414,30 +464,98 @@ namespace Wilson.Core.Settings
         {
             if (runner == null) throw new ArgumentNullException(nameof(runner));
 
-            string apiType = runner.ApiType ?? String.Empty;
-            bool ollama = IsOllama(runner);
-            bool openAiLike = String.Equals(apiType, "OpenAI", StringComparison.OrdinalIgnoreCase)
-                || String.Equals(apiType, "OpenAICompatible", StringComparison.OrdinalIgnoreCase);
+            ApiTypeDescriptor? descriptor = ApiTypes.Describe(runner.ApiType);
+
+            if (descriptor == null)
+            {
+                // Legacy behavior: an unrecognized API type keeps chat available but is not
+                // assumed to speak any tool-call wire format.
+                runner.SupportsTools = false;
+                return;
+            }
 
             if (String.IsNullOrWhiteSpace(runner.ToolCallingApiFormat))
             {
-                runner.ToolCallingApiFormat = ollama ? "OllamaChat" : openAiLike ? "OpenAIChatCompletions" : String.Empty;
+                runner.ToolCallingApiFormat = descriptor.DefaultToolCallingApiFormat;
             }
 
-            if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && openAiLike)
+            if (String.IsNullOrWhiteSpace(runner.ChatCompletionsPath) && !String.IsNullOrWhiteSpace(descriptor.DefaultChatCompletionsPath))
             {
-                runner.ChatCompletionsPath = "/v1/chat/completions";
+                runner.ChatCompletionsPath = descriptor.DefaultChatCompletionsPath;
             }
 
-            if (!openAiLike && !ollama)
+            if (!descriptor.SupportsTools)
             {
                 runner.SupportsTools = false;
             }
+
+            if (!descriptor.SupportsParallelToolCalls)
+            {
+                runner.SupportsParallelToolCalls = false;
+            }
+
+            if (!descriptor.SupportsStreamingToolCalls)
+            {
+                runner.SupportsStreamingToolCalls = false;
+            }
+
+            // Providers that only expose a provider-native tool protocol also need a model
+            // inventory for chat; keep the configured list when it is present.
+            if (String.IsNullOrWhiteSpace(runner.Deployment) && String.Equals(descriptor.Name, ApiTypes.AzureOpenAI, StringComparison.OrdinalIgnoreCase))
+            {
+                runner.Deployment = runner.Models.FirstOrDefault() ?? String.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Determine whether a runner uses an Ollama-family API.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>True for Ollama and Ollama Cloud runners.</returns>
+        public static bool IsOllamaApiType(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+            return String.Equals(runner.ApiType, ApiTypes.Ollama, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(runner.ApiType, ApiTypes.OllamaCloud, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Determine whether a runner uses an OpenAI-family chat-completions API.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>True for OpenAI and OpenAI-compatible runners.</returns>
+        public static bool IsOpenAiCompatibleApiType(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+            return String.Equals(runner.ApiType, ApiTypes.OpenAI, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(runner.ApiType, ApiTypes.OpenAICompatible, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Resolve the effective endpoint for a runner, applying API type defaults.
+        /// </summary>
+        /// <param name="runner">Model runner settings.</param>
+        /// <returns>Endpoint URL, or an empty string when the runner has none.</returns>
+        public static string ResolveEndpoint(ModelRunnerSettings runner)
+        {
+            if (runner == null) throw new ArgumentNullException(nameof(runner));
+            string endpoint = (runner.Endpoint ?? String.Empty).Trim();
+            if (!String.IsNullOrWhiteSpace(endpoint)) return endpoint;
+
+            ApiTypeDescriptor? descriptor = ApiTypes.Describe(runner.ApiType);
+            return descriptor?.DefaultEndpoint ?? String.Empty;
+        }
+
+        private static bool IsLoopbackEndpoint(string? endpoint)
+        {
+            if (String.IsNullOrWhiteSpace(endpoint)) return true;
+            if (!Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out Uri? uri)) return false;
+            return uri.IsLoopback || String.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) || String.Equals(uri.Host, "host.docker.internal", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsOllama(ModelRunnerSettings runner)
         {
-            return String.Equals(runner.ApiType, "Ollama", StringComparison.OrdinalIgnoreCase);
+            return IsOllamaApiType(runner);
         }
     }
 

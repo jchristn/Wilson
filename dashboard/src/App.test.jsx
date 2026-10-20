@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ApiClient from './utils/api.js';
+import { apiTypeInfo, apiTypeNames, applyRunnerApiTypeChange, defaultHealthCheckSettings, defaultRunnerToolSettings, regionTooltip, runnerValidationError } from './utils/runnerValidation.js';
 import { mergeToolProgress, parseSseFrame } from './utils/sseTools.js';
 
 afterEach(() => {
@@ -234,5 +235,132 @@ describe('ApiClient', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe('http://localhost:9400/stream?keep=yes');
     expect(options.body).toBe('event: ping');
+  });
+});
+
+describe('runner configuration validation', () => {
+  it('accepts a cloud runner whose endpoint derives from the provider', () => {
+    const bedrock = { id: 'bedrock-runner', name: 'Bedrock', apiType: 'Bedrock', endpoint: '', region: 'us-east-1', models: ['anthropic.claude-3-5-sonnet'] };
+    const vertex = { id: 'vertex-runner', name: 'Vertex', apiType: 'VertexAI', endpoint: '', projectId: 'my-project', region: 'us-central1', models: ['gemini-1.5-pro'] };
+
+    expect(runnerValidationError(bedrock)).toBe('');
+    expect(runnerValidationError(vertex)).toBe('');
+  });
+
+  it('accepts a blank endpoint for providers with a catalog default endpoint', () => {
+    const anthropic = { id: 'anthropic', name: 'Anthropic', apiType: 'Anthropic', endpoint: '' };
+
+    expect(runnerValidationError(anthropic)).toBe('');
+    expect(apiTypeInfo('anthropic').endpoint).toBe('https://api.anthropic.com');
+  });
+
+  it('accepts a Bedrock runner with provider fields and no configured models', () => {
+    const bedrock = { id: 'bedrock', name: 'Bedrock', apiType: 'Bedrock', endpoint: '  ', region: 'eu-west-1', models: [] };
+
+    expect(runnerValidationError(bedrock)).toBe('');
+  });
+
+  it('rejects a provider that cannot derive an endpoint from provider settings', () => {
+    const compatible = { id: 'compatible', name: 'Compatible', apiType: 'OpenAICompatible', endpoint: '' };
+
+    expect(runnerValidationError(compatible)).toBe('Endpoint is required for OpenAI compatible model servers.');
+  });
+
+  it('rejects Azure OpenAI without a deployment or configured model', () => {
+    const azure = { id: 'azure', name: 'Azure', apiType: 'AzureOpenAI', endpoint: 'https://example.openai.azure.com', deployment: '', models: [] };
+
+    expect(runnerValidationError(azure)).toBe('Azure OpenAI model servers need a deployment name or at least one configured model.');
+  });
+
+  it('rejects missing identity fields even when the endpoint is valid', () => {
+    expect(runnerValidationError({ id: '', name: 'Name', apiType: 'Ollama', endpoint: 'http://localhost:11434' })).toBe('ID and name are required.');
+    expect(runnerValidationError({ id: 'id', name: '   ', apiType: 'Ollama', endpoint: 'http://localhost:11434' })).toBe('ID and name are required.');
+    expect(runnerValidationError(null)).toBe('ID and name are required.');
+  });
+
+  it('offers every server API type in the editor dropdown', () => {
+    expect(apiTypeNames).toEqual(['Ollama', 'OllamaCloud', 'OpenAI', 'OpenAICompatible', 'AzureOpenAI', 'Anthropic', 'Gemini', 'VertexAI', 'Bedrock', 'Cohere', 'XAI', 'TEI', 'VoyageAI']);
+  });
+
+  it('falls back to the Ollama descriptor for unknown API types', () => {
+    expect(apiTypeInfo('SomeFutureProvider').name).toBe('Ollama');
+  });
+
+  it('publishes provider-specific region defaults', () => {
+    expect(apiTypeInfo('VertexAI').defaultRegion).toBe('us-central1');
+    expect(apiTypeInfo('Bedrock').defaultRegion).toBe('us-east-1');
+    expect(apiTypeInfo('OpenAI').defaultRegion).toBeUndefined();
+  });
+
+  it('describes the region default each provider falls back to', () => {
+    expect(regionTooltip('VertexAI')).toContain('us-central1');
+    expect(regionTooltip('VertexAI')).not.toContain('us-east-1');
+    expect(regionTooltip('Bedrock')).toContain('us-east-1');
+    expect(regionTooltip('Anthropic')).toBe('Region is not used by this provider.');
+  });
+
+  it('rejects an AWS-style region for Vertex AI', () => {
+    const awsStyle = { id: 'vertex', name: 'Vertex', apiType: 'VertexAI', endpoint: '', projectId: 'my-project', region: 'us-east-1' };
+    const googleStyle = { ...awsStyle, region: 'us-east1' };
+    const multiRegion = { ...awsStyle, region: 'us' };
+
+    expect(runnerValidationError(awsStyle)).toBe('Region for Google Vertex AI must be a Google Cloud location such as us-central1, not an AWS region.');
+    expect(runnerValidationError(googleStyle)).toBe('');
+    expect(runnerValidationError(multiRegion)).toBe('');
+  });
+
+  it('accepts AWS-style regions for Bedrock', () => {
+    const bedrock = { id: 'bedrock', name: 'Bedrock', apiType: 'Bedrock', endpoint: '', region: 'us-east-1', models: [] };
+
+    expect(runnerValidationError(bedrock)).toBe('');
+  });
+
+  it('accepts a blank Vertex AI region so the server default applies', () => {
+    const vertex = { id: 'vertex', name: 'Vertex', apiType: 'VertexAI', endpoint: '', projectId: 'my-project', region: null };
+
+    expect(runnerValidationError(vertex)).toBe('');
+  });
+});
+
+describe('provider health check defaults', () => {
+  it.each(['Bedrock', 'VertexAI'])('disables probes for resource-derived %s endpoints', type => {
+    expect(defaultHealthCheckSettings(type, '  ')).toMatchObject({ healthCheckEnabled: false, healthCheckUrl: '' });
+    expect(defaultHealthCheckSettings(type, 'https://probe.example/')).toMatchObject({ healthCheckEnabled: false, healthCheckUrl: '' });
+  });
+  it('retains normal default endpoint probes', () => {
+    expect(defaultHealthCheckSettings('Ollama')).toMatchObject({ healthCheckEnabled: true, healthCheckUrl: 'http://localhost:11434/api/tags' });
+    expect(defaultHealthCheckSettings('OpenAI', '', 'key')).toMatchObject({ healthCheckEnabled: true, healthCheckUrl: 'https://api.openai.com/v1/models', healthCheckUseAuth: true });
+  });
+});
+
+describe('hosted provider health probes', () => {
+  it('authenticates Ollama Cloud while retaining local Ollama defaults', () => {
+    expect(defaultHealthCheckSettings('OllamaCloud', '', 'cloud-key').healthCheckUseAuth).toBe(true);
+    expect(defaultHealthCheckSettings('Ollama', '', 'local-key').healthCheckUseAuth).toBe(false);
+  });
+  it('does not invent a VoyageAI model-list health probe', () => {
+    expect(defaultHealthCheckSettings('VoyageAI', '', 'key')).toMatchObject({ healthCheckEnabled: false, healthCheckUrl: '' });
+  });
+});
+
+describe('changing model server API type', () => {
+  const ollama = () => ({ id: 'server', apiType: 'Ollama', endpoint: 'http://localhost:11434', apiKey: 'test-key', ...defaultRunnerToolSettings('Ollama'), ...defaultHealthCheckSettings('Ollama', 'http://localhost:11434', 'test-key') });
+  it('replaces Ollama defaults with Anthropic transport and probes', () => {
+    expect(applyRunnerApiTypeChange(ollama(), 'Anthropic')).toMatchObject({ id: 'server', endpoint: 'https://api.anthropic.com', toolCallingApiFormat: 'PolyPromptNative', healthCheckUrl: 'https://api.anthropic.com/v1/models', healthCheckUseAuth: true });
+  });
+  it('clears default localhost for resource-derived providers', () => {
+    for (const type of ['VertexAI', 'Bedrock']) expect(applyRunnerApiTypeChange(ollama(), type)).toMatchObject({ endpoint: '', healthCheckUrl: '', healthCheckEnabled: false, toolCallingApiFormat: 'PolyPromptNative', supportsParallelToolCalls: false });
+  });
+  it('preserves custom URLs and disabled controls', () => {
+    const runner = { ...ollama(), endpoint: 'https://proxy.example', healthCheckUrl: 'https://status.example/ready', toolsEnabled: false, healthCheckEnabled: false, healthCheckTimeoutMs: 12000 };
+    expect(applyRunnerApiTypeChange(runner, 'Anthropic')).toMatchObject({ endpoint: runner.endpoint, healthCheckUrl: runner.healthCheckUrl, toolsEnabled: false, healthCheckEnabled: false, healthCheckTimeoutMs: 12000 });
+  });
+  it('keeps settings on same-provider selection', () => {
+    const runner = { ...ollama(), toolCallingApiFormat: 'custom' };
+    expect(applyRunnerApiTypeChange(runner, 'Ollama')).toEqual(runner);
+  });
+  it('updates embedding-only capabilities and hosted bearer auth', () => {
+    expect(applyRunnerApiTypeChange(ollama(), 'VoyageAI')).toMatchObject({ supportsTools: false, toolCallingApiFormat: '', supportsParallelToolCalls: false, supportsStreamingToolCalls: false, healthCheckEnabled: false });
+    expect(applyRunnerApiTypeChange(ollama(), 'OllamaCloud')).toMatchObject({ endpoint: 'https://ollama.com', healthCheckUrl: 'https://ollama.com/api/tags', healthCheckUseAuth: true });
   });
 });

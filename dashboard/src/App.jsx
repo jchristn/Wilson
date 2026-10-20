@@ -10,6 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ApiClient from './utils/api';
 import { mergeToolProgress, parseSseFrame } from './utils/sseTools';
+import { apiTypeInfo, apiTypeNames, applyRunnerApiTypeChange, defaultHealthCheckSettings, defaultRunnerToolSettings, regionTooltip, runnerValidationError } from './utils/runnerValidation';
 import './index.css';
 
 const text = {
@@ -720,13 +721,13 @@ function Chat({ api, onOpenPrompts }) {
   }, [selectedRunner]);
   const selectedModelKey = modelKey(runnerId, model);
   const modelLoaded = loadedKeys.has(selectedModelKey) || (selectedRunner?.loadedModels || []).some(item => sameModelName(item, model));
-  const canLoadModel = selectedRunner?.apiType === 'Ollama' && model && !modelLoaded;
+  const canLoadModel = apiTypeInfo(selectedRunner?.apiType).ollama && model && !modelLoaded;
   const modelLoading = loadingModelKey === selectedModelKey;
   const availableTools = toolCatalog.filter(item => item.available);
   const runnerSupportsTools = selectedRunner?.toolsEnabled !== false && selectedRunner?.supportsTools !== false && !!selectedRunner?.toolCallingApiFormat;
   const selectedToolModels = Array.isArray(selectedRunner?.toolModels) ? selectedRunner.toolModels : null;
   const selectedModelSupportsTools = !!runnerSupportsTools && (!selectedToolModels || selectedToolModels.length < 1
-    ? selectedRunner?.apiType !== 'Ollama'
+    ? !apiTypeInfo(selectedRunner?.apiType).ollama
     : selectedToolModels.some(item => sameModelName(item, model)));
   const toolRequestEnabled = toolsEnabled && selectedModelSupportsTools;
   const effectiveToolInstructions = toolRequestEnabled ? toolInstructions : '';
@@ -1100,7 +1101,7 @@ function SystemPromptModal({ value, toolsEnabled, toolValue, defaultToolInstruct
 function CompletionSettingsModal({ settings, runner, onChange, onClose }) {
   const [draft, setDraft] = useState({ ...defaultCompletionSettings, ...settings });
   const set = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
-  const isOllama = runner?.apiType === 'Ollama';
+  const isOllama = apiTypeInfo(runner?.apiType).ollama;
   return (
     <Modal title="Completion Settings" onClose={onClose} wide>
       <div className="chat-settings-form">
@@ -1185,34 +1186,10 @@ function RenameConversationModal({ conversation, onClose, onSave }) {
   );
 }
 
-function defaultHealthCheckSettings(apiType = 'Ollama', endpoint = 'http://localhost:11434', apiKey = '') {
-  const isOllama = String(apiType || '').toLowerCase() === 'ollama';
-  const base = String(endpoint || '').replace(/\/+$/, '');
-  return {
-    healthCheckEnabled: true,
-    healthCheckUrl: `${base}${isOllama ? '/api/tags' : '/v1/models'}`,
-    healthCheckMethod: 'GET',
-    healthCheckIntervalMs: isOllama ? 5000 : 15000,
-    healthCheckTimeoutMs: isOllama ? 2000 : 5000,
-    healthCheckExpectedStatusCode: 200,
-    healthyThreshold: 2,
-    unhealthyThreshold: 2,
-    healthCheckUseAuth: !isOllama && Boolean(apiKey)
-  };
-}
 
-function defaultRunnerToolSettings(apiType = 'Ollama') {
-  const normalized = String(apiType || '').toLowerCase();
-  const isOllama = normalized === 'ollama';
-  const supported = isOllama || normalized === 'openai' || normalized === 'openaicompatible';
-  return {
-    toolsEnabled: true,
-    supportsTools: supported,
-    toolCallingApiFormat: isOllama ? 'OllamaChat' : (supported ? 'OpenAIChatCompletions' : ''),
-    supportsParallelToolCalls: true,
-    supportsStreamingToolCalls: true,
-    chatCompletionsPath: isOllama ? '' : '/v1/chat/completions'
-  };
+
+function defaultEndpointForApiType(apiType) {
+  return apiTypeInfo(apiType).endpoint || '';
 }
 
 function defaultToolsSettings() {
@@ -1274,6 +1251,10 @@ function newModelRunner() {
     apiType: 'Ollama',
     endpoint: 'http://localhost:11434',
     apiKey: '',
+    deployment: null,
+    apiVersion: null,
+    region: null,
+    projectId: null,
     models: [],
     contextWindowTokens: 8192,
     ...defaultRunnerToolSettings('Ollama'),
@@ -1287,15 +1268,21 @@ function normalizeRunnerForSave(runner) {
   return {
     ...runner,
     models: runner.models || [],
+    apiType: runner.apiType || 'Ollama',
+    endpoint: runner.endpoint || defaultEndpointForApiType(runner.apiType),
     contextWindowTokens: Number(runner.contextWindowTokens || 8192),
     apiKey: runner.apiKey || null,
+    deployment: runner.deployment || null,
+    apiVersion: runner.apiVersion || null,
+    region: runner.region || null,
+    projectId: runner.projectId || null,
     toolsEnabled: runner.toolsEnabled !== false,
     supportsTools: runner.supportsTools ?? toolDefaults.supportsTools,
     toolCallingApiFormat: runner.toolCallingApiFormat || toolDefaults.toolCallingApiFormat,
     supportsParallelToolCalls: runner.supportsParallelToolCalls !== false,
     supportsStreamingToolCalls: runner.supportsStreamingToolCalls !== false,
     chatCompletionsPath: runner.chatCompletionsPath ?? toolDefaults.chatCompletionsPath,
-    healthCheckEnabled: runner.healthCheckEnabled !== false,
+    healthCheckEnabled: runner.healthCheckEnabled ?? defaults.healthCheckEnabled,
     healthCheckUrl: runner.healthCheckUrl || defaults.healthCheckUrl,
     healthCheckMethod: runner.healthCheckMethod || defaults.healthCheckMethod,
     healthCheckIntervalMs: Number(runner.healthCheckIntervalMs || defaults.healthCheckIntervalMs),
@@ -1495,6 +1482,10 @@ function withRunnerSettings(server, settings) {
     name: configured.name || server.name,
     apiType: configured.apiType || server.apiType,
     endpoint: configured.endpoint || server.endpoint,
+    deployment: configured.deployment ?? server.deployment,
+    apiVersion: configured.apiVersion ?? server.apiVersion,
+    region: configured.region ?? server.region,
+    projectId: configured.projectId ?? server.projectId,
     health: server.health,
     configuredModels: configured.models || server.configuredModels || [],
     contextWindowTokens: configured.contextWindowTokens ?? server.contextWindowTokens,
@@ -1512,7 +1503,7 @@ function withRunnerSettings(server, settings) {
 
 function toRunnerSettings(server, settings) {
   const configured = settings?.modelRunners?.find(item => item.id === server.id);
-  return structuredCloneSafe(configured || normalizeRunnerForSave({ id: server.id, name: server.name, apiType: server.apiType, endpoint: server.endpoint, apiKey: '', models: server.configuredModels || [], contextWindowTokens: server.contextWindowTokens || 8192, ...defaultHealthCheckSettings(server.apiType, server.endpoint) }));
+  return structuredCloneSafe(configured || normalizeRunnerForSave({ id: server.id, name: server.name, apiType: server.apiType, endpoint: server.endpoint, apiKey: '', deployment: server.deployment || null, apiVersion: server.apiVersion || null, region: server.region || null, projectId: server.projectId || null, models: server.configuredModels || [], contextWindowTokens: server.contextWindowTokens || 8192, ...defaultRunnerToolSettings(server.apiType), ...defaultHealthCheckSettings(server.apiType, server.endpoint) }));
 }
 
 function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
@@ -1536,7 +1527,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
         </div>
         <button className={`health-status-button ${healthPresentation.tone}`} title={healthPresentation.title} onClick={() => setHealthOpen(true)}><Activity size={14} />{healthPresentation.label}</button>
       </header>
-      {server.apiType === 'Ollama' && (
+      {apiTypeInfo(server.apiType).ollama && (
         <div className="model-server-actions">
           <button className="secondary" title={`Send a live inference request to confirm ${server.name || server.id} is reachable and serving models`} onClick={() => setValidateOpen(true)}><Check size={16} />Validate</button>
           <button className="secondary" title={`Request that ${server.name || server.id} pull an Ollama model by name`} onClick={() => setPullOpen(true)}><Download size={16} />Pull model</button>
@@ -1544,7 +1535,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
           <button className="danger-button" title={`Delete model server ${server.name || server.id}`} onClick={onDelete}><Trash2 size={16} />Delete</button>
         </div>
       )}
-      {server.apiType !== 'Ollama' && (
+      {!apiTypeInfo(server.apiType).ollama && (
         <div className="model-server-actions">
           <button className="secondary" title={`Send a live inference request to confirm ${server.name || server.id} is reachable and serving models`} onClick={() => setValidateOpen(true)}><Check size={16} />Validate</button>
           <button className="secondary" title={`Update model server ${server.name || server.id}`} onClick={onEdit}><Pencil size={16} />Update</button>
@@ -1568,7 +1559,7 @@ function ModelServerCard({ server, api, onPulled, onEdit, onDelete }) {
       <ModelList title="Available models" tooltip="Models available from this server. For Ollama, Wilson queries the Ollama API when no models are configured." models={available} empty="No available models reported" />
       <ModelList title="Chat-capable models" tooltip="Models Wilson will show in the Chat model dropdown because they can handle chat or completion requests." models={chatModels} empty="No chat-capable models reported" />
       <ModelList title="Embedding-only models" tooltip="Models hidden from Chat because they appear to support embedding requests only." models={embeddingModels} empty="No embedding-only models detected" />
-      <ModelList title="Loaded / running models" tooltip="Models currently loaded or running according to the model server. Ollama reports this from /api/ps." models={loaded} empty={server.apiType === 'Ollama' ? 'No models currently loaded' : 'Loaded model status is not supported for this API type'} loaded />
+      <ModelList title="Loaded / running models" tooltip="Models currently loaded or running according to the model server. Ollama reports this from /api/ps." models={loaded} empty={apiTypeInfo(server.apiType).ollama ? 'No models currently loaded' : 'Loaded model status is not supported for this API type'} loaded />
       {server.statusMessage && server.online === false && <div className="model-server-error" title="Model server status error">{server.statusMessage}</div>}
       {pullOpen && <ModelPullModal server={server} api={api} suggestions={[...available, ...configured]} onClose={() => setPullOpen(false)} onPulled={onPulled} />}
       {healthOpen && <ModelServerHealthModal server={server} api={api} onClose={() => setHealthOpen(false)} />}
@@ -1833,10 +1824,11 @@ function ModelPullModal({ server, api, suggestions, onClose, onPulled }) {
 function ModelServerEditModal({ server, onClose, onSave }) {
   const [draft, setDraft] = useState(normalizeRunnerForSave(structuredCloneSafe(server)));
   const [error, setError] = useState('');
-  const set = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
+  const set = (key, value) => setDraft(prev => key === 'apiType' ? applyRunnerApiTypeChange(prev, value) : ({ ...prev, [key]: value }));
   async function save() {
-    if (!draft.id.trim() || !draft.name.trim() || !draft.endpoint.trim()) {
-      setError('ID, name, and endpoint are required.');
+    const validationError = runnerValidationError(draft);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     try {
@@ -1851,9 +1843,13 @@ function ModelServerEditModal({ server, onClose, onSave }) {
       <div className="form-grid model-server-editor">
         <FormInput label="Server ID" tooltip="Unique model server identifier used by chat requests and settings" value={draft.id} onChange={v => set('id', v)} />
         <FormInput label="Display name" tooltip="Human-readable model server name shown in the dashboard" value={draft.name} onChange={v => set('name', v)} />
-        <FormSelect label="API type" tooltip="Model server API compatibility" value={draft.apiType || 'Ollama'} options={['Ollama', 'OpenAI', 'OpenAICompatible']} onChange={v => set('apiType', v)} />
-        <FormInput label="Endpoint" tooltip="Base URL for this model server" value={draft.endpoint} onChange={v => set('endpoint', v)} />
-        <FormInput label="API key" tooltip="Optional API key sent to this model server" value={draft.apiKey || ''} onChange={v => set('apiKey', v)} />
+        <FormSelect label="API type" tooltip="Model server API compatibility. Providers beyond Ollama and OpenAI route through PolyPrompt provider clients." value={draft.apiType || 'Ollama'} options={apiTypeNames} onChange={v => set('apiType', v)} />
+        <FormInput label="Endpoint" tooltip="Base URL for this model server. Leave blank for providers that resolve the endpoint from region, project, or deployment." value={draft.endpoint} onChange={v => set('endpoint', v)} />
+        <FormInput label="Deployment" tooltip="Azure OpenAI deployment name. Used as the model when a request does not name one." value={draft.deployment || ''} onChange={v => set('deployment', v || null)} />
+        <FormInput label="API version" tooltip="Provider API version for versioned endpoints such as Azure OpenAI." value={draft.apiVersion || ''} onChange={v => set('apiVersion', v || null)} />
+        <FormInput label="Region" tooltip={regionTooltip(draft.apiType)} value={draft.region || ''} onChange={v => set('region', v || null)} />
+        <FormInput label="Project ID" tooltip="Google Cloud project id for Vertex AI." value={draft.projectId || ''} onChange={v => set('projectId', v || null)} />
+        <FormInput label="API key" tooltip="Optional API key sent to this model server. Bedrock accepts accessKeyId:secretAccessKey[:sessionToken]." value={draft.apiKey || ''} onChange={v => set('apiKey', v)} />
         <FormInput label="Context window tokens" tooltip="Maximum context window used for prompt truncation" type="number" value={draft.contextWindowTokens || 8192} onChange={v => set('contextWindowTokens', v)} />
         <div className="tool-editor-block">
           <div className="runner-editor-header"><strong>Tool Calling</strong></div>
@@ -3025,14 +3021,18 @@ function ToolDiagnosticsResult({ diagnostics }) {
 }
 
 function ModelRunnerEditor({ runner, index, onChange, onDelete }) {
-  const set = (key, value) => onChange({ ...runner, [key]: value });
+  const set = (key, value) => onChange(key === 'apiType' ? applyRunnerApiTypeChange(runner, value) : ({ ...runner, [key]: value }));
   return (
     <div className="runner-editor" title={`Model server ${index + 1}`}>
       <div className="runner-editor-header"><strong>Server {index + 1}</strong><button className="icon-button" title="Remove this model server" onClick={onDelete}><Trash2 size={16} /></button></div>
       <FormInput label="Server ID" tooltip="Unique model server identifier." value={runner.id || ''} onChange={v => set('id', v)} />
       <FormInput label="Name" tooltip="Display name for this model server." value={runner.name || ''} onChange={v => set('name', v)} />
-      <FormSelect label="API type" tooltip="Model server API compatibility." value={runner.apiType || 'Ollama'} options={['Ollama', 'OpenAI', 'OpenAICompatible']} onChange={v => set('apiType', v)} />
-      <FormInput label="Endpoint" tooltip="Base URL for the model server." value={runner.endpoint || ''} onChange={v => set('endpoint', v)} />
+      <FormSelect label="API type" tooltip="Model server API compatibility. Providers beyond Ollama and OpenAI route through PolyPrompt provider clients." value={runner.apiType || 'Ollama'} options={apiTypeNames} onChange={v => set('apiType', v)} />
+      <FormInput label="Endpoint" tooltip="Base URL for the model server. Leave blank for providers that resolve the endpoint from region, project, or deployment." value={runner.endpoint || ''} onChange={v => set('endpoint', v)} />
+      <FormInput label="Deployment" tooltip="Azure OpenAI deployment name. Used as the model when a request does not name one." value={runner.deployment || ''} onChange={v => set('deployment', v || null)} />
+      <FormInput label="API version" tooltip="Provider API version for versioned endpoints such as Azure OpenAI." value={runner.apiVersion || ''} onChange={v => set('apiVersion', v || null)} />
+      <FormInput label="Region" tooltip={regionTooltip(runner.apiType)} value={runner.region || ''} onChange={v => set('region', v || null)} />
+      <FormInput label="Project ID" tooltip="Google Cloud project id for Vertex AI." value={runner.projectId || ''} onChange={v => set('projectId', v || null)} />
       <FormInput label="API key" tooltip="Optional API key for the model server." value={runner.apiKey || ''} onChange={v => set('apiKey', v || null)} />
       <FormList label="Configured models" tooltip="Known model names. Leave empty for Ollama to let Wilson query the Ollama server." value={runner.models || []} onChange={v => set('models', v)} />
       <FormInput label="Context window tokens" tooltip="Context window used for prompt truncation." type="number" value={runner.contextWindowTokens ?? 8192} onChange={v => set('contextWindowTokens', Number(v))} />

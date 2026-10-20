@@ -6,12 +6,35 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 
 ### Dependencies
 
-- Updated PolyPrompt from 2.6.0 to 3.1.0. Inference now uses the 3.x per-capability clients: `OllamaCompletionClient`/`OpenAiCompletionClient` for chat and tool chat, and `OllamaModelClient`/`OpenAiModelClient` for model listing. Chat options moved to `CompletionOptions`/`OllamaCompletionOptions`. Tool-chat model, temperature, top-p, and max tokens now go in `ToolChatRequest.Options`.
+- Updated PolyPrompt from 2.6.0 to 3.4.0 and integrated the newer provider and endpoint types it exposes.
 - Updated Voltaic from 2.0.0 to 2.2.1, Watson from 7.2.0 to 7.2.2, Touchstone (Core, Cli, XunitAdapter, NunitAdapter) from 0.1.12 to 0.2.0, and NUnit from 4.6.1 to 5.0.0.
 - Bumped the server, dashboard, SDK, and OpenAPI document versions to `0.1.1`.
 
+### Model server providers
+
+- Added an API type catalog (`Wilson.Core.Settings.ApiTypes`) covering `Ollama`, `OllamaCloud`, `OpenAI`, `OpenAICompatible`, `AzureOpenAI`, `Anthropic`, `Gemini`, `VertexAI`, `Bedrock`, `Cohere`, `XAI`, `TEI`, and `VoyageAI`, each with a default endpoint, default health path, and capability flags.
+- Chat, streaming chat, tool chat, embeddings, and model listing now select the matching PolyPrompt 3.x client per API type instead of assuming Ollama or OpenAI.
+- Added `deployment`, `apiVersion`, `region`, and `projectId` runner settings for Azure OpenAI, Vertex AI, and AWS Bedrock. `region` is resolved per provider: Vertex AI uses `GOOGLE_CLOUD_REGION`/`GOOGLE_CLOUD_LOCATION` and then `us-central1`, while AWS Bedrock uses `AWS_REGION`/`AWS_DEFAULT_REGION` and then `us-east-1`.
+- Added the `PolyPromptNative` tool-calling format for providers that speak their own tool protocol, and made tool-call, parallel-tool, and streaming-tool defaults API-type aware.
+- Added a read-only `GET /v1.0/api/api-types` endpoint, OpenAPI coverage, C#/JavaScript/Python SDK methods, and dashboard provider fields.
+- Embedding validation now uses the PolyPrompt embedding clients instead of hand-built provider HTTP calls, which adds Azure OpenAI, Gemini, Vertex AI, Bedrock, Cohere, xAI, TEI, and VoyageAI embedding support.
+- Unsupported API types are preserved in configuration, keep normal chat behavior, and have tools disabled. Chat, reasoning chat, and embeddings for an unrecognized `apiType` keep the pre-3.x Ollama-family clients, so an existing custom configuration is never silently broken. Cataloged providers that genuinely lack a capability, such as `TEI` and `VoyageAI` for chat or `Anthropic` for embeddings, still fail with an explicit error.
+- The dashboard model server editor validates against provider requirements instead of requiring a nonblank endpoint for every API type. Vertex AI, AWS Bedrock, and every provider with a catalog default endpoint can be saved with a blank endpoint, while `OpenAICompatible` still requires one and `AzureOpenAI` requires a deployment or a configured model.
+
 ### Fixes
 
+- Provider health-header regression checks now run over local TCP sockets in the default automated suite; the external Postman fixture remains an optional additional contract run.
+
+- Both dashboard model-runner editors refresh protocol, capability, and health defaults when API type changes. Catalog-default endpoints switch to the new provider; custom endpoint/probe URLs and deliberately disabled controls are preserved.
+
+- Bedrock static and environment credentials now receive the runner's resolved region for completion, embeddings, and model-management clients. Tests exercise real PolyPrompt constructors for every advertised provider capability and validate AWS credential resolution without network calls.
+
+- Health probes use Anthropic, Gemini, and Azure API-key headers, include the Anthropic API version, and authenticate Ollama Cloud. VoyageAI no longer probes an unsupported model-list path. Provider headers are exercised against the local Postman HTTP fixture.
+
+- Resource-derived cloud runners without a probeable endpoint disable default health checks and remain available. Explicit absolute health URLs remain supported; malformed probe URLs produce an actionable error before any network request. Dashboard defaults match the server.
+
+- Region resolution is now provider-specific. `VertexAI` runners resolve `region` from the runner, then `GOOGLE_CLOUD_REGION`/`GOOGLE_CLOUD_LOCATION`, then the Google default `us-central1`; `Bedrock` runners keep the AWS chain (`AWS_REGION`/`AWS_DEFAULT_REGION`, then `us-east-1`). Previously both providers shared one resolver, so a Vertex AI runner with no region silently received `us-east-1` and PolyPrompt built the invalid endpoint `https://us-east-1-aiplatform.googleapis.com`. AWS region environment variables are no longer read for Vertex AI.
+- The API type catalog now publishes a per-provider `defaultRegion` (`us-central1` for `VertexAI`, `us-east-1` for `Bedrock`, empty for every other provider), so the API, SDK, and dashboard can show the region a blank setting resolves to.
 - MCP `tools/call` results with `isError: true` are now reported as failed `mcp_call_failed` tool results instead of successes. Voltaic 2.2 returns input-schema violations, such as undeclared arguments, this way instead of as a JSON-RPC error.
 
 ### Build
@@ -21,6 +44,9 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 ### Tests
 
 - Added a `PolyPrompt option mapping` test that covers tool-chat `Options` mapping, defaulting to client settings, and Ollama versus OpenAI completion option types.
+- Added API type catalog tests covering catalog completeness, provider capability flags, API-type-aware health and tool defaults, provider completion option selection, and rejection of unsupported values.
+- Added an `API type unknown chat fallback` test that drives a fake Ollama chat endpoint through chat, reasoning chat, and tool chat for an unrecognized `apiType`, asserting normal chat still works, no tool definitions are sent, tools stay disabled, and a cataloged embeddings-only provider still refuses chat.
+- Added dashboard tests for provider-aware runner validation: cloud runners with blank endpoints, providers with catalog default endpoints, Bedrock runners without configured models, and the negative cases for `OpenAICompatible`, `AzureOpenAI`, and missing identity fields.
 
 ## v0.1.0
 

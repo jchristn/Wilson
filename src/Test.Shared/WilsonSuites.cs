@@ -75,6 +75,12 @@ namespace Test.Shared
                         CreateAsyncCase("mcp-tools", "MCP tools", McpToolsAsync),
                         CreateSyncCase("tool-capable-inference-parsing", "Tool-capable inference parsing", ToolCapableInferenceParsing),
                         CreateSyncCase("polyprompt-option-mapping", "PolyPrompt option mapping", PolyPromptOptionMapping),
+                        CreateSyncCase("api-type-catalog", "API type catalog", ApiTypeCatalog),
+                        CreateSyncCase("api-type-provider-defaults", "API type provider defaults", ApiTypeProviderDefaults),
+                        CreateSyncCase("provider-region-defaults", "Provider region defaults", ProviderRegionDefaults),
+                        CreateSyncCase("bedrock-credentials", "Bedrock static and environment credentials", BedrockCredentials),
+                        CreateSyncCase("provider-client-construction", "All provider client constructors match advertised capabilities", ProviderClientConstruction),
+                        CreateAsyncCase("api-type-unknown-chat-fallback", "API type unknown chat fallback", UnknownApiTypeChatFallbackAsync),
                         CreateSyncCase("think-parser", "Think parser", ThinkParserSplitting),
                         CreateAsyncCase("tool-agent-loop", "Tool agent loop", ToolAgentLoopAsync),
                         CreateAsyncCase("tool-agent-approval-policy", "Tool agent approval policy", ToolAgentApprovalPolicyAsync),
@@ -82,6 +88,7 @@ namespace Test.Shared
                         CreateAsyncCase("tool-agent-per-turn-output-limit", "Tool agent per-turn output limit", ToolAgentPerTurnOutputLimitAsync),
                         CreateSyncCase("context-truncation", "Context truncation", ContextTruncationAsync),
                         CreateSyncCase("health-check-defaults", "Health check defaults", HealthCheckDefaults),
+                        CreateAsyncCase("cloud-health-check-defaults", "Cloud resource health checks and invalid URLs", CloudHealthCheckDefaultsAsync),
                         CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
                         CreateSyncCase("health-status-snapshot", "Health status snapshot", HealthStatusSnapshot)
                     })
@@ -1941,6 +1948,33 @@ namespace Test.Shared
             }
         }
 
+        private static async Task RunFakeOllamaChatServerAsync(int port, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    if (!request.StartsWith("POST /api/chat ", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected the legacy fallback chat client to post to the Ollama chat endpoint, received: " + request.Split('\n')[0]);
+
+                    if (request.Contains("\"tools\"", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected an unrecognized apiType chat request to send no tool definitions.");
+
+                    string body = "{\"model\":\"legacy-model\",\"message\":{\"role\":\"assistant\",\"content\":\"legacy fallback answer\"},\"done\":true,\"done_reason\":\"stop\"}";
+                    await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
         private static async Task RunFakeOllamaPullErrorServerAsync(int port, CancellationToken token)
         {
             TcpListener listener = new TcpListener(IPAddress.Loopback, port);
@@ -2997,6 +3031,392 @@ namespace Test.Shared
             if (plainReasoning.Length != 0 || plain.Thinking.Length != 0) throw new InvalidOperationException("Expected no reasoning to be captured for plain text.");
         }
 
+        private static void ApiTypeCatalog()
+        {
+            // Positive: every supported provider is cataloged with a usable descriptor.
+            string[] expected = { "Ollama", "OllamaCloud", "OpenAI", "OpenAICompatible", "AzureOpenAI", "Anthropic", "Gemini", "VertexAI", "Bedrock", "Cohere", "XAI", "TEI", "VoyageAI" };
+            IReadOnlyList<string> supported = ApiTypes.Supported;
+            foreach (string name in expected)
+            {
+                if (!supported.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Expected API type catalog to include " + name + ".");
+                ApiTypeDescriptor? descriptor = ApiTypes.Describe(name);
+                if (descriptor == null)
+                    throw new InvalidOperationException("Expected ApiTypes.Describe to resolve " + name + ".");
+                if (!String.Equals(descriptor.Name, name, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected canonical API type name " + name + ", got " + descriptor.Name + ".");
+                if (String.IsNullOrWhiteSpace(descriptor.DisplayName))
+                    throw new InvalidOperationException("Expected " + name + " to have a display name.");
+                if (descriptor.SupportsChat && String.IsNullOrWhiteSpace(descriptor.DefaultToolCallingApiFormat))
+                    throw new InvalidOperationException("Expected chat-capable API type " + name + " to declare a default tool-calling format.");
+                if (!descriptor.SupportsChat && !descriptor.SupportsEmbeddings)
+                    throw new InvalidOperationException("Expected " + name + " to support chat or embeddings.");
+            }
+
+            // Positive: name matching is case-insensitive and trimmed.
+            if (!String.Equals(ApiTypes.Normalize("  anthropic "), "Anthropic", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected trimmed, case-insensitive API type normalization.");
+            if (!ApiTypes.TryNormalize("openai", out string normalizedOpenAi) || !String.Equals(normalizedOpenAi, "OpenAI", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected TryNormalize to canonicalize lowercase apiType values.");
+            if (String.IsNullOrWhiteSpace(ApiTypes.Normalize(null)))
+                throw new InvalidOperationException("Expected a blank apiType to resolve to the default API type.");
+
+            // Positive: provider capability flags.
+            ApiTypeDescriptor tei = ApiTypes.Describe("TEI")!;
+            if (tei.SupportsChat || tei.SupportsTools || !tei.SupportsEmbeddings)
+                throw new InvalidOperationException("Expected TEI to be embeddings-only with no tool support.");
+            ApiTypeDescriptor voyage = ApiTypes.Describe("VoyageAI")!;
+            if (voyage.SupportsChat || voyage.SupportsTools || voyage.SupportsModelListing)
+                throw new InvalidOperationException("Expected VoyageAI to be embeddings-only without model listing.");
+            ApiTypeDescriptor anthropic = ApiTypes.Describe("Anthropic")!;
+            if (!anthropic.RequiresApiKey || anthropic.SupportsEmbeddings || !anthropic.SupportsTools)
+                throw new InvalidOperationException("Unexpected Anthropic capability flags.");
+            ApiTypeDescriptor ollamaCloud = ApiTypes.Describe("OllamaCloud")!;
+            if (!ollamaCloud.RequiresApiKey || !String.Equals(ollamaCloud.DefaultToolCallingApiFormat, ToolCallingApiFormats.OllamaChat, StringComparison.Ordinal))
+                throw new InvalidOperationException("Unexpected Ollama Cloud capability flags.");
+
+            // Negative: unsupported values are rejected rather than silently rewritten.
+            if (ApiTypes.IsSupported("NotAProvider"))
+                throw new InvalidOperationException("Expected an unknown API type to be unsupported.");
+            if (ApiTypes.Describe("NotAProvider") != null)
+                throw new InvalidOperationException("Expected Describe to return null for an unknown API type.");
+            bool threw = false;
+            try
+            {
+                ApiTypes.Normalize("NotAProvider");
+            }
+            catch (ArgumentException ex)
+            {
+                threw = ex.Message.Contains("Unsupported API type", StringComparison.Ordinal);
+            }
+
+            if (!threw)
+                throw new InvalidOperationException("Expected ApiTypes.Normalize to reject an unsupported API type.");
+            if (ApiTypes.TryNormalize("NotAProvider", out string unsupported) || String.IsNullOrWhiteSpace(unsupported))
+                throw new InvalidOperationException("Expected TryNormalize to preserve an unsupported apiType value and report failure.");
+            if (!String.Equals(unsupported, "NotAProvider", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected TryNormalize to preserve the raw unsupported apiType value.");
+        }
+
+        private static void ApiTypeProviderDefaults()
+        {
+            // Positive: default endpoints and health paths come from the API type catalog.
+            ModelRunnerSettings anthropic = new ModelRunnerSettings { ApiType = "anthropic", Endpoint = String.Empty };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(anthropic);
+            if (!String.Equals(anthropic.Endpoint, "https://api.anthropic.com", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected a blank Anthropic endpoint to resolve to the catalog default.");
+            if (!String.Equals(anthropic.HealthCheckUrl, "https://api.anthropic.com/v1/models", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Anthropic health checks to use /v1/models, got " + anthropic.HealthCheckUrl + ".");
+            if (!String.Equals(anthropic.ToolCallingApiFormat, ToolCallingApiFormats.PolyPromptNative, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Anthropic runners to default to PolyPromptNative tool calls.");
+
+            ModelRunnerSettings tei = new ModelRunnerSettings { ApiType = "TEI", Endpoint = "http://localhost:8080" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(tei);
+            if (tei.SupportsTools)
+                throw new InvalidOperationException("Expected TEI runners to have tools disabled.");
+            if (!String.Equals(tei.HealthCheckUrl, "http://localhost:8080/info", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected TEI health checks to use /info, got " + tei.HealthCheckUrl + ".");
+
+            ModelRunnerSettings voyage = new ModelRunnerSettings { ApiType = "VoyageAI", ApiKey = "voyage-key" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(voyage);
+            if (!voyage.HealthCheckUseAuth)
+                throw new InvalidOperationException("Expected VoyageAI health checks to send auth when a key is configured.");
+            if (voyage.SupportsTools || voyage.SupportsParallelToolCalls)
+                throw new InvalidOperationException("Expected VoyageAI to disable tool calling.");
+
+            // Positive: Ollama-family runners keep the Ollama defaults.
+            ModelRunnerSettings ollamaCloud = new ModelRunnerSettings { ApiType = "OllamaCloud", ApiKey = "cloud-key" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(ollamaCloud);
+            if (ollamaCloud.HealthCheckIntervalMs != 5000 || ollamaCloud.HealthCheckTimeoutMs != 2000)
+                throw new InvalidOperationException("Expected Ollama Cloud to keep Ollama-family health timings.");
+            if (!String.Equals(ollamaCloud.ToolCallingApiFormat, ToolCallingApiFormats.OllamaChat, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Ollama Cloud to default to OllamaChat tool calls.");
+            if (!String.Equals(ModelRunnerSettings.ResolveEndpoint(ollamaCloud), "https://ollama.com", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected a blank Ollama Cloud endpoint to resolve to the catalog default.");
+
+            // Positive: OpenAI-compatible runners keep the chat-completions defaults.
+            ModelRunnerSettings openAi = new ModelRunnerSettings { ApiType = "OpenAI", Endpoint = "https://api.openai.com", ApiKey = "test-key" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(openAi);
+            if (!String.Equals(openAi.ToolCallingApiFormat, ToolCallingApiFormats.OpenAIChatCompletions, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected OpenAI runners to default to OpenAIChatCompletions tool calls.");
+            if (!String.Equals(openAi.ChatCompletionsPath, "/v1/chat/completions", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected OpenAI runners to default the chat completions path.");
+
+            // Positive: Azure OpenAI derives a deployment from the configured model list.
+            ModelRunnerSettings azure = new ModelRunnerSettings { ApiType = "AzureOpenAI", Endpoint = "https://example.openai.azure.com", ApiKey = "azure-key", Models = new List<string> { "gpt-4o" } };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(azure);
+            if (!String.Equals(azure.Deployment, "gpt-4o", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI to default deployment from the model list.");
+            if (!String.Equals(azure.ToolCallingApiFormat, ToolCallingApiFormats.PolyPromptNative, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected Azure OpenAI to default to PolyPromptNative tool calls.");
+
+            // Negative: an unknown API type stays in configuration, keeps chat, and disables tools.
+            ModelRunnerSettings unknown = new ModelRunnerSettings { ApiType = "SomeFutureProvider", Endpoint = "http://localhost:9999" };
+            ModelRunnerSettings.ApplyHealthCheckDefaults(unknown);
+            if (unknown.SupportsTools)
+                throw new InvalidOperationException("An unsupported API type must not default to tool support.");
+            if (!String.IsNullOrWhiteSpace(unknown.ToolCallingApiFormat))
+                throw new InvalidOperationException("An unsupported API type must not be assigned a tool-calling format.");
+            if (!String.Equals(unknown.ApiType, "SomeFutureProvider", StringComparison.Ordinal))
+                throw new InvalidOperationException("An unsupported API type must not be rewritten.");
+            if (!String.Equals(unknown.HealthCheckUrl, "http://localhost:9999/v1/models", StringComparison.Ordinal))
+                throw new InvalidOperationException("An unsupported API type should keep the generic health check default.");
+
+            // Negative: null runners are rejected.
+            bool threw = false;
+            try
+            {
+                ModelRunnerSettings.ApplyHealthCheckDefaults(null!);
+            }
+            catch (ArgumentNullException)
+            {
+                threw = true;
+            }
+
+            if (!threw) throw new InvalidOperationException("Expected null runners to be rejected.");
+        }
+
+        private static void ProviderRegionDefaults()
+        {
+            // Positive: the catalog publishes provider-shaped region defaults so the API, SDK, and dashboard
+            // never have to guess an identifier style.
+            ApiTypeDescriptor vertex = ApiTypes.Describe("VertexAI")!;
+            if (!String.Equals(vertex.DefaultRegion, ApiTypes.DefaultVertexRegion, StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the Vertex AI catalog entry to publish the Google region default, got '" + vertex.DefaultRegion + "'.");
+            if (!String.Equals(vertex.DefaultRegion, "us-central1", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the Vertex AI default region to be a Google location such as us-central1, got '" + vertex.DefaultRegion + "'.");
+            ApiTypeDescriptor bedrock = ApiTypes.Describe("Bedrock")!;
+            if (!String.Equals(bedrock.DefaultRegion, "us-east-1", StringComparison.Ordinal))
+                throw new InvalidOperationException("Expected the AWS Bedrock default region to stay us-east-1, got '" + bedrock.DefaultRegion + "'.");
+            foreach (string name in new[] { "Ollama", "OllamaCloud", "OpenAI", "OpenAICompatible", "AzureOpenAI", "Anthropic", "Gemini", "Cohere", "XAI", "TEI", "VoyageAI" })
+            {
+                ApiTypeDescriptor descriptor = ApiTypes.Describe(name)!;
+                if (!String.IsNullOrEmpty(descriptor.DefaultRegion))
+                    throw new InvalidOperationException("Expected " + name + " not to publish a region default, got '" + descriptor.DefaultRegion + "'.");
+            }
+
+            MethodInfo resolveVertex = typeof(InferenceService).GetMethod("ResolveVertexRegion", BindingFlags.NonPublic | BindingFlags.Static)!;
+            MethodInfo resolveBedrock = typeof(InferenceService).GetMethod("ResolveBedrockRegion", BindingFlags.NonPublic | BindingFlags.Static)!;
+            if (resolveVertex == null || resolveBedrock == null)
+                throw new InvalidOperationException("Expected provider-specific region resolvers for Vertex AI and AWS Bedrock.");
+
+            string? savedAwsRegion = Environment.GetEnvironmentVariable("AWS_REGION");
+            string? savedAwsDefaultRegion = Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION");
+            string? savedGoogleRegion = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_REGION");
+            string? savedGoogleLocation = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_LOCATION");
+            try
+            {
+                // The affected case: a Vertex AI runner with no region and no AWS region environment variables.
+                Environment.SetEnvironmentVariable("AWS_REGION", null);
+                Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", null);
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_REGION", null);
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_LOCATION", null);
+
+                ModelRunnerSettings blank = new ModelRunnerSettings { Id = "vertex-runner", ApiType = "VertexAI", Endpoint = String.Empty, ProjectId = "my-project" };
+                string vertexRegion = (string)resolveVertex.Invoke(null, new object[] { blank })!;
+                if (!String.Equals(vertexRegion, "us-central1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected a blank Vertex AI region to default to us-central1, got '" + vertexRegion + "'.");
+                if (String.Equals(vertexRegion, "us-east-1", StringComparison.Ordinal) || vertexRegion.Contains("-1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected the Vertex AI default region to never inherit the AWS region default, got '" + vertexRegion + "'.");
+
+                string bedrockRegion = (string)resolveBedrock.Invoke(null, new object[] { new ModelRunnerSettings { Id = "bedrock-runner", ApiType = "Bedrock" } })!;
+                if (!String.Equals(bedrockRegion, "us-east-1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected the Bedrock region to keep the AWS default, got '" + bedrockRegion + "'.");
+
+                // Negative: AWS region environment variables must not leak into the Google resolver.
+                Environment.SetEnvironmentVariable("AWS_REGION", "eu-west-1");
+                Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", "eu-west-1");
+                string vertexAfterAws = (string)resolveVertex.Invoke(null, new object[] { blank })!;
+                if (!String.Equals(vertexAfterAws, "us-central1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected AWS_REGION not to influence the Vertex AI region, got '" + vertexAfterAws + "'.");
+                string bedrockAfterAws = (string)resolveBedrock.Invoke(null, new object[] { new ModelRunnerSettings { Id = "bedrock-runner", ApiType = "Bedrock" } })!;
+                if (!String.Equals(bedrockAfterAws, "eu-west-1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected AWS_REGION to supply the Bedrock region, got '" + bedrockAfterAws + "'.");
+
+                // Positive: Google Cloud region environment variables supply the Vertex AI region.
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_REGION", "europe-west4");
+                if (!String.Equals((string)resolveVertex.Invoke(null, new object[] { blank })!, "europe-west4", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected GOOGLE_CLOUD_REGION to supply the Vertex AI region.");
+
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_REGION", null);
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_LOCATION", "asia-northeast1");
+                if (!String.Equals((string)resolveVertex.Invoke(null, new object[] { blank })!, "asia-northeast1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected GOOGLE_CLOUD_LOCATION to supply the Vertex AI region.");
+
+                // Regression: blank primary variables must not hide nonblank secondary values.
+                foreach (string primary in new[] { "", " ", "\t" })
+                {
+                    Environment.SetEnvironmentVariable("AWS_REGION", primary);
+                    Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", " eu-central-1 ");
+                    Environment.SetEnvironmentVariable("GOOGLE_CLOUD_REGION", primary);
+                    Environment.SetEnvironmentVariable("GOOGLE_CLOUD_LOCATION", " europe-west4 ");
+                    if (!String.Equals((string)resolveBedrock.Invoke(null, new object[] { blank })!, "eu-central-1", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected blank AWS_REGION to fall through to trimmed AWS_DEFAULT_REGION.");
+                    if (!String.Equals((string)resolveVertex.Invoke(null, new object[] { blank })!, "europe-west4", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected blank GOOGLE_CLOUD_REGION to fall through to trimmed GOOGLE_CLOUD_LOCATION.");
+
+                    Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", " ");
+                    Environment.SetEnvironmentVariable("GOOGLE_CLOUD_LOCATION", " ");
+                    if (!String.Equals((string)resolveBedrock.Invoke(null, new object[] { blank })!, "us-east-1", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected blank AWS environment variables to use the Bedrock default.");
+                    if (!String.Equals((string)resolveVertex.Invoke(null, new object[] { blank })!, "us-central1", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected blank Google environment variables to use the Vertex AI default.");
+                }
+
+                // Positive: an explicitly configured region always wins for both providers, trimmed.
+                ModelRunnerSettings explicitVertex = new ModelRunnerSettings { Id = "vertex-runner", ApiType = "VertexAI", Region = " us-east1 " };
+                if (!String.Equals((string)resolveVertex.Invoke(null, new object[] { explicitVertex })!, "us-east1", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an explicit Vertex AI region to win over environment values.");
+                ModelRunnerSettings explicitBedrock = new ModelRunnerSettings { Id = "bedrock-runner", ApiType = "Bedrock", Region = " ap-southeast-2 " };
+                if (!String.Equals((string)resolveBedrock.Invoke(null, new object[] { explicitBedrock })!, "ap-southeast-2", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an explicit Bedrock region to win over environment values.");
+
+                // Positive: the client factories route each provider through its own resolver and stay constructible
+                // with no region configured for Vertex AI.
+                MethodInfo createClient = typeof(InferenceService).GetMethod("CreateCompletionClient", BindingFlags.NonPublic | BindingFlags.Static)!;
+                PolyPrompt.Clients.CompletionClientBase vertexClient = (PolyPrompt.Clients.CompletionClientBase)createClient.Invoke(null, new object[] { new ModelRunnerSettings { Id = "vertex-runner", ApiType = "VertexAI", Endpoint = String.Empty, ProjectId = "my-project" } })!;
+                if (vertexClient is not PolyPrompt.Clients.VertexAiCompletionClient)
+                    throw new InvalidOperationException("Expected Vertex AI runners to build a VertexAiCompletionClient, got " + vertexClient.GetType().Name + ".");
+                vertexClient.Dispose();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("AWS_REGION", savedAwsRegion);
+                Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", savedAwsDefaultRegion);
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_REGION", savedGoogleRegion);
+                Environment.SetEnvironmentVariable("GOOGLE_CLOUD_LOCATION", savedGoogleLocation);
+            }
+        }
+
+        private static void BedrockCredentials()
+        {
+            string[] variables = { "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION" };
+            Dictionary<string, string?> saved = variables.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+            MethodInfo resolver = typeof(InferenceService).GetMethod("ResolveAwsCredential", BindingFlags.NonPublic | BindingFlags.Static)!;
+            try
+            {
+                foreach (string variable in variables) Environment.SetEnvironmentVariable(variable, null);
+                ModelRunnerSettings runner = new ModelRunnerSettings { ApiType = "Bedrock", Region = " eu-west-1 " };
+                foreach (string apiKey in new[] { "test-access:test-secret", "test-access:test-secret:test-session:tail" })
+                {
+                    PolyPrompt.Auth.IAwsCredentialProvider provider = (PolyPrompt.Auth.IAwsCredentialProvider)resolver.Invoke(null, new object?[] { runner, apiKey })!;
+                    PolyPrompt.Auth.AwsCredentials credentials = provider.Resolve();
+                    if (credentials.Region != "eu-west-1" || credentials.AccessKeyId != "test-access" || credentials.SecretAccessKey != "test-secret")
+                        throw new InvalidOperationException("Static Bedrock credentials must retain the configured region and keys.");
+                    if (apiKey.EndsWith(":tail", StringComparison.Ordinal) && credentials.SessionToken != "test-session:tail")
+                        throw new InvalidOperationException("Temporary AWS session tokens must remain intact.");
+                }
+                Environment.SetEnvironmentVariable("AWS_ACCESS_KEY_ID", "test-env-access");
+                Environment.SetEnvironmentVariable("AWS_SECRET_ACCESS_KEY", "test-env-secret");
+                Environment.SetEnvironmentVariable("AWS_SESSION_TOKEN", "test-env-session");
+                PolyPrompt.Auth.IAwsCredentialProvider environment = (PolyPrompt.Auth.IAwsCredentialProvider)resolver.Invoke(null, new object?[] { runner, null })!;
+                if (environment.Resolve().Region != "eu-west-1" || environment.Resolve().SessionToken != "test-env-session")
+                    throw new InvalidOperationException("Environment AWS credentials must use the configured runner region without region environment variables.");
+                Environment.SetEnvironmentVariable("AWS_REGION", "us-west-2");
+                if (environment.Resolve().Region != "eu-west-1") throw new InvalidOperationException("Configured region must take precedence for environment credentials.");
+                runner.Region = null;
+                PolyPrompt.Auth.IAwsCredentialProvider fallback = (PolyPrompt.Auth.IAwsCredentialProvider)resolver.Invoke(null, new object?[] { runner, null })!;
+                if (fallback.Resolve().Region != "us-west-2") throw new InvalidOperationException("Unset runner region must use the AWS region chain.");
+                bool rejected = false;
+                try { resolver.Invoke(null, new object?[] { runner, "invalid-format" }); }
+                catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException) { rejected = true; }
+                if (!rejected) throw new InvalidOperationException("Invalid static credential format must be rejected.");
+            }
+            finally { foreach (KeyValuePair<string, string?> value in saved) Environment.SetEnvironmentVariable(value.Key, value.Value); }
+        }
+
+        private static void ProviderClientConstruction()
+        {
+            foreach (string apiType in ApiTypes.Supported)
+            {
+                ApiTypeDescriptor descriptor = ApiTypes.Describe(apiType)!;
+                ModelRunnerSettings runner = new ModelRunnerSettings { Id = apiType, ApiType = apiType, Endpoint = "https://provider.example", ApiKey = apiType == "Bedrock" ? "test-access:test-secret:test-session" : "test-key",
+                    Region = apiType == "VertexAI" ? "us-central1" : "eu-west-1", ProjectId = "test-project", Deployment = "test-deployment", Models = new List<string> { "test-model" } };
+                foreach (KeyValuePair<string, bool> operation in new Dictionary<string, bool> { ["CreateCompletionClient"] = descriptor.SupportsChat, ["CreateEmbeddingClient"] = descriptor.SupportsEmbeddings, ["CreateModelClient"] = descriptor.SupportsModelListing })
+                {
+                    MethodInfo factory = typeof(InferenceService).GetMethod(operation.Key, BindingFlags.NonPublic | BindingFlags.Static)!;
+                    try
+                    {
+                        object? client = factory.Invoke(null, new object[] { runner });
+                        if (operation.Value && client == null) throw new InvalidOperationException(apiType + " advertises " + operation.Key + " but produces no client.");
+                        if (!operation.Value && client != null) throw new InvalidOperationException(apiType + " unexpectedly constructs unsupported " + operation.Key + ".");
+                    }
+                    catch (TargetInvocationException ex) when (!operation.Value && ex.InnerException is InvalidOperationException) { }
+                }
+            }
+        }
+
+        private static async Task UnknownApiTypeChatFallbackAsync()
+        {
+            int port = GetFreePort();
+            using CancellationTokenSource stop = new CancellationTokenSource();
+            Task serverTask = RunFakeOllamaChatServerAsync(port, stop.Token);
+            try
+            {
+                // Positive: an unrecognized apiType keeps the legacy Ollama-family chat behavior.
+                ModelRunnerSettings unknown = new ModelRunnerSettings
+                {
+                    Id = "legacy-custom-runner",
+                    Name = "Legacy Custom Runner",
+                    ApiType = "SomeFutureProvider",
+                    Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Models = new List<string> { "legacy-model" },
+                    HealthCheckEnabled = false
+                };
+                InferenceService inference = new InferenceService(new Settings { ModelRunners = new List<ModelRunnerSettings> { unknown } });
+
+                string answer = await inference.ChatAsync(unknown, "legacy-model", "Hello from a custom runner.").ConfigureAwait(false);
+                if (!String.Equals(answer, "legacy fallback answer", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an unrecognized apiType to keep normal chat, got '" + answer + "'.");
+
+                InferenceCompletion reasoning = await inference.ChatWithReasoningAsync(unknown, "legacy-model", "Hello again.").ConfigureAwait(false);
+                if (!String.Equals(reasoning.Text, "legacy fallback answer", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Expected an unrecognized apiType to keep reasoning chat, got '" + reasoning.Text + "'.");
+
+                // Negative: an unrecognized apiType still has tools disabled, so tool chat reports it,
+                // and the tool defaults never assign a tool-calling wire format.
+                ModelRunnerSettings.ApplyToolDefaults(unknown);
+                if (unknown.SupportsTools || !String.IsNullOrWhiteSpace(unknown.ToolCallingApiFormat))
+                    throw new InvalidOperationException("Expected an unrecognized apiType to have tools disabled and no tool-calling format.");
+                ToolCapableInferenceResponse toolResponse = await inference.ChatWithToolsAsync(unknown, new ToolCapableInferenceRequest
+                {
+                    Model = "legacy-model",
+                    Messages = new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "Hello." } }
+                }).ConfigureAwait(false);
+                if (toolResponse.Success || String.IsNullOrWhiteSpace(toolResponse.ErrorMessage))
+                    throw new InvalidOperationException("Expected tool chat to be refused for an unrecognized apiType.");
+
+                // Negative: a cataloged embeddings-only provider still refuses chat instead of
+                // silently borrowing another provider's wire protocol.
+                ModelRunnerSettings voyage = new ModelRunnerSettings
+                {
+                    Id = "voyage-runner",
+                    Name = "VoyageAI Runner",
+                    ApiType = "VoyageAI",
+                    Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ApiKey = "voyage-key",
+                    Models = new List<string> { "voyage-3" },
+                    HealthCheckEnabled = false
+                };
+                bool threw = false;
+                try
+                {
+                    await inference.ChatAsync(voyage, "voyage-3", "Hello.").ConfigureAwait(false);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    threw = ex.Message.Contains("does not support chat completions", StringComparison.Ordinal);
+                }
+
+                if (!threw) throw new InvalidOperationException("Expected an embeddings-only apiType to refuse chat completions.");
+            }
+            finally
+            {
+                stop.Cancel();
+                try { await serverTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            }
+        }
+
         private static void PolyPromptOptionMapping()
         {
             // PolyPrompt 3.x moved tool-chat sampling settings from ToolChatRequest onto ToolChatRequest.Options.
@@ -3038,8 +3458,33 @@ namespace Test.Shared
                 throw new InvalidOperationException("Expected an empty system prompt to fall back to the default system prompt.");
 
             object openAiOptions = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = "OpenAI" }, settings })!;
-            if (openAiOptions.GetType() != typeof(PolyPrompt.Models.CompletionOptions))
-                throw new InvalidOperationException("Expected OpenAI runners to use base CompletionOptions, got " + openAiOptions.GetType().Name + ".");
+            if (openAiOptions is not PolyPrompt.Options.OpenAiCompletionOptions openAi)
+                throw new InvalidOperationException("Expected OpenAI runners to use OpenAiCompletionOptions, got " + openAiOptions.GetType().Name + ".");
+            if (openAi.Temperature != 0.3 || openAi.TopP != 0.8 || openAi.MaxTokens != 512)
+                throw new InvalidOperationException("Expected OpenAI completion options to carry request settings.");
+
+            // Provider-native option types must be selected for the remaining PolyPrompt providers.
+            Dictionary<string, Type> expectedOptionTypes = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "Anthropic", typeof(PolyPrompt.Options.AnthropicCompletionOptions) },
+                { "Gemini", typeof(PolyPrompt.Options.GeminiCompletionOptions) },
+                { "VertexAI", typeof(PolyPrompt.Options.GeminiCompletionOptions) },
+                { "Cohere", typeof(PolyPrompt.Options.CohereCompletionOptions) },
+                { "XAI", typeof(PolyPrompt.Options.XAiCompletionOptions) },
+                { "OllamaCloud", typeof(PolyPrompt.Options.OllamaCompletionOptions) },
+                { "AzureOpenAI", typeof(PolyPrompt.Options.OpenAiCompletionOptions) },
+                { "Bedrock", typeof(PolyPrompt.Models.CompletionOptions) }
+            };
+
+            foreach (KeyValuePair<string, Type> expected in expectedOptionTypes)
+            {
+                object actual = createChatOptions.Invoke(null, new object?[] { new ModelRunnerSettings { ApiType = expected.Key }, settings })!;
+                if (actual.GetType() != expected.Value)
+                    throw new InvalidOperationException("Expected " + expected.Key + " runners to use " + expected.Value.Name + ", got " + actual.GetType().Name + ".");
+                PolyPrompt.Models.CompletionOptions actualOptions = (PolyPrompt.Models.CompletionOptions)actual;
+                if (actualOptions.Temperature != 0.3 || actualOptions.TopP != 0.8 || actualOptions.MaxTokens != 512)
+                    throw new InvalidOperationException("Expected " + expected.Key + " completion options to carry request settings.");
+            }
         }
 
         private static void ToolCapableInferenceParsing()
@@ -3701,6 +4146,116 @@ namespace Test.Shared
             ModelRunnerSettings.ApplyHealthCheckDefaults(openAi);
             if (!String.Equals(openAi.HealthCheckUrl, "https://api.openai.com/v1/models", StringComparison.Ordinal)) throw new InvalidOperationException("Unexpected OpenAI health check URL.");
             if (!openAi.HealthCheckUseAuth) throw new InvalidOperationException("Expected OpenAI health checks to use auth when an API key is configured.");
+        }
+
+        private static async Task CloudHealthCheckDefaultsAsync()
+        {
+            foreach (string apiType in new[] { "Bedrock", "VertexAI" })
+            {
+                foreach (string invalidProbe in new[] { "", " ", "/", "file:///tmp/health", "ftp://probe.example/health" })
+                {
+                    ModelRunnerSettings unprobeable = new ModelRunnerSettings { ApiType = apiType, Endpoint = "", HealthCheckUrl = invalidProbe };
+                    ModelRunnerSettings.ApplyHealthCheckDefaults(unprobeable);
+                    if (unprobeable.HealthCheckEnabled) throw new InvalidOperationException("An endpoint-less cloud runner must not enable a non-HTTP probe: " + invalidProbe);
+                }
+                ModelRunnerSettings runner = new ModelRunnerSettings { Id = apiType, ApiType = apiType, Endpoint = "", HealthCheckUrl = "/", HealthCheckEnabled = true };
+                Settings settings = new Settings { ModelRunners = new List<ModelRunnerSettings> { runner } };
+                using ModelRunnerHealthCheckService checks = new ModelRunnerHealthCheckService(settings);
+                if (runner.HealthCheckEnabled) throw new InvalidOperationException("Cloud runner without a probeable endpoint must disable health checks.");
+                checks.Start();
+                await Task.Delay(300).ConfigureAwait(false);
+                EndpointHealthStatus health = checks.GetHealthStatus(apiType)!;
+                if (!health.IsHealthy || health.HealthCheckEnabled || health.History.Count != 0)
+                    throw new InvalidOperationException("An unmonitored cloud runner must remain available without invalid probes.");
+                await checks.StopAsync().ConfigureAwait(false);
+
+                ModelRunnerSettings baseOnly = new ModelRunnerSettings { ApiType = apiType, Endpoint = "https://cloud.example" };
+                ModelRunnerSettings.ApplyHealthCheckDefaults(baseOnly);
+                if (baseOnly.HealthCheckEnabled || !String.IsNullOrWhiteSpace(baseOnly.HealthCheckUrl))
+                    throw new InvalidOperationException("Cloud providers without a generic probe path must require an explicit health URL.");
+
+                ModelRunnerSettings explicitProbe = new ModelRunnerSettings { ApiType = apiType, Endpoint = "", HealthCheckUrl = "https://probe.example/status", HealthCheckEnabled = true };
+                ModelRunnerSettings.ApplyHealthCheckDefaults(explicitProbe);
+                if (!explicitProbe.HealthCheckEnabled) throw new InvalidOperationException("Explicit absolute cloud health probes must remain enabled.");
+            }
+
+            ModelRunnerSettings invalid = new ModelRunnerSettings { Id = "invalid", ApiType = "OpenAICompatible", Endpoint = "relative", HealthCheckUrl = "/status", UnhealthyThreshold = 1 };
+            using (ModelRunnerHealthCheckService checks = new ModelRunnerHealthCheckService(new Settings { ModelRunners = new List<ModelRunnerSettings> { invalid } }))
+            {
+                checks.Start();
+                DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+                while (checks.GetHealthStatus(invalid.Id)!.History.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(25).ConfigureAwait(false);
+                EndpointHealthStatus health = checks.GetHealthStatus(invalid.Id)!;
+                if (health.History.Count == 0 || health.LastError?.Contains("absolute HTTP or HTTPS URL", StringComparison.Ordinal) != true)
+                    throw new InvalidOperationException("Invalid health URLs must produce actionable validation errors without network requests.");
+                await checks.StopAsync().ConfigureAwait(false);
+            }
+
+            ModelRunnerSettings voyage = new ModelRunnerSettings { Id = "voyage", ApiType = "VoyageAI", ApiKey = "test-health-key" };
+            using (ModelRunnerHealthCheckService checks = new ModelRunnerHealthCheckService(new Settings { ModelRunners = new List<ModelRunnerSettings> { voyage } }))
+            {
+                if (voyage.HealthCheckEnabled || !String.IsNullOrWhiteSpace(voyage.HealthCheckUrl) || !checks.GetHealthStatus(voyage.Id)!.IsHealthy)
+                    throw new InvalidOperationException("VoyageAI must remain available without an unsupported model-list probe.");
+            }
+
+            string? simulation = Environment.GetEnvironmentVariable("WILSON_HEALTH_SIMULATION");
+            foreach (string apiType in new[] { "Bedrock", "VertexAI", "Anthropic", "Gemini", "AzureOpenAI", "OpenAI", "OpenAICompatible", "OllamaCloud", "Ollama", "XAI", "Cohere", "TEI", "VoyageAI" })
+            {
+                using CancellationTokenSource stop = new CancellationTokenSource();
+                TcpListener? listener = null;
+                Task? contract = null;
+                string baseUrl = simulation ?? String.Empty;
+                if (String.IsNullOrWhiteSpace(baseUrl))
+                {
+                    listener = new TcpListener(IPAddress.Loopback, 0);
+                    listener.Start();
+                    baseUrl = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+                    contract = VerifyHealthProbeRequestAsync(listener, apiType, stop.Token);
+                }
+                try
+                {
+                    ModelRunnerSettings runner = new ModelRunnerSettings { Id = apiType, ApiType = apiType, Endpoint = "", ApiKey = "test-health-key", HealthCheckUrl = baseUrl.TrimEnd('/') + "/probe/" + apiType, HealthyThreshold = 1 };
+                    using ModelRunnerHealthCheckService checks = new ModelRunnerHealthCheckService(new Settings { ModelRunners = new List<ModelRunnerSettings> { runner } });
+                    checks.Start();
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+                    while (checks.GetHealthStatus(apiType)!.History.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(25).ConfigureAwait(false);
+                    EndpointHealthStatus health = checks.GetHealthStatus(apiType)!;
+                    if (!health.HealthCheckEnabled || !health.IsHealthy || health.History.Count == 0 || health.LastError != null)
+                        throw new InvalidOperationException("Explicit cloud health probe must succeed against the HTTP contract: " + health.LastError);
+                    await checks.StopAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    stop.Cancel();
+                    listener?.Stop();
+                    if (contract != null)
+                    {
+                        try { await contract.ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
+                    }
+                }
+            }
+        }
+
+        private static async Task VerifyHealthProbeRequestAsync(TcpListener listener, string apiType, CancellationToken token)
+        {
+            using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+            using NetworkStream stream = client.GetStream();
+            string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+            Dictionary<string, string> headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string line in request.Split(new[] { "\r\n" }, StringSplitOptions.None).Skip(1))
+            {
+                int colon = line.IndexOf(':');
+                if (colon > 0) headers[line.Substring(0, colon)] = line.Substring(colon + 1).Trim();
+            }
+            string header = apiType switch { "Anthropic" => "x-api-key", "Gemini" => "x-goog-api-key", "AzureOpenAI" => "api-key", _ => "Authorization" };
+            string expected = header == "Authorization" ? "Bearer test-health-key" : "test-health-key";
+            bool valid = apiType == "Ollama" ? !headers.ContainsKey("Authorization") : headers.TryGetValue(header, out string? value) && value == expected;
+            if (header != "Authorization" && headers.ContainsKey("Authorization")) valid = false;
+            if (apiType == "Anthropic" && (!headers.TryGetValue("anthropic-version", out string? version) || version != "2023-06-01")) valid = false;
+            if (!request.StartsWith("GET /probe/" + apiType + " ", StringComparison.Ordinal) || !valid)
+                throw new InvalidOperationException("Incorrect HTTP health probe path or authentication headers for " + apiType + ".");
+            await WriteHttpResponseAsync(stream, "{}", token).ConfigureAwait(false);
         }
 
         private static async Task DisabledHealthChecksReportAvailableAsync()
