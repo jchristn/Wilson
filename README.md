@@ -161,6 +161,8 @@ Each `modelRunners` entry supports endpoint health checks:
 - `healthyThreshold`, `unhealthyThreshold`
 - `healthCheckUseAuth`: sends this runner's API key with health probes, using the provider's own authentication contract rather than a blanket bearer token: `Authorization: Bearer` for Ollama, Ollama Cloud, OpenAI, OpenAI-compatible, xAI, Cohere, VoyageAI, and Text Embeddings Inference; `x-api-key` plus `anthropic-version: 2023-06-01` for Anthropic; `x-goog-api-key` for Gemini; `api-key` for Azure OpenAI. Azure OpenAI probes also carry the `api-version` query parameter, which its models route requires. When a probe URL cannot be resolved to an absolute HTTP(S) URL, Wilson records an actionable error and sends no request at all.
 
+Due health checks share a probe only when their final request URL, method, expected status, timeout, and effective authentication match. Scheme and host are case-insensitive; path and query case and trailing slashes remain significant. Authenticated probes use a SHA-256 identity of the trimmed API key for grouping, so different credentials receive independent results without storing raw keys in monitor identities. Identical anonymous probes still share a request.
+
 The dashboard Settings page edits the same configuration file. Some changes apply immediately; listener and database changes require a server restart.
 
 ### Model Runners

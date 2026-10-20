@@ -47,6 +47,8 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 
 ### Fixes
 
+- Health probe batches now distinguish credentials using SHA-256 of the trimmed key, preserve path/query case and trailing slashes, and include the effective authentication headers and timeout. Different credentials or request targets no longer inherit another runner's healthy result; identical authenticated and anonymous requests still deduplicate.
+
 - Health monitor grouping now includes the final provider request URL. Azure OpenAI runners using different API versions receive independent probe results instead of sharing a potentially false healthy result. A shared local HTTP regression checks both versions together, including the invalid version returning HTTP 400.
 
 - Model server health probes now authenticate with each provider's own contract instead of always sending `Authorization: Bearer`. Anthropic probes send `x-api-key` plus `anthropic-version: 2023-06-01`, Gemini probes send `x-goog-api-key`, and Azure OpenAI probes send `api-key` together with the `api-version` query parameter its models route requires. Previously a healthy Anthropic, Gemini, or Azure OpenAI endpoint answered 401 and was reported unhealthy.
@@ -60,6 +62,8 @@ Dependency update release. The Docker images were rebuilt in place under the exi
 - Added `build-all.sh`, `build-server.sh`, and `build-dashboard.sh`. They match the existing `.bat` scripts: multi-platform buildx push for `latest` plus a version tag, then a local pull.
 
 ### Tests
+
+- Added `health check batch request identity`: fourteen local HTTP scenarios, each in both subscription and ID orders, exercise the production background batch path. Assertions cover request counts, URLs, headers, independent HTTP 401/400 results, Azure versions, URL case/slashes, authentication schemes, methods, expected statuses, timeouts, trimmed credentials, and positive authenticated/anonymous deduplication.
 
 - Added a `PolyPrompt option mapping` test that covers tool-chat `Options` mapping, defaulting to client settings, and Ollama versus OpenAI completion option types.
 - Added provider catalog tests covering canonicalization, case and whitespace tolerance, unrecognized-API-type fallback, per-provider health and tool defaults, provider-specific completion option types, credential validation for each hosted provider, and explicit capability failures.

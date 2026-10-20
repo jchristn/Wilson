@@ -5,6 +5,8 @@ namespace Wilson.Core.Services
     using System.Collections.Generic;
     using System.Linq;
     using System.Net.Http;
+    using System.Security.Cryptography;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using Radiant;
@@ -237,7 +239,7 @@ namespace Wilson.Core.Services
 
         private async Task CheckDueRunnersAsync(List<ModelRunnerSettings> runners, CancellationToken token)
         {
-            foreach (IGrouping<string, ModelRunnerSettings> group in runners.GroupBy(BuildMonitorKey, StringComparer.OrdinalIgnoreCase))
+            foreach (IGrouping<string, ModelRunnerSettings> group in runners.GroupBy(BuildMonitorKey, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
                 List<ModelRunnerSettings> subscriptions = group.ToList();
@@ -327,9 +329,7 @@ namespace Wilson.Core.Services
 
             string apiKey = (runner.ApiKey ?? String.Empty).Trim();
             ApiTypeDescriptor descriptor = ApiTypes.Describe(runner.ApiType);
-            string scheme = String.IsNullOrWhiteSpace(descriptor.DefaultHealthCheckAuthScheme)
-                ? HealthCheckAuthSchemes.Bearer
-                : descriptor.DefaultHealthCheckAuthScheme;
+            string scheme = ResolveHealthCheckAuthScheme(runner);
 
             if (String.Equals(scheme, HealthCheckAuthSchemes.None, StringComparison.Ordinal)) return;
             if (String.IsNullOrWhiteSpace(apiKey)) return;
@@ -509,30 +509,48 @@ namespace Wilson.Core.Services
             return copy;
         }
 
+        private static string ResolveHealthCheckAuthScheme(ModelRunnerSettings runner)
+        {
+            string scheme = ApiTypes.Describe(runner.ApiType).DefaultHealthCheckAuthScheme;
+            return String.IsNullOrWhiteSpace(scheme) ? HealthCheckAuthSchemes.Bearer : scheme;
+        }
+
         private static string BuildMonitorKey(ModelRunnerSettings runner)
         {
             string method = runner.HealthCheckMethod == HealthCheckMethodEnum.HEAD ? "HEAD" : "GET";
-            // Include the resolved authentication scheme, not just the API type, so two runners that
-            // share a URL but authenticate differently are never collapsed into one probe.
-            // Use the final request URL so provider-required queries (Azure API versions) also
-            // distinguish probes whose responses can differ.
-            string auth = runner.HealthCheckUseAuth
-                ? "auth:" + ApiTypes.Describe(runner.ApiType).DefaultHealthCheckAuthScheme
-                : "anon";
-            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + auth + "|" + NormalizeUrl(ModelRunnerSettings.BuildHealthCheckRequestUrl(runner));
+            string apiKey = (runner.ApiKey ?? String.Empty).Trim();
+            string scheme = ResolveHealthCheckAuthScheme(runner);
+            string auth = "anon";
+            if (runner.HealthCheckUseAuth && apiKey.Length > 0 && !String.Equals(scheme, HealthCheckAuthSchemes.None, StringComparison.Ordinal))
+            {
+                // Match the credential actually sent, without retaining raw secrets in monitor keys.
+                auth = scheme + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
+                if (String.Equals(scheme, HealthCheckAuthSchemes.AnthropicApiKey, StringComparison.Ordinal))
+                {
+                    string version = ApiTypes.Describe(runner.ApiType).DefaultHealthCheckVersion;
+                    auth += ":" + (String.IsNullOrWhiteSpace(version) ? "2023-06-01" : version);
+                }
+            }
+
+            // Timeouts and expected status affect the verdict even when the wire request is identical.
+            // The final URL includes provider queries such as Azure's api-version.
+            return method + "|" + runner.HealthCheckExpectedStatusCode + "|" + Math.Max(1, runner.HealthCheckTimeoutMs)
+                + "|" + auth + "|" + NormalizeUrl(ModelRunnerSettings.BuildHealthCheckRequestUrl(runner));
         }
 
         private static string NormalizeUrl(string url)
         {
-            string trimmed = (url ?? String.Empty).Trim().TrimEnd('/');
+            string trimmed = (url ?? String.Empty).Trim();
             if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri))
             {
                 UriBuilder builder = new UriBuilder(uri);
+                builder.Scheme = builder.Scheme.ToLowerInvariant();
                 builder.Host = builder.Host.ToLowerInvariant();
-                return builder.Uri.ToString().TrimEnd('/');
+                // AbsoluteUri retains escaping and significant path/query case and trailing slashes.
+                return builder.Uri.AbsoluteUri;
             }
 
-            return trimmed.ToLowerInvariant();
+            return trimmed;
         }
 
         private void ThrowIfDisposed()

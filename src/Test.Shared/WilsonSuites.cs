@@ -89,6 +89,7 @@ namespace Test.Shared
                         CreateSyncCase("health-check-provider-defaults-coverage", "Health check provider defaults coverage", HealthCheckProviderDefaultsCoverage),
                         CreateAsyncCase("health-check-provider-auth-headers", "Health check provider auth headers", HealthCheckProviderAuthHeadersAsync),
                         CreateAsyncCase("health-check-invalid-url-no-send", "Health check invalid URL sends nothing", HealthCheckInvalidUrlSendsNothingAsync),
+                        CreateAsyncCase("health-check-batch-request-identity", "Health check batch request identity", HealthCheckBatchRequestIdentityAsync),
                         CreateAsyncCase("health-check-azure-version-isolation", "Azure health check version isolation", HealthCheckAzureVersionIsolationAsync),
                         CreateAsyncCase("health-check-relative-path-url", "Health check relative path URL", HealthCheckRelativePathUrlAsync),
                         CreateAsyncCase("disabled-health-checks-report-available", "Disabled health checks report available", DisabledHealthChecksReportAvailableAsync),
@@ -4432,6 +4433,172 @@ namespace Test.Shared
             if (connected) throw new InvalidOperationException("Expected no HTTP connection for an invalid health URL.");
         }
 
+        private static async Task HealthCheckBatchRequestIdentityAsync()
+        {
+            // Start the production loop with both subscriptions due in the same batch. Reverse both
+            // insertion order and ID ordering so a successful representative cannot mask a collision.
+            foreach (string scenario in new[] { "credentials", "path-case", "query-case", "path-slash", "query-slash", "azure-version", "identical", "trimmed-key", "anonymous", "no-auth-scheme", "auth-scheme", "method", "expected-status", "timeout" })
+            {
+                foreach (bool reverse in new[] { false, true })
+                {
+                    using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    int port = GetFreePort();
+                    string endpoint = "http://localhost:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    string[] targets = { "/v1/models?limit=1000", "/v1/models?limit=1000" };
+                    string[] keys = { "valid-key", "valid-key" };
+                    string[] headers = { "x-api-key: valid-key", "x-api-key: valid-key" };
+                    string[] methods = { "GET", "GET" };
+                    int[] errors = { 0, 0 };
+                    bool deduplicate = scenario == "identical" || scenario == "trimmed-key" || scenario == "anonymous" || scenario == "no-auth-scheme";
+                    ModelRunnerSettings[] runners = new ModelRunnerSettings[2];
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        ModelRunnerSettings runner = CreateHealthProbeRunner("Anthropic", "127.0.0.1", port, "valid-key");
+                        runner.Id = (reverse ? 1 - i : i).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        runner.Endpoint = endpoint;
+                        runner.HealthCheckEnabled = true;
+                        runner.HealthCheckUseAuth = true;
+                        runner.HealthCheckIntervalMs = 60000;
+                        runner.HealthCheckTimeoutMs = 5000;
+                        runner.HealthyThreshold = 1;
+                        runner.UnhealthyThreshold = 1;
+                        runners[i] = runner;
+                    }
+
+                    switch (scenario)
+                    {
+                        case "credentials":
+                            keys[1] = "invalid-key";
+                            headers[1] = "x-api-key: invalid-key";
+                            errors[1] = 401;
+                            break;
+                        case "path-case":
+                            targets[1] = "/V1/models?limit=1000";
+                            errors[1] = 400;
+                            break;
+                        case "query-case":
+                            targets[0] = "/v1/models?name=Good";
+                            targets[1] = "/v1/models?name=good";
+                            errors[1] = 400;
+                            break;
+                        case "path-slash":
+                            targets[0] = "/v1/models";
+                            targets[1] = "/v1/models/";
+                            errors[1] = 400;
+                            break;
+                        case "query-slash":
+                            targets[0] = "/v1/models?name=Good";
+                            targets[1] = "/v1/models?name=Good/";
+                            errors[1] = 400;
+                            break;
+                        case "azure-version":
+                            for (int i = 0; i < runners.Length; i++)
+                            {
+                                runners[i].ApiType = "AzureOpenAI";
+                                runners[i].ApiVersion = i == 0 ? "2024-10-21" : "invalid";
+                                targets[i] = "/openai/models?api-version=" + runners[i].ApiVersion;
+                                headers[i] = "api-key: valid-key";
+                            }
+                            errors[1] = 400;
+                            break;
+                        case "trimmed-key":
+                            keys[1] = "  valid-key  ";
+                            break;
+                        case "anonymous":
+                            runners[0].ApiType = runners[1].ApiType = "Ollama";
+                            runners[0].HealthCheckUseAuth = false;
+                            keys[1] = String.Empty;
+                            headers[0] = headers[1] = String.Empty;
+                            break;
+                        case "no-auth-scheme":
+                            runners[0].ApiType = runners[1].ApiType = "Bedrock";
+                            keys[1] = "unused-key";
+                            headers[0] = headers[1] = String.Empty;
+                            break;
+                        case "auth-scheme":
+                            runners[1].ApiType = "OpenAI";
+                            headers[1] = "Authorization: Bearer valid-key";
+                            break;
+                        case "method":
+                            runners[1].HealthCheckMethod = HealthCheckMethodEnum.HEAD;
+                            methods[1] = "HEAD";
+                            break;
+                        case "expected-status":
+                            runners[1].HealthCheckExpectedStatusCode = 201;
+                            errors[1] = 200;
+                            break;
+                        case "timeout":
+                            runners[1].HealthCheckTimeoutMs = 6000;
+                            break;
+                    }
+
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        runners[i].ApiKey = keys[i];
+                        // Scheme/host case alone must still deduplicate, unlike path/query case.
+                        string origin = i == 1 ? endpoint.Replace("http://localhost", "HTTP://LOCALHOST", StringComparison.Ordinal) : endpoint;
+                        runners[i].HealthCheckUrl = origin + targets[i];
+                    }
+
+                    List<HealthProbeRecord> records = new List<HealthProbeRecord>();
+                    TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+                    listener.Start();
+                    string? expectedKey = headers[0].Length == 0 ? null : "valid-key";
+                    bool rejectTarget = errors[1] == 400;
+                    Task server = RunFakeProviderHealthServerAsync(listener, records, expectedKey, cts.Token,
+                        expectedRequestTarget: rejectTarget ? targets[0] : null);
+                    Settings settings = new Settings();
+                    settings.ModelRunners.AddRange(reverse ? runners.Reverse() : runners);
+                    using ModelRunnerHealthCheckService healthChecks = new ModelRunnerHealthCheckService(settings);
+                    try
+                    {
+                        healthChecks.Start(cts.Token);
+                        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            if (runners.All(runner => healthChecks.GetHealthStatus(runner.Id)?.LastCheckUtc.HasValue == true)) break;
+                            await Task.Delay(25, cts.Token).ConfigureAwait(false);
+                        }
+
+                        for (int i = 0; i < runners.Length; i++)
+                        {
+                            EndpointHealthStatus? status = healthChecks.GetHealthStatus(runners[i].Id);
+                            if (status?.LastCheckUtc == null || status.IsHealthy != (errors[i] == 0)
+                                || (errors[i] != 0 && status.LastError?.Contains("HTTP " + errors[i] + ";", StringComparison.Ordinal) != true))
+                                throw new InvalidOperationException("Incorrect independent batch verdict for " + scenario + ", reverse=" + reverse + ", subscription=" + i + ".");
+                        }
+                    }
+                    finally
+                    {
+                        await healthChecks.StopAsync().ConfigureAwait(false);
+                        cts.Cancel();
+                        await server.ConfigureAwait(false);
+                        listener.Stop();
+                    }
+
+                    if (records.Count != (deduplicate ? 1 : 2))
+                        throw new InvalidOperationException("Incorrect batch request count for " + scenario + ", reverse=" + reverse + ": " + records.Count + ".");
+                    for (int i = 0; i < runners.Length; i++)
+                    {
+                        string requestLine = methods[i] + " " + targets[i] + " HTTP/1.1";
+                        HealthProbeRecord[] matching = records.Where(record => record.RequestLine == requestLine
+                            && (headers[i].Length == 0 || record.Raw.Contains(headers[i] + "\r\n", StringComparison.Ordinal))).ToArray();
+                        int expectedCount = !deduplicate && targets[0] == targets[1] && headers[0] == headers[1] && methods[0] == methods[1] ? 2 : 1;
+                        if (matching.Length != expectedCount)
+                            throw new InvalidOperationException("Incorrect outgoing batch URL/header for " + scenario + ", reverse=" + reverse + ".");
+                        foreach (HealthProbeRecord record in matching)
+                        {
+                            if (headers[i].StartsWith("x-api-key:", StringComparison.Ordinal)
+                                && !record.Raw.Contains("anthropic-version: 2023-06-01\r\n", StringComparison.Ordinal))
+                                throw new InvalidOperationException("Missing Anthropic version in batch probe.");
+                            if (headers[i].Length == 0 && new[] { "Authorization:", "x-api-key:", "api-key:", "x-goog-api-key:", "anthropic-version:" }.Any(header => record.Raw.Contains(header, StringComparison.OrdinalIgnoreCase)))
+                                throw new InvalidOperationException("Anonymous batch probe sent authentication headers.");
+                        }
+                    }
+                }
+            }
+        }
+
         private static async Task HealthCheckAzureVersionIsolationAsync()
         {
             using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -4646,7 +4813,7 @@ namespace Test.Shared
             public string Raw { get; set; } = String.Empty;
         }
 
-        private static async Task RunFakeProviderHealthServerAsync(TcpListener listener, List<HealthProbeRecord> records, string? expectedKey, CancellationToken token, string? expectedApiVersion = null)
+        private static async Task RunFakeProviderHealthServerAsync(TcpListener listener, List<HealthProbeRecord> records, string? expectedKey, CancellationToken token, string? expectedApiVersion = null, string? expectedRequestTarget = null)
         {
             try
             {
@@ -4670,7 +4837,9 @@ namespace Test.Shared
                         || raw.Contains("x-goog-api-key: " + expectedKey, StringComparison.Ordinal)
                         || raw.Contains("api-key: " + expectedKey, StringComparison.Ordinal);
 
-                    if (expectedApiVersion != null && !requestLine.Contains("?api-version=" + expectedApiVersion + " ", StringComparison.Ordinal))
+                    if (expectedRequestTarget != null && !requestLine.Contains(" " + expectedRequestTarget + " HTTP/1.1", StringComparison.Ordinal))
+                        await WriteHttpResponseAsync(stream, "{\"error\":\"invalid request target\"}", token, 400, "Bad Request").ConfigureAwait(false);
+                    else if (expectedApiVersion != null && !requestLine.Contains("?api-version=" + expectedApiVersion + " ", StringComparison.Ordinal))
                         await WriteHttpResponseAsync(stream, "{\"error\":\"invalid API version\"}", token, 400, "Bad Request").ConfigureAwait(false);
                     else if (authorized) await WriteHttpResponseAsync(stream, "{\"data\":[]}", token).ConfigureAwait(false);
                     else await WriteHttpResponseAsync(stream, "{\"error\":\"unauthorized\"}", token, 401, "Unauthorized").ConfigureAwait(false);
