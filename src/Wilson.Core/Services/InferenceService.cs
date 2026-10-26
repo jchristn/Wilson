@@ -691,6 +691,17 @@ namespace Wilson.Core.Services
                     if (onToken != null) await onToken(tail, null, token).ConfigureAwait(false);
                 }
 
+                // PolyPrompt 3.5+: only a Completed stream is intact. Partial output and
+                // provisional tool calls from a failed or truncated stream must not run.
+                if (response.State != StreamingState.Completed)
+                {
+                    return new ToolCapableInferenceResponse
+                    {
+                        Success = false,
+                        ErrorMessage = DescribeIncompleteStream(response, "Streaming tool inference")
+                    };
+                }
+
                 return new ToolCapableInferenceResponse
                 {
                     Success = true,
@@ -815,7 +826,7 @@ namespace Wilson.Core.Services
             {
                 ChatStreamingResponse response = await client.ChatStreamingAsync(prompt, CreateChatOptions(runner, settings), token).ConfigureAwait(false);
                 if (!response.Success) throw new InvalidOperationException(response.Error ?? "Streaming inference request failed.");
-                if (response.Chunks == null) yield break;
+                if (response.Chunks == null) throw new InvalidOperationException(DescribeIncompleteStream(response, "Streaming inference"));
 
                 ThinkParser think = new ThinkParser();
                 await foreach (ChatStreamingChunk chunk in response.Chunks.WithCancellation(token).ConfigureAwait(false))
@@ -834,7 +845,25 @@ namespace Wilson.Core.Services
 
                 string tail = think.Finish();
                 if (!String.IsNullOrEmpty(tail)) yield return new InferenceStreamChunk { Text = tail };
+
+                // PolyPrompt 3.5+: a stream that ends without provider completion is a failure,
+                // so the caller must not persist the partial answer as a finished turn.
+                if (response.State != StreamingState.Completed)
+                    throw new InvalidOperationException(DescribeIncompleteStream(response, "Streaming inference"));
             }
+        }
+
+        /// <summary>
+        /// Describe a PolyPrompt stream that did not reach the Completed state.
+        /// </summary>
+        /// <param name="response">Streaming response.</param>
+        /// <param name="operation">Operation name used in the fallback message.</param>
+        /// <returns>Error message.</returns>
+        private static string DescribeIncompleteStream(StreamingResponseBase response, string operation)
+        {
+            if (!String.IsNullOrWhiteSpace(response.StreamError)) return response.StreamError!;
+            if (!String.IsNullOrWhiteSpace(response.Error)) return response.Error!;
+            return operation + " ended before the provider signaled completion (state " + response.State + ").";
         }
 
         /// <summary>

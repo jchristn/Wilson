@@ -62,6 +62,7 @@ namespace Test.Shared
                         CreateSyncCase("working-directory-guard-error-coverage", "Working directory guard error coverage", WorkingDirectoryGuardErrorCoverage),
                         CreateAsyncCase("ollama-tool-model-classification", "Ollama tool model classification", OllamaToolModelClassificationAsync),
                         CreateAsyncCase("ollama-pull-error-propagates", "Ollama pull error propagation", OllamaPullErrorPropagatesAsync),
+                        CreateAsyncCase("streaming-requires-provider-completion", "Streaming requires provider completion", StreamingRequiresProviderCompletionAsync),
                         CreateAsyncCase("tool-service-foundation", "Tool service foundation", ToolServiceFoundationAsync),
                         CreateAsyncCase("tool-diagnostics-api", "Tool diagnostics API", ToolDiagnosticsApiAsync),
                         CreateAsyncCase("public-chat-tool-trace-api", "Public chat tool trace API", PublicChatToolTraceApiAsync),
@@ -1942,6 +1943,94 @@ namespace Test.Shared
                         body = """{"error":"unexpected fake Ollama request"}""";
                     }
 
+                    await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static async Task StreamingRequiresProviderCompletionAsync()
+        {
+            int port = GetFreePort();
+            using CancellationTokenSource stop = new CancellationTokenSource();
+            Task serverTask = RunFakeOllamaStreamingServerAsync(port, stop.Token);
+            try
+            {
+                ModelRunnerSettings runner = new ModelRunnerSettings
+                {
+                    Id = "ollama-stream",
+                    Name = "Ollama Stream",
+                    ApiType = "Ollama",
+                    Endpoint = "http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Models = new List<string>(),
+                    HealthCheckEnabled = false
+                };
+                InferenceService inference = new InferenceService(new Settings { ModelRunners = new List<ModelRunnerSettings> { runner } });
+
+                StringBuilder completeText = new StringBuilder();
+                await foreach (InferenceStreamChunk chunk in inference.ChatStreamingAsync(runner, "complete", "hello").ConfigureAwait(false))
+                    completeText.Append(chunk.Text);
+                if (!String.Equals(completeText.ToString(), "Hello world", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Completed chat stream should yield the full answer, got '" + completeText + "'.");
+
+                StringBuilder partialText = new StringBuilder();
+                bool chatFailed = false;
+                try
+                {
+                    await foreach (InferenceStreamChunk chunk in inference.ChatStreamingAsync(runner, "truncated", "hello").ConfigureAwait(false))
+                        partialText.Append(chunk.Text);
+                }
+                catch (InvalidOperationException)
+                {
+                    chatFailed = true;
+                }
+                if (!chatFailed) throw new InvalidOperationException("Chat stream that ended without done:true must fail instead of returning '" + partialText + "' as a finished answer.");
+
+                ToolCapableInferenceRequest toolRequest = new ToolCapableInferenceRequest
+                {
+                    Model = "complete",
+                    Messages = new List<ModelChatMessage> { new ModelChatMessage { Role = "user", Content = "hello" } }
+                };
+                ToolCapableInferenceResponse completeTools = await inference.ChatWithToolsStreamingAsync(runner, toolRequest, null).ConfigureAwait(false);
+                if (!completeTools.Success || !String.Equals(completeTools.Content, "Hello world", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Completed tool stream should succeed: " + completeTools.ErrorMessage);
+
+                toolRequest.Model = "truncated";
+                ToolCapableInferenceResponse truncatedTools = await inference.ChatWithToolsStreamingAsync(runner, toolRequest, null).ConfigureAwait(false);
+                if (truncatedTools.Success)
+                    throw new InvalidOperationException("Tool stream that ended without done:true must not be reported as successful.");
+                if (String.IsNullOrWhiteSpace(truncatedTools.ErrorMessage))
+                    throw new InvalidOperationException("Incomplete tool stream should carry a diagnostic.");
+            }
+            finally
+            {
+                stop.Cancel();
+                try { await serverTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            }
+        }
+
+        private static async Task RunFakeOllamaStreamingServerAsync(int port, CancellationToken token)
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                    using NetworkStream stream = client.GetStream();
+                    string request = await ReadHttpRequestAsync(stream, token).ConfigureAwait(false);
+                    if (!request.StartsWith("POST /api/chat ", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Expected fake Ollama chat request.");
+
+                    bool truncated = request.Contains("\"truncated\"", StringComparison.Ordinal);
+                    string body =
+                        "{\"model\":\"m\",\"message\":{\"role\":\"assistant\",\"content\":\"Hello \"},\"done\":false}\n" +
+                        "{\"model\":\"m\",\"message\":{\"role\":\"assistant\",\"content\":\"world\"},\"done\":false}\n" +
+                        (truncated ? String.Empty : "{\"model\":\"m\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\"}\n");
                     await WriteHttpResponseAsync(stream, body, token).ConfigureAwait(false);
                 }
             }

@@ -4,7 +4,7 @@
 
 No signal. No noise. No rescue ships. Just Wilson, your local model, and a chat window that does not need to reach the outside world.
 
-This image runs the **Wilson backend server**: a C# service on Watson 7.1 that hosts the REST API, streams model responses over server-sent events, stores conversations in SQLite or PostgreSQL, runs the agentic tool loop, and emits OpenTelemetry metrics, traces, and logs over OTLP. It is meant to run as part of the Wilson Docker Compose stack alongside the dashboard and, when you want them, Prometheus, Tempo, Loki, and Grafana.
+This image runs the **Wilson backend server**: a C# service on Watson 7.3 that hosts the REST API, streams model responses over server-sent events, stores conversations in SQLite or PostgreSQL, runs the agentic tool loop, and emits OpenTelemetry metrics, traces, and logs over OTLP. It is meant to run as part of the Wilson Docker Compose stack alongside the dashboard and, when you want them, Prometheus, Tempo, Loki, and Grafana.
 
 ![Wilson](https://raw.githubusercontent.com/jchristn/Wilson/main/assets/logo.png)
 
@@ -26,7 +26,7 @@ The parts that matter for operators sit close to the surface. Every request is c
 
 ```
 Browser dashboard ─┐
-REST / SDK client ─┼─► Wilson backend (Watson 7.1, C# / .NET 10)
+REST / SDK client ─┼─► Wilson backend (Watson 7.3, C# / .NET 10)
 MCP-aware client  ─┘        │
                             ├─ Inference (PolyPrompt) ─► 13 provider API types
                             ├─ Agentic tool loop ─► built-in tools + MCP servers

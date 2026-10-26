@@ -167,7 +167,7 @@ The dashboard Settings page edits the same configuration file. Some changes appl
 
 ### Model Runners
 
-Wilson 3.4.0 of PolyPrompt adds endpoint types and providers beyond the original Ollama/OpenAI pair, and Wilson exposes all of them. `apiType` selects the PolyPrompt client family:
+PolyPrompt 3.x (Wilson uses 3.5.0) adds endpoint types and providers beyond the original Ollama/OpenAI pair, and Wilson exposes all of them. `apiType` selects the PolyPrompt client family:
 | `apiType` | Provider | Chat | Embeddings | Model listing | Tools |
 | --- | --- | --- | --- | --- | --- |
 | `Ollama` | Local Ollama server | yes | yes | yes | yes |
