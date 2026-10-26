@@ -105,6 +105,20 @@ const defaultCompletionSettings = {
 };
 
 const lastConversationStorageKey = 'wilson.chat.lastConversationId';
+const conversationListWidthStorageKey = 'wilson.chat.conversationListWidth';
+const defaultConversationListWidth = 280;
+const minConversationListWidth = 180;
+const maxConversationListWidth = 640;
+const minChatMainWidth = 360;
+
+function clampConversationListWidth(width, layoutWidth) {
+  const value = Number(width);
+  if (!Number.isFinite(value)) return defaultConversationListWidth;
+  const upper = Number.isFinite(layoutWidth) && layoutWidth > 0
+    ? Math.max(minConversationListWidth, Math.min(maxConversationListWidth, layoutWidth - minChatMainWidth))
+    : maxConversationListWidth;
+  return Math.round(Math.min(upper, Math.max(minConversationListWidth, value)));
+}
 const compactHealthHistorySampleLimit = 10;
 const modelServerHealthRefreshIntervalMs = 15000;
 
@@ -427,6 +441,45 @@ function Chat({ api, onOpenPrompts }) {
   const generationAbort = useRef(null);
   const restoredConversation = useRef(false);
   const desiredSelection = useRef({ runnerId: '', model: '' });
+  const chatLayout = useRef(null);
+  const [conversationListWidth, setConversationListWidth] = useState(() => {
+    const stored = localStorage.getItem(conversationListWidthStorageKey);
+    return stored === null ? defaultConversationListWidth : clampConversationListWidth(stored);
+  });
+  const [resizingConversationList, setResizingConversationList] = useState(false);
+
+  useEffect(() => { localStorage.setItem(conversationListWidthStorageKey, String(conversationListWidth)); }, [conversationListWidth]);
+
+  const layoutWidth = () => chatLayout.current?.getBoundingClientRect().width;
+
+  const startConversationListResize = event => {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    const left = chatLayout.current?.getBoundingClientRect().left || 0;
+    setResizingConversationList(true);
+    const onMove = moveEvent => setConversationListWidth(clampConversationListWidth(moveEvent.clientX - left, layoutWidth()));
+    const onUp = () => {
+      setResizingConversationList(false);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
+  const resizeConversationListWithKeyboard = event => {
+    const step = event.shiftKey ? 48 : 16;
+    let next = null;
+    if (event.key === 'ArrowLeft') next = conversationListWidth - step;
+    else if (event.key === 'ArrowRight') next = conversationListWidth + step;
+    else if (event.key === 'Home') next = minConversationListWidth;
+    else if (event.key === 'End') next = maxConversationListWidth;
+    if (next === null) return;
+    event.preventDefault();
+    setConversationListWidth(clampConversationListWidth(next, layoutWidth()));
+  };
 
   const loadConversations = useCallback(async () => {
     const items = enumerationObjects(await api.conversations({ pageNumber: 1, pageSize: 500 }));
@@ -736,7 +789,7 @@ function Chat({ api, onOpenPrompts }) {
     ? availableTools.length > 0 ? `${availableTools.length} tool${availableTools.length === 1 ? '' : 's'} available` : 'No tools are currently available'
     : 'The selected model does not advertise native tool-call support';
   return (
-    <div className="chat-layout">
+    <div ref={chatLayout} className={resizingConversationList ? 'chat-layout resizing' : 'chat-layout'} style={{ '--conversation-list-width': `${conversationListWidth}px` }}>
       <aside className="conversation-list">
         <button className="new-chat" title="Start a new conversation" onClick={() => { desiredSelection.current = { runnerId: '', model: '' }; localStorage.removeItem(lastConversationStorageKey); setConversation(null); setTruncationNotice(null); setMessages([]); }}><MessageSquarePlus size={18} />{text.newChat}</button>
         {conversationError && <div className="conversation-error" title="Conversation action error">{conversationError}</div>}
@@ -783,6 +836,20 @@ function Chat({ api, onOpenPrompts }) {
           />
         )}
       </aside>
+      <div
+        className="conversation-list-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize conversation list"
+        aria-valuemin={minConversationListWidth}
+        aria-valuemax={maxConversationListWidth}
+        aria-valuenow={conversationListWidth}
+        tabIndex={0}
+        title="Drag to resize the conversation list (double-click to reset)"
+        onPointerDown={startConversationListResize}
+        onKeyDown={resizeConversationListWithKeyboard}
+        onDoubleClick={() => setConversationListWidth(clampConversationListWidth(defaultConversationListWidth, layoutWidth()))}
+      />
       <section className="chat-main">
         <PageIntro title="Chat" description="Send prompts to a selected model server, stream responses, review prior conversations, and load Ollama models into memory before use." />
         <div className="chat-toolbar">

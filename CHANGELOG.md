@@ -60,6 +60,7 @@ Initial published release (`jchristn77/wilson-server:v0.1.0` and `jchristn77/wil
 - Added Model Servers page with Ollama available/loaded model status, model pull, model load, and model server CRUD.
 - Added conversation management with rename/delete actions and a Conversations workspace page.
 - Improved Chat streaming, model-load UX, response timing details, feedback comments, and invalid-model error handling.
+- The Chat conversation list can be resized by dragging the divider between it and the conversation (180-640 px, always leaving at least 360 px for the conversation). The width is remembered in the browser, double-clicking the divider resets it to 280 px, and the focused divider also responds to Left/Right (Shift for larger steps) and Home/End.
 - Added request history charts, detailed request/response metadata capture, collapsible payload sections, and copy/prettify controls.
 - Added structured Settings forms, row-based list editing, API Explorer improvements, OpenAPI JSON, and Swagger UI.
 - Added `dashboard/src/utils/apiTypes.js`, a provider catalog mirroring the server's, with `describeApiType`, `normalizeApiType`, `isSupportedApiType`, `defaultHealthSettings`, `defaultToolSettings`, and `validateRunnerDraft`.

@@ -72,7 +72,12 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
 .topbar-connection strong { min-width: 0; max-width: min(360px, 32vw); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 
-.chat-layout { height: 100%; max-height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+.chat-layout { --conversation-list-width: 280px; position: relative; height: 100%; max-height: 100%; min-height: 0; overflow: hidden; display: grid; grid-template-columns: var(--conversation-list-width) minmax(0, 1fr); }
+.chat-layout.resizing { cursor: col-resize; user-select: none; }
+.conversation-list-resizer { position: absolute; top: 0; bottom: 0; left: calc(var(--conversation-list-width) - 4px); width: 8px; z-index: 5; cursor: col-resize; touch-action: none; background: transparent; }
+.conversation-list-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background 0.12s; }
+.conversation-list-resizer:hover::after, .conversation-list-resizer:focus-visible::after, .chat-layout.resizing .conversation-list-resizer::after { background: var(--accent); }
+.conversation-list-resizer:focus-visible { outline: none; }
 .conversation-list { height: 100%; max-height: 100%; min-height: 0; border-right: 1px solid var(--line); background: var(--panel-2); padding: 12px; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); align-content: stretch; gap: 7px; }
 .conversation-scroll { min-height: 0; overflow: hidden; display: grid; align-content: start; gap: 7px; padding-right: 2px; }
 .new-chat { width: 100%; text-align: left; background: transparent; color: var(--text); border-radius: 7px; padding: 8px 4px; display: flex; gap: 8px; align-items: center; min-height: 36px; }
@@ -524,7 +529,7 @@ pre { margin: 0; white-space: pre-wrap; overflow: auto; background: #1f2328; col
   .nav-section { gap: 6px; }
   .nav { min-height: 40px; justify-content: center; padding: 8px; gap: 0; }
   .chat-layout { grid-template-columns: 1fr; }
-  .conversation-list { display: none; }
+  .conversation-list, .conversation-list-resizer { display: none; }
   .chat-toolbar-selects { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chat-toolbar label { width: 100%; }
   .explorer-grid { grid-template-columns: 1fr; }
